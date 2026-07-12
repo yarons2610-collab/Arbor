@@ -334,7 +334,7 @@
     .brand h1{font-size:15px} .brand .sub{display:none}
     .tabs{order:-1;width:100%;justify-content:stretch}
     .tab{flex:1;padding:6px 2px;font-size:11px;white-space:nowrap}
-    #expCal,#menuBtn,#readNudge{display:none}
+    #expCal,#readNudge{display:none}
     #saveState{font-size:9px;padding:0 3px}
     /* detail: full-width slide-up sheet */
     .detail{width:100%!important;top:auto;bottom:0;height:82vh;border-left:none;
@@ -2360,7 +2360,7 @@ function animalModal(id){
     const el=e.target; if(el.dataset.i==null)return; const iv=+el.dataset.i;
     if(el.classList.contains("inj-sitelibpick")){
       const v=el.value;
-      if(v==="__edit_slib"){ el.value=""; closeModal(); renderMenuModal("site"); return; }
+      if(v==="__edit_slib"){ el.value=""; closeModal(); renderLibraryModal("site"); return; }
       if(!v.startsWith("__s:"))return; const nm=v.slice(4);
       const s=(DB.config.siteLib||[]).find(x=>x.name===nm); if(!s)return;
       injs[iv].siteRegion=s.name; injs[iv].ap=s.ap; injs[iv].ml=s.ml; injs[iv].dv=s.dv;
@@ -2368,7 +2368,7 @@ function animalModal(id){
     }
     if(el.classList.contains("inj-viruslibpick")){
       const v=el.value;
-      if(v==="__edit_vlib"){ el.value=""; closeModal(); renderMenuModal("virus"); return; }
+      if(v==="__edit_vlib"){ el.value=""; closeModal(); renderLibraryModal("virus"); return; }
       if(!v.startsWith("__v:"))return; const nm=v.slice(4);
       const vr=(DB.config.virusLib||[]).find(x=>x.name===nm); if(!vr)return;
       injs[iv].virus=vr.name; injs[iv].type=vr.type||injs[iv].type;
@@ -2382,8 +2382,8 @@ function animalModal(id){
     if(del){ readInjFields(); injs.splice(+del.dataset.i,1); paintInjs(); updatePreview(); }
     else if(up){ const i=+up.dataset.i; if(i>0){ readInjFields(); [injs[i-1],injs[i]]=[injs[i],injs[i-1]]; paintInjs(); updatePreview(); } }
     else if(dn){ const i=+dn.dataset.i; if(i<injs.length-1){ readInjFields(); [injs[i+1],injs[i]]=[injs[i],injs[i+1]]; paintInjs(); updatePreview(); } }
-    else if(oslib){ closeModal(); renderMenuModal("site"); }
-    else if(ovlib){ closeModal(); renderMenuModal("virus"); }
+    else if(oslib){ closeModal(); renderLibraryModal("site"); }
+    else if(ovlib){ closeModal(); renderLibraryModal("virus"); }
   });
   document.getElementById("am_addinj").onclick=()=>{ injs.push({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:""}); paintInjs(); updatePreview(); };
   paintInjs(); updatePreview();
@@ -2661,7 +2661,28 @@ document.getElementById("expCal").addEventListener("click",()=>{
 
 /* ---------- BACKUP / RESTORE ---------- */
 document.getElementById("menuBtn").addEventListener("click",()=>{ renderMenuModal(); });
-function renderMenuModal(focus){
+function renderMenuModal(){
+  modal(`<h3>Backup &amp; restore</h3>
+    <div class="actions" style="justify-content:flex-start;flex-wrap:wrap;margin-top:0">
+      <button class="btn" id="m_export">↓ Export JSON</button>
+      <button class="btn" id="m_import">↑ Import JSON</button>
+      <button class="btn danger" id="m_reset">↺ Reset to seed</button></div>`);
+  document.getElementById("m_export").addEventListener("click",()=>{download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");toast("Exported JSON");});
+  document.getElementById("m_import").addEventListener("click",async ()=>{
+    const text=await window.arbor.openJSON(); if(text==null)return;
+    try{
+      const d=JSON.parse(text);
+      if(!d.domains||!d.tasks){ toast("Not an Arbor file"); return; }
+      DB=d; migrate(); closeModal(); render();
+      persist();
+      toast("Imported — "+d.tasks.length+" tasks, "+d.animals.length+" animals");
+    }catch(e){ toast("JSON parse error: "+String(e).slice(0,60)); console.error(e); }
+  });
+  document.getElementById("m_reset").addEventListener("click",()=>{ if(confirm("Replace everything with the seeded pipeline?")){DB={domains:[],tasks:[],readings:[],inventory:{},animals:[],cohorts:[],config:{...DEFAULT_CONFIG}};seed();closeModal();render();toast("Reset done");}});
+}
+// reached only via the "✎ edit library" shortcuts inside the injection editor —
+// not from the "..." menu, which is reserved for Export/Import/Reset
+function renderLibraryModal(focus){
   const sl=DB.config.siteLib||[], vl=DB.config.virusLib||[];
   const IST2="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 8px;font-size:12px";
   const libRows=(arr,type)=>arr.map((e,i)=>`<div style="display:flex;gap:5px;align-items:center;margin-bottom:5px">
@@ -2674,19 +2695,14 @@ function renderMenuModal(focus){
          <select class="le_vtype" data-i="${i}" style="${IST2}"><option value="retro" ${e.type==="retro"?"selected":""}>retro</option><option value="antero" ${e.type==="antero"?"selected":""}>antero</option><option value="other" ${e.type==="other"?"selected":""}>other</option></select>`}
     <button class="le_del" data-t="${type}" data-i="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:11px">✕</button>
   </div>`).join("");
-  modal(`<h3>Libraries & Backup</h3>
+  modal(`<h3>Libraries</h3>
     <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px">Injection site library</div>
     <div id="lib_sites">${libRows(sl,"site")}</div>
     <button class="btn ghost" id="lib_siteadd" style="font-size:12px;margin-bottom:14px">＋ Add site</button>
     <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px">Virus library</div>
     <div id="lib_viruses">${libRows(vl,"virus")}</div>
     <button class="btn ghost" id="lib_virusadd" style="font-size:12px;margin-bottom:14px">＋ Add virus</button>
-    <hr style="border:none;border-top:1px solid var(--line);margin:10px 0">
-    <div style="font-size:12px;color:var(--ink-dim);margin-bottom:8px">Backup &amp; restore</div>
-    <div class="actions" style="justify-content:flex-start;flex-wrap:wrap;margin-top:0">
-      <button class="btn" id="m_export">↓ Export JSON</button>
-      <button class="btn" id="m_import">↑ Import JSON</button>
-      <button class="btn danger" id="m_reset">↺ Reset to seed</button></div>`);
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`);
 
   function readFields(){
     // flush current field values back into config
@@ -2723,24 +2739,12 @@ function renderMenuModal(focus){
     const d=e.target.closest(".le_del"); if(!d)return;
     if(d.dataset.t==="site") DB.config.siteLib.splice(+d.dataset.i,1);
     else DB.config.virusLib.splice(+d.dataset.i,1);
-    persist(); renderMenuModal(d.dataset.t);
+    persist(); renderLibraryModal(d.dataset.t);
   });
-  document.getElementById("lib_siteadd").onclick=()=>{ DB.config.siteLib.push({name:"New site",ap:0,ml:0,dv:0}); persist(); renderMenuModal("site"); };
-  document.getElementById("lib_virusadd").onclick=()=>{ DB.config.virusLib.push({name:"New virus",type:"retro"}); persist(); renderMenuModal("virus"); };
+  document.getElementById("lib_siteadd").onclick=()=>{ DB.config.siteLib.push({name:"New site",ap:0,ml:0,dv:0}); persist(); renderLibraryModal("site"); };
+  document.getElementById("lib_virusadd").onclick=()=>{ DB.config.virusLib.push({name:"New virus",type:"retro"}); persist(); renderLibraryModal("virus"); };
   // scroll to the focused section
   if(focus){ const el=document.getElementById(focus==="site"?"lib_sites":"lib_viruses"); if(el)setTimeout(()=>el.scrollIntoView({behavior:"smooth",block:"start"}),80); }
-  document.getElementById("m_export").addEventListener("click",()=>{download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");toast("Exported JSON");});
-  document.getElementById("m_import").addEventListener("click",async ()=>{
-    const text=await window.arbor.openJSON(); if(text==null)return;
-    try{
-      const d=JSON.parse(text);
-      if(!d.domains||!d.tasks){ toast("Not an Arbor file"); return; }
-      DB=d; migrate(); closeModal(); render();
-      persist();
-      toast("Imported — "+d.tasks.length+" tasks, "+d.animals.length+" animals");
-    }catch(e){ toast("JSON parse error: "+String(e).slice(0,60)); console.error(e); }
-  });
-  document.getElementById("m_reset").addEventListener("click",()=>{ if(confirm("Replace everything with the seeded pipeline?")){DB={domains:[],tasks:[],readings:[],inventory:{},animals:[],cohorts:[],config:{...DEFAULT_CONFIG}};seed();closeModal();render();toast("Reset done");}});
 }
 
 /* ---------- UTIL / BOOT ---------- */
