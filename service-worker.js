@@ -1,7 +1,9 @@
 // Caches the whole app shell on install so the PWA keeps working with no network —
 // your data lives in localStorage on-device regardless, this is just about the app
 // itself (HTML/JS/fonts) still loading when you're offline.
-const CACHE_NAME = "arbor-animals-v1";
+// IMPORTANT: bump this version string on every deploy — cache-first means an
+// installed phone keeps serving the old app shell forever otherwise.
+const CACHE_NAME = "arbor-animals-v2";
 const APP_SHELL = [
   "./",
   "index.html",
