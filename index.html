@@ -1649,7 +1649,7 @@ function daysSurg(a){ if(!a.surgery)return null; const end=a.sacrificed?new Date
 function pipe(v){ return v===true?{c:"var(--gcamp)",m:"✓"}:v===false?{c:"var(--overdue)",m:"✕"}:{c:"var(--ink-faint)",m:"·"}; }
 function renderAnimals(){
   const host=document.getElementById("animals"); host.innerHTML="";
-  const cohortNames=(DB.cohorts||[]).map(c=>c.name);
+  const cohortNames=(DB.cohorts||[]).map(c=>c.name).sort((a,b)=>a.localeCompare(b));
   const bar=document.createElement("div");
   bar.style.cssText="margin-bottom:16px";
   const row=(label,id,cur,opts)=>`<div class="af-row"><span class="af-label">${label}</span><div class="seg" id="${id}">${opts.map(o=>`<button data-v="${o[0]}" class="${cur===o[0]?"on":""}">${o[1]}</button>`).join("")}</div></div>`;
