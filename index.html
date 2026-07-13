@@ -346,6 +346,11 @@
       border-radius:16px 16px 0 0;position:fixed;bottom:0;left:0;right:0;
       max-height:92vh;margin:0}
     .scrim{align-items:flex-end}
+    /* short utility modals (e.g. the "⋯" backup/restore menu): centered popup
+       instead of a bottom sheet — a 3-button menu pinned to the bottom reads as
+       stranded at the bottom of the screen rather than as a deliberate dialog */
+    .modal.modal-center{position:fixed;bottom:auto;top:50%;left:50%;right:auto;
+      transform:translate(-50%,-50%);width:88%!important;border-radius:16px;max-height:80vh}
     /* calendar popover: full-width */
     .cal-pop{position:fixed!important;left:8px!important;right:8px!important;
       width:auto!important;top:auto!important;bottom:8px!important}
@@ -487,6 +492,7 @@ if("serviceWorker" in navigator){
 }
 const KEY="arbor_workspace_v3";   // v3: retire stale v2 storage that carried old example tasks; load embedded (uploaded) data fresh
 const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
+  animalFilters:{cohort:"all",status:"all",pipe:"all"},
   keywords:["Type-2 PT neuron identity","PT projection classification (STN / SNr)","Enhancer-AAV subtype access",
             "Motor-cortex chemogenetics","Dendritic computation","Dendritic morphology"],
   siteLib:[
@@ -551,7 +557,13 @@ function migrate(){                       // backfill fields added in later vers
   else{ DB.config={...DEFAULT_CONFIG,...DB.config};
     if(!DB.config.siteLib)  DB.config.siteLib=[...DEFAULT_CONFIG.siteLib];
     if(!DB.config.virusLib) DB.config.virusLib=[...DEFAULT_CONFIG.virusLib];
+    if(!DB.config.animalFilters) DB.config.animalFilters={...DEFAULT_CONFIG.animalFilters};
   }
+  // pull the persisted animal filter selections into the live module-level state —
+  // runs on boot and after every JSON import so filters travel with the workspace
+  animalCohort=DB.config.animalFilters.cohort||"all";
+  animalStatus=DB.config.animalFilters.status||"all";
+  animalPipe=DB.config.animalFilters.pipe||"all";
   // backfill new virus fields
   (DB.config.virusLib||[]).forEach(v=>{ if(!v.promoter)v.promoter=""; if(!v.titer)v.titer=""; if(!v.source)v.source=""; if(!v.note)v.note=""; });
   if(!DB.inventory)DB.inventory={};
@@ -1656,9 +1668,9 @@ function renderAnimals(){
       ["complete","Complete ✓"]
     ])}`;
   host.appendChild(bar);
-  bar.querySelector("#a_cohort").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalCohort=b.dataset.v;renderAnimals();});
-  bar.querySelector("#a_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalStatus=b.dataset.v;renderAnimals();});
-  bar.querySelector("#a_pipe").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalPipe=b.dataset.v;renderAnimals();});
+  bar.querySelector("#a_cohort").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalCohort=b.dataset.v;DB.config.animalFilters.cohort=animalCohort;persist();renderAnimals();});
+  bar.querySelector("#a_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalStatus=b.dataset.v;DB.config.animalFilters.status=animalStatus;persist();renderAnimals();});
+  bar.querySelector("#a_pipe").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalPipe=b.dataset.v;DB.config.animalFilters.pipe=animalPipe;persist();renderAnimals();});
   bar.querySelector("#a_add").onclick=()=>animalModal(null);
   bar.querySelector("#a_cohortNew").onclick=()=>cohortModal(null);
 
@@ -2503,10 +2515,17 @@ function syncProcedureToAnimals(t,prevStatus){
   t.linkedAnimals.forEach(aid=>{
     const a=DB.animals.find(x=>x.id===aid); if(!a)return;
     if(!a[field]){ a[field]=true; } // only set true, never override true→false via task
+    if(field==="perfusion") applyPerfusionSacrifice(a, t.deadline?t.deadline.slice(0,10):todayDateStr());
   });
   toast(`${t.procedureType} marked done — updated ${t.linkedAnimals.length} animal${t.linkedAnimals.length!==1?"s":""}`);
 }
 function todayDateStr(){ const d=new Date(); const pad=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+// perfusion terminates the animal as part of the procedure, so it always implies
+// sacrifice (but not the reverse — an animal can be sacrificed without perfusion).
+function applyPerfusionSacrifice(a,date){
+  if(!a.sacrificed) a.sacrificed=date;
+  if(a.termination==="alive"){ a.termination="sacrificed"; a.alive=false; }
+}
 // direct "mark done" path for a pipeline chip's checkbox — distinct from scheduling a date.
 // surgery is handled separately since a.surgery is a date string (done = has a date), not
 // a boolean like perfusion/histology/microscopy.
@@ -2520,7 +2539,10 @@ function markProcedureDone(a,ptype){
   }
   const t=DB.tasks.find(x=>x.procedureType===ptype&&(x.linkedAnimals||[]).includes(a.id)&&x.status!=="done");
   if(t){ const prev=t.status; t.status="done"; syncProcedureToAnimals(t,prev); }
-  else { a[ptype]=true; toast(`${ptype} marked done`); }
+  else {
+    a[ptype]=true; toast(`${ptype} marked done`);
+    if(ptype==="perfusion") applyPerfusionSacrifice(a, todayDateStr());
+  }
   persist();
 }
 // undo path for a done chip — clears the pipeline field and re-opens any linked task
@@ -2541,7 +2563,8 @@ function cycleStatus(id){
 }
 
 /* ---------- ADD TASK / DOMAIN ---------- */
-function modal(h){ const s=document.getElementById("scrim"); document.getElementById("modal").innerHTML=h; s.classList.add("open"); return s; }
+function modal(h,opts){ const s=document.getElementById("scrim"); const m=document.getElementById("modal");
+  m.className="modal"+(opts&&opts.center?" modal-center":""); m.innerHTML=h; s.classList.add("open"); return s; }
 function closeModal(){ document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(); }
 // Modals close only via Cancel / ✕ / Save — NOT by clicking outside, so a stray click never discards an edit.
 document.addEventListener("keydown",e=>{ if(e.key==="Escape"&&document.getElementById("scrim").classList.contains("open"))closeModal(); });
@@ -2666,7 +2689,8 @@ function renderMenuModal(){
     <div class="actions" style="justify-content:flex-start;flex-wrap:wrap;margin-top:0">
       <button class="btn" id="m_export">↓ Export JSON</button>
       <button class="btn" id="m_import">↑ Import JSON</button>
-      <button class="btn danger" id="m_reset">↺ Reset to seed</button></div>`);
+      <button class="btn danger" id="m_reset">↺ Reset to seed</button></div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`, {center:true});
   document.getElementById("m_export").addEventListener("click",()=>{download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");toast("Exported JSON");});
   document.getElementById("m_import").addEventListener("click",async ()=>{
     const text=await window.arbor.openJSON(); if(text==null)return;
@@ -2678,7 +2702,7 @@ function renderMenuModal(){
       toast("Imported — "+d.tasks.length+" tasks, "+d.animals.length+" animals");
     }catch(e){ toast("JSON parse error: "+String(e).slice(0,60)); console.error(e); }
   });
-  document.getElementById("m_reset").addEventListener("click",()=>{ if(confirm("Replace everything with the seeded pipeline?")){DB={domains:[],tasks:[],readings:[],inventory:{},animals:[],cohorts:[],config:{...DEFAULT_CONFIG}};seed();closeModal();render();toast("Reset done");}});
+  document.getElementById("m_reset").addEventListener("click",()=>{ if(confirm("Replace everything with the seeded pipeline?")){DB={domains:[],tasks:[],readings:[],inventory:{},animals:[],cohorts:[],config:{...DEFAULT_CONFIG}};seed();migrate();closeModal();render();toast("Reset done");}});
 }
 // reached only via the "✎ edit library" shortcuts inside the injection editor —
 // not from the "..." menu, which is reserved for Export/Import/Reset

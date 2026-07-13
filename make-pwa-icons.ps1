@@ -25,18 +25,37 @@ function RenderTree([int]$size) {
   $trunkTop = $big * 0.60
   $trunkBottom = $big * 0.88
   $hubX = $cx; $hubY = $trunkTop
-  $branchW = $big * 0.065
-  $canopyCy = $big * 0.30
-  $lobes = @(
-    @(0,     ($canopyCy+$big*0.08), ($big*0.29), "#1f9e5e"),
-    @((-$big*0.23), ($canopyCy-$big*0.01), ($big*0.22), "#27b06c"),
-    @(($big*0.23),  ($canopyCy-$big*0.01), ($big*0.22), "#27b06c"),
-    @(0,     ($canopyCy-$big*0.21), ($big*0.22), "#3fe089")
+
+  # Branches: [x1,y1, x2,y2, widthFrac] — x is an offset from center, y is absolute,
+  # both as fractions of $big. Only two limbs leave the trunk hub (not three), at
+  # different lengths/angles; each then re-forks independently — the left limb once,
+  # the right limb twice — so neither side mirrors the other.
+  $branches = @(
+    @(0.00,0.60, -0.11,0.40, 0.064),
+    @(-0.11,0.40, -0.27,0.23, 0.040),
+    @(-0.11,0.40, -0.09,0.16, 0.032),
+    @(0.00,0.60,  0.09,0.46, 0.052),
+    @(0.09,0.46,  0.27,0.26, 0.038),
+    @(0.09,0.46,  0.10,0.24, 0.030),
+    @(0.10,0.24,  0.06,0.08, 0.026),
+    @(0.10,0.24,  0.20,0.04, 0.020)
   )
-  $branchTargets = @(
-    @((-$big*0.21), ($canopyCy+$big*0.02)),
-    @(0,            ($canopyCy-$big*0.10)),
-    @(($big*0.21),  ($canopyCy+$big*0.02))
+  # canopy lobes: [dx, dy, radius, colorHex] — one dominant lobe, two mid, two small
+  $lobes = @(
+    @(-0.27, 0.23, 0.22,  "#1f9e5e"),
+    @(-0.09, 0.16, 0.15,  "#3fe089"),
+    @(0.27,  0.26, 0.20,  "#27b06c"),
+    @(0.06,  0.08, 0.14,  "#27b06c"),
+    @(0.20,  0.04, 0.095, "#3fe089")
+  )
+  # dendritic spines: a handful of small red accent dots along branch/lobe edges —
+  # a hint of texture, not a canopy full of fruit
+  $spines = @(
+    @(-0.20, 0.30, 0.030),
+    @(-0.10, 0.13, 0.022),
+    @(0.22,  0.31, 0.028),
+    @(0.10,  0.05, 0.024),
+    @(0.19,  0.01, 0.018)
   )
 
   function DrawPass([bool]$outline) {
@@ -59,28 +78,29 @@ function RenderTree([int]$size) {
     $g.FillPath((New-Object System.Drawing.SolidBrush($tCol)), $trunkPath)
 
     foreach ($lobe in $lobes) {
-      $r = $lobe[2] + $extra
+      $r = ($big*$lobe[2]) + $extra
       $col = if ($outline) { $outlineCol } else { Col $lobe[3] }
       $b = New-Object System.Drawing.SolidBrush($col)
-      $g.FillEllipse($b, ($cx + $lobe[0] - $r), ($lobe[1] - $r), ($r*2), ($r*2))
+      $g.FillEllipse($b, ($cx + $big*$lobe[0] - $r), ($big*$lobe[1] - $r), ($r*2), ($r*2))
     }
 
     $bCol = if ($outline) { $outlineCol } else { Col "#7a5330" }
-    $bw = $branchW + $extra*2
-    foreach ($bt in $branchTargets) {
+    foreach ($br in $branches) {
+      $bw = ($big * $br[4]) + $extra*2
       $pen = New-Object System.Drawing.Pen($bCol, $bw)
       $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
       $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-      $g.DrawLine($pen, (New-Object System.Drawing.PointF($hubX,$hubY)), (New-Object System.Drawing.PointF(($cx+$bt[0]),$bt[1])))
+      $g.DrawLine($pen, (New-Object System.Drawing.PointF(($cx+$big*$br[0]),($big*$br[1]))), (New-Object System.Drawing.PointF(($cx+$big*$br[2]),($big*$br[3]))))
     }
 
     if (-not $outline) {
-      $r = $big*0.06
-      $ax = $cx + $big*0.10; $ay = $canopyCy - $big*0.04
-      $accentOutline = New-Object System.Drawing.SolidBrush($outlineCol)
-      $g.FillEllipse($accentOutline, ($ax-$r-$big*0.015), ($ay-$r-$big*0.015), (($r+$big*0.015)*2), (($r+$big*0.015)*2))
-      $b = New-Object System.Drawing.SolidBrush((Col "#ff5f70"))
-      $g.FillEllipse($b, ($ax-$r), ($ay-$r), ($r*2), ($r*2))
+      foreach ($sp in $spines) {
+        $r = $big*$sp[2]
+        $sx = $cx + $big*$sp[0]; $sy = $big*$sp[1]
+        $ol = $big*0.012
+        $g.FillEllipse((New-Object System.Drawing.SolidBrush($outlineCol)), ($sx-$r-$ol), ($sy-$r-$ol), (($r+$ol)*2), (($r+$ol)*2))
+        $g.FillEllipse((New-Object System.Drawing.SolidBrush((Col "#ff5f70"))), ($sx-$r), ($sy-$r), ($r*2), ($r*2))
+      }
     }
   }
 
