@@ -601,27 +601,33 @@ async function gistVerifyToken(token){
   return (await r.json()).login;
 }
 
+// Returns "gist" | "local" | "none" — not just a boolean — so boot can tell
+// whether the loaded data actually came from the synced source of truth or is
+// just this device's own possibly-stale local copy. That distinction matters:
+// boot must never treat a local fallback as safe to push back to the Gist.
 async function loadDB(){
   if(gistToken()){
     try{
       const remote=await gistLoad();
-      if(remote&&remote.domains){DB=remote;migrate();return true;}
+      if(remote&&remote.domains){DB=remote;migrate();return "gist";}
     }catch(e){console.warn("Gist load failed, falling back to local",e);}
   }
-  try{ const data=await window.arbor.load(); if(data&&data.domains){DB=data;migrate();return true;} }
+  try{ const data=await window.arbor.load(); if(data&&data.domains){DB=data;migrate();return "local";} }
   catch(e){}
-  return false;
+  return "none";
 }
 
 function setSaveState(s,detail){
   const el=document.getElementById("saveState"); if(!el)return;
   const states={
-    saving: ["saving…",          "var(--ink-faint)"],
-    saved:  ["✓ saved",          "var(--gcamp)"],
-    failed: ["⚠ save failed — export JSON backup","var(--overdue)"],
+    saving:   ["saving…",          "var(--ink-faint)"],
+    saved:    ["✓ saved",          "var(--gcamp)"],
+    synced:   ["✓ synced",         "var(--gcamp)"],
+    failed:   ["⚠ save failed — export JSON backup","var(--overdue)"],
+    syncwarn: ["⚠ showing local copy, not synced — export JSON backup","var(--amber)"],
   };
   const m=states[s]||states.saved; el.textContent=m[0]+(detail?" ("+detail+")":""); el.style.color=m[1]; el.dataset.state=s;
-  el.style.cursor=(s==="failed")?"pointer":"default";
+  el.style.cursor=(s==="failed"||s==="syncwarn")?"pointer":"default";
 }
 
 async function doWrite(){
@@ -629,11 +635,8 @@ async function doWrite(){
   try{ await window.arbor.save(DB); storageOK=true; }
   catch(e){ storageOK=false; console.error("Arbor native save failed:",e); }
   if(gistToken()){
-    try{
-      await gistSave(JSON.stringify(DB));
-      const el=document.getElementById("saveState");
-      if(el){el.textContent="✓ synced";el.style.color="var(--gcamp)";el.dataset.state="saved";}
-    }catch(e){ setSaveState("failed","Gist: "+String(e).slice(0,40)); console.warn("Gist save failed",e); }
+    try{ await gistSave(JSON.stringify(DB)); setSaveState("synced"); }
+    catch(e){ setSaveState("failed","Gist: "+String(e).slice(0,40)); console.warn("Gist save failed",e); }
   } else { setSaveState(storageOK?"saved":"failed"); }
 }
 function persist(){ clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160); }
@@ -2702,8 +2705,7 @@ function showGistSetup(){
         else{msg("Connected as @"+login+" — saving current workspace…","var(--gcamp)");
           await gistSave(JSON.stringify(DB));}
       }catch(e){await gistSave(JSON.stringify(DB));}
-      const el=document.getElementById("saveState");
-      if(el){el.textContent="✓ synced";el.style.color="var(--gcamp)";}
+      setSaveState("synced");
       setTimeout(()=>closeModal(),1400);
     }catch(e){msg("Error: "+e.message,"var(--overdue)");}
   };
@@ -2725,7 +2727,7 @@ function showGistSetup(){
 document.getElementById("syncBtn").addEventListener("click",()=>showGistSetup());
 document.getElementById("saveState").addEventListener("click",()=>{
   const st=document.getElementById("saveState").dataset.state;
-  if(st==="failed"||st==="noapi"||st==="off"){
+  if(st==="failed"||st==="noapi"||st==="off"||st==="syncwarn"){
     download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");
     toast("JSON backup downloaded — import this via ⋯ to restore"); }
 });
@@ -2929,13 +2931,29 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
   // sequence — the app would sit on a blank screen forever with no visible error
   // and no data. Logging it here at least makes any future regression debuggable.
   try{
-    const ok=await loadDB();
-    if(!ok||!DB.domains||!DB.domains.length) seed();
+    const src=await loadDB();   // "gist" | "local" | "none"
+    if(src==="none") seed();
     migrate(); render();
-    await doWrite();
+    // Save locally always (captures any seed/migration changes) — but NEVER push
+    // to the Gist automatically on boot. Boot used to always call doWrite(), which
+    // pushes to the Gist whenever a token exists, regardless of whether the load
+    // above actually got the true latest state. A device whose pull silently fell
+    // back to its own stale local copy (network hiccup, not yet updated, whatever)
+    // would then overwrite the shared Gist with that stale copy — destroying
+    // another device's just-synced edit and cascading the corruption to every
+    // device that opened afterward. The Gist must only ever be written to by an
+    // actual user edit (persist()/doWrite() elsewhere in the app) or the explicit
+    // Connect & Sync flow — never as a side effect of merely opening the app.
+    let storageOK2=true;
+    try{ await window.arbor.save(DB); }catch(e){ storageOK2=false; console.error("Arbor native save failed:",e); }
     if(gistToken()){
-      const el=document.getElementById("saveState");
-      if(el){el.textContent="✓ synced";el.style.color="var(--gcamp)";}
+      if(src==="gist") setSaveState("synced");
+      else{
+        setSaveState("syncwarn");
+        toast("Couldn't reach your synced data — showing this device's local copy instead. Editing anything will overwrite the Gist with it.");
+      }
+    } else {
+      setSaveState(storageOK2?"saved":"failed");
     }
   }catch(e){ console.error("Arbor failed to start:",e); }
 })();
