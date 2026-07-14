@@ -3,7 +3,7 @@
 // itself (HTML/JS/fonts) still loading when you're offline.
 // IMPORTANT: bump this version string on every deploy — cache-first means an
 // installed phone keeps serving the old app shell forever otherwise.
-const CACHE_NAME = "arbor-animals-v8";
+const CACHE_NAME = "arbor-animals-v9";
 const APP_SHELL = [
   "./",
   "index.html",
@@ -33,10 +33,33 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-// cache-first for the app shell, falling back to network (and caching the result)
-// for anything not pre-cached
+// index.html is the entire app (HTML/CSS/JS all inline, ~3MB single file) — it's
+// the one thing that changes on every deploy, and it's exactly what kept getting
+// stuck on stale cached copies despite bumping CACHE_NAME: a device already
+// controlled by an old worker doesn't reliably re-fetch it until some future
+// visit's background update check happens to land. Serve it network-first
+// instead, falling back to cache only when offline, so a fresh deploy reaches an
+// already-installed device on its very next launch — no manual cache-clear or
+// second relaunch needed. Static assets (fonts/vendor libs/icons) change rarely,
+// so they stay cache-first for speed and offline use.
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  const isAppShell = event.request.mode === "navigate"
+    || event.request.url.endsWith("/index.html")
+    || event.request.url.endsWith("/Arbor/")
+    || event.request.url.endsWith("/Arbor");
+  if (isAppShell) {
+    event.respondWith(
+      fetch(event.request).then((res) => {
+        if (res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
+        return res;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;

@@ -2680,7 +2680,7 @@ function showGistSetup(){
       ${existing?'<button class="btn danger" id="gist_disc" style="margin-right:auto">Disconnect</button>':""}
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="gist_conn">Connect &amp; sync</button>
-    </div>`);
+    </div>`, {center:true});
   const msg=(t,c)=>{const el=document.getElementById("gist_msg");if(el){el.textContent=t;el.style.color=c||"var(--ink-faint)";}};
   document.getElementById("gist_conn").onclick=async()=>{
     const tok=document.getElementById("gist_tok").value.trim();
