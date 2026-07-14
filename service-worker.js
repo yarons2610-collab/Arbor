@@ -3,7 +3,7 @@
 // itself (HTML/JS/fonts) still loading when you're offline.
 // IMPORTANT: bump this version string on every deploy — cache-first means an
 // installed phone keeps serving the old app shell forever otherwise.
-const CACHE_NAME = "arbor-animals-v9";
+const CACHE_NAME = "arbor-animals-v10";
 const APP_SHELL = [
   "./",
   "index.html",
@@ -44,6 +44,16 @@ self.addEventListener("activate", (event) => {
 // so they stay cache-first for speed and offline use.
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  // Never intercept the GitHub API — Gist reads (cross-device sync pulls) are GET
+  // requests, and without this exclusion they fell into the cache-first branch
+  // below just like any other same-origin asset: the FIRST successful fetch to a
+  // given gist URL got cached forever, so every later pull silently kept
+  // returning that one frozen snapshot no matter what actually changed on
+  // GitHub. Confirmed live: 5 fetches to api.github.com/zen (which normally
+  // returns a random quote per request) all returned the identical first
+  // response. API calls must always hit the network live — a Gist read failing
+  // should surface as a real error, not silently serve stale data.
+  if (new URL(event.request.url).hostname === "api.github.com") return;
   const isAppShell = event.request.mode === "navigate"
     || event.request.url.endsWith("/index.html")
     || event.request.url.endsWith("/Arbor/")

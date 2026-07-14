@@ -551,8 +551,12 @@ const GIST_FILENAME="arbor_workspace.json";
 function gistToken(){ return localStorage.getItem(GIST_TOKEN_KEY)||""; }
 function gistId(){    return localStorage.getItem(GIST_ID_KEY)||""; }
 async function gistRequest(method,path,body){
+  // cache:"no-store" — belt-and-suspenders on top of the service worker's own
+  // api.github.com bypass: a cross-device sync pull must never be answered from
+  // any cache layer (SW or the browser's own HTTP cache), or a device can get
+  // permanently stuck replaying whatever it fetched the very first time.
   const r=await fetch("https://api.github.com"+path,{
-    method,headers:{"Authorization":"token "+gistToken(),
+    method,cache:"no-store",headers:{"Authorization":"token "+gistToken(),
       "Accept":"application/vnd.github+json","Content-Type":"application/json"},
     body:body?JSON.stringify(body):undefined});
   if(!r.ok){const t=await r.text();throw new Error("GitHub "+r.status+": "+t.slice(0,120));}
@@ -584,7 +588,7 @@ async function gistLoad(){
 }
 async function gistVerifyToken(token){
   const r=await fetch("https://api.github.com/user",{
-    headers:{"Authorization":"token "+token,"Accept":"application/vnd.github+json"}});
+    cache:"no-store",headers:{"Authorization":"token "+token,"Accept":"application/vnd.github+json"}});
   if(!r.ok)throw new Error("Invalid token — check it was copied correctly");
   // NOTE: we deliberately do NOT check the token's scopes here. GitHub reports
   // them via the x-oauth-scopes response header, but browsers never expose that
