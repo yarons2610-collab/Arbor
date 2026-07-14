@@ -447,54 +447,6 @@
    elsewhere in the app (load/save/saveSync/saveFile/openJSON) works unchanged. */
 (function(){
   const KEY="arbor_workspace_pwa";
-
-/* ── GITHUB GIST SYNC ── */
-const GIST_TOKEN_KEY="arbor_gist_token";
-const GIST_ID_KEY="arbor_gist_id";
-const GIST_FILENAME="arbor_workspace.json";
-function gistToken(){ return localStorage.getItem(GIST_TOKEN_KEY)||""; }
-function gistId(){    return localStorage.getItem(GIST_ID_KEY)||""; }
-async function gistRequest(method,path,body){
-  const r=await fetch("https://api.github.com"+path,{
-    method,headers:{"Authorization":"token "+gistToken(),
-      "Accept":"application/vnd.github+json","Content-Type":"application/json"},
-    body:body?JSON.stringify(body):undefined});
-  if(!r.ok){const t=await r.text();throw new Error("GitHub "+r.status+": "+t.slice(0,120));}
-  return r.status===204?null:r.json();
-}
-async function gistSave(jsonStr){
-  const token=gistToken(); if(!token)return false;
-  const id=gistId();
-  if(id){ await gistRequest("PATCH","/gists/"+id,{files:{[GIST_FILENAME]:{content:jsonStr}}}); }
-  else{
-    const g=await gistRequest("POST","/gists",{description:"Arbor workspace",public:false,
-      files:{[GIST_FILENAME]:{content:jsonStr}}});
-    localStorage.setItem(GIST_ID_KEY,g.id);
-  }
-  return true;
-}
-async function gistLoad(){
-  const token=gistToken(); if(!token)return null;
-  let id=gistId();
-  if(!id){
-    const list=await gistRequest("GET","/gists?per_page=100");
-    const found=(list||[]).find(g=>g.files&&g.files[GIST_FILENAME]);
-    if(!found)return null;
-    id=found.id; localStorage.setItem(GIST_ID_KEY,id);
-  }
-  const g=await gistRequest("GET","/gists/"+id);
-  const raw=g&&g.files&&g.files[GIST_FILENAME]&&g.files[GIST_FILENAME].content;
-  return raw?JSON.parse(raw):null;
-}
-async function gistVerifyToken(token){
-  const r=await fetch("https://api.github.com/user",{
-    headers:{"Authorization":"token "+token,"Accept":"application/vnd.github+json"}});
-  if(!r.ok)throw new Error("Invalid token — check it was copied correctly");
-  const scopes=(r.headers.get("x-oauth-scopes")||"").split(",").map(s=>s.trim());
-  if(!scopes.includes("gist"))
-    throw new Error("Token missing 'gist' scope — regenerate with gist checked");
-  return (await r.json()).login;
-}
   window.arbor={
     async load(){
       try{ const raw=localStorage.getItem(KEY); return raw?JSON.parse(raw):null; }
@@ -538,6 +490,17 @@ async function gistVerifyToken(token){
 })();
 if("serviceWorker" in navigator){
   window.addEventListener("load",()=>{ navigator.serviceWorker.register("service-worker.js").catch(()=>{}); });
+  // The service worker's own skipWaiting()+clients.claim() activate a newly-deployed
+  // version in the background, but the already-open tab keeps running the OLD
+  // page's JS until something reloads it — that gap is why past deploys sat
+  // invisible on already-installed devices even after the cache version was
+  // bumped. Reload once, automatically, when control switches to the new worker,
+  // so a fresh launch of the app always runs current code.
+  let swControllerChanged=false;
+  navigator.serviceWorker.addEventListener("controllerchange",()=>{
+    if(swControllerChanged) return; swControllerChanged=true;
+    window.location.reload();
+  });
 }
 const KEY="arbor_workspace_v3";   // v3: retire stale v2 storage that carried old example tasks; load embedded (uploaded) data fresh
 const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
@@ -574,6 +537,65 @@ let saveTimer=null, storageOK=null;
    Electron main process over IPC (see src/main.js, src/preload.js). No
    compression or multi-backend probing is needed — a local file has no
    realistic size limit and is always available. */
+
+/* ── GITHUB GIST SYNC ──
+   Must live at top-level script scope, not inside the window.arbor IIFE above —
+   loadDB()/doWrite()/showGistSetup() all reference these functions and are
+   themselves top-level, so nesting this block inside that IIFE made every one of
+   those calls throw "gistToken is not defined", which crashed the entire boot
+   sequence (uncaught promise rejection) on every page load. That's the actual bug
+   behind "sync doesn't work" — the app never even got past loadDB(). */
+const GIST_TOKEN_KEY="arbor_gist_token";
+const GIST_ID_KEY="arbor_gist_id";
+const GIST_FILENAME="arbor_workspace.json";
+function gistToken(){ return localStorage.getItem(GIST_TOKEN_KEY)||""; }
+function gistId(){    return localStorage.getItem(GIST_ID_KEY)||""; }
+async function gistRequest(method,path,body){
+  const r=await fetch("https://api.github.com"+path,{
+    method,headers:{"Authorization":"token "+gistToken(),
+      "Accept":"application/vnd.github+json","Content-Type":"application/json"},
+    body:body?JSON.stringify(body):undefined});
+  if(!r.ok){const t=await r.text();throw new Error("GitHub "+r.status+": "+t.slice(0,120));}
+  return r.status===204?null:r.json();
+}
+async function gistSave(jsonStr){
+  const token=gistToken(); if(!token)return false;
+  const id=gistId();
+  if(id){ await gistRequest("PATCH","/gists/"+id,{files:{[GIST_FILENAME]:{content:jsonStr}}}); }
+  else{
+    const g=await gistRequest("POST","/gists",{description:"Arbor workspace",public:false,
+      files:{[GIST_FILENAME]:{content:jsonStr}}});
+    localStorage.setItem(GIST_ID_KEY,g.id);
+  }
+  return true;
+}
+async function gistLoad(){
+  const token=gistToken(); if(!token)return null;
+  let id=gistId();
+  if(!id){
+    const list=await gistRequest("GET","/gists?per_page=100");
+    const found=(list||[]).find(g=>g.files&&g.files[GIST_FILENAME]);
+    if(!found)return null;
+    id=found.id; localStorage.setItem(GIST_ID_KEY,id);
+  }
+  const g=await gistRequest("GET","/gists/"+id);
+  const raw=g&&g.files&&g.files[GIST_FILENAME]&&g.files[GIST_FILENAME].content;
+  return raw?JSON.parse(raw):null;
+}
+async function gistVerifyToken(token){
+  const r=await fetch("https://api.github.com/user",{
+    headers:{"Authorization":"token "+token,"Accept":"application/vnd.github+json"}});
+  if(!r.ok)throw new Error("Invalid token — check it was copied correctly");
+  // NOTE: we deliberately do NOT check the token's scopes here. GitHub reports
+  // them via the x-oauth-scopes response header, but browsers never expose that
+  // header on a cross-origin fetch (api.github.com doesn't list it in
+  // Access-Control-Expose-Headers) — reading it always comes back empty, so a
+  // scope check here would reject every token, valid or not. A token that's
+  // missing the "gist" scope will instead fail naturally the first time
+  // gistSave()/gistLoad() actually calls the /gists endpoint, with a real error
+  // from GitHub surfaced through gistRequest()'s own error handling.
+  return (await r.json()).login;
+}
 
 async function loadDB(){
   if(gistToken()){
@@ -2898,13 +2920,19 @@ function renderLibraryModal(focus){
 function download(name,content,mime){ window.arbor.saveFile(name,content,mime).catch(()=>{}); }
 window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); });
 (async function(){
-  const ok=await loadDB();
-  if(!ok||!DB.domains||!DB.domains.length) seed();
-  migrate(); render();
-  await doWrite();
-  if(gistToken()){
-    const el=document.getElementById("saveState");
-    if(el){el.textContent="✓ synced";el.style.color="var(--gcamp)";}
-  }
+  // top-level try/catch: an exception anywhere in boot (loadDB/seed/migrate/render)
+  // used to be an unhandled promise rejection that silently killed the entire boot
+  // sequence — the app would sit on a blank screen forever with no visible error
+  // and no data. Logging it here at least makes any future regression debuggable.
+  try{
+    const ok=await loadDB();
+    if(!ok||!DB.domains||!DB.domains.length) seed();
+    migrate(); render();
+    await doWrite();
+    if(gistToken()){
+      const el=document.getElementById("saveState");
+      if(el){el.textContent="✓ synced";el.style.color="var(--gcamp)";}
+    }
+  }catch(e){ console.error("Arbor failed to start:",e); }
 })();
 </script>
