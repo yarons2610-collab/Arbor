@@ -1188,6 +1188,48 @@ function renderTimeline(){
     }
   });
 
+  // ── Overlap layout for timed same-day events ────────────────────────────
+  // Two events sharing time on the same day used to render fully on top of
+  // each other — both absolute-positioned at left:2px/right:2px in their hour
+  // cell with no horizontal offset, so whichever was appended last completely
+  // hid the other. Standard calendar column-packing: events that mutually
+  // overlap (directly, or transitively through a chain of overlaps) share a
+  // cluster and split that cluster's width evenly into side-by-side columns.
+  const timedLayout=new Map(); // task.id -> {col, totalCols}
+  for(let d=0;d<7;d++){
+    const day=new Date(ws); day.setDate(ws.getDate()+d); day.setHours(0,0,0,0);
+    const dayEvents=weekTasks.filter(t=>{
+      if(!hasTime(t.deadline)) return false;
+      const dd=whenDate(t.deadline); dd.setHours(0,0,0,0);
+      return dd.getTime()===day.getTime();
+    }).map(t=>{
+      const dt=whenDate(t.deadline);
+      const startMin=dt.getHours()*60+dt.getMinutes();
+      let durationMins=t.duration||60;
+      if(!t.duration&&t.endDate) durationMins=Math.max((whenDate(t.endDate)-dt)/60000,30);
+      return {t,startMin,endMin:startMin+Math.max(durationMins,14)};
+    }).sort((a,b)=>a.startMin-b.startMin||a.endMin-b.endMin);
+    let cluster=[], clusterEnd=-Infinity;
+    const flush=()=>{
+      if(!cluster.length)return;
+      const colEnds=[]; // colEnds[i] = end time of the last event placed in column i
+      cluster.forEach(ev=>{
+        let ci=colEnds.findIndex(end=>end<=ev.startMin);
+        if(ci===-1){ ci=colEnds.length; colEnds.push(ev.endMin); } else colEnds[ci]=ev.endMin;
+        ev.col=ci;
+      });
+      const totalCols=colEnds.length;
+      cluster.forEach(ev=>timedLayout.set(ev.t.id,{col:ev.col,totalCols}));
+      cluster=[];
+    };
+    dayEvents.forEach(ev=>{
+      if(ev.startMin>=clusterEnd){ flush(); clusterEnd=-Infinity; }
+      cluster.push(ev);
+      clusterEnd=Math.max(clusterEnd,ev.endMin);
+    });
+    flush();
+  }
+
   // hour rows
   for(let h=0;h<24;h++){
     const label=document.createElement("div"); label.className="cal-hour-gutter";
@@ -1217,8 +1259,10 @@ function renderTimeline(){
       let durationMins=t.duration||60;
       if(!t.duration&&t.endDate) durationMins=Math.max((whenDate(t.endDate)-dt)/60000,30);
       const heightPct=(durationMins/60)*100;
+      const{col:colIdx,totalCols}=timedLayout.get(t.id)||{col:0,totalCols:1};
+      const colPct=100/totalCols;
       const evt=document.createElement("div"); evt.className="cal-evt-timed";
-      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
+      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
       const timeStr=dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
       const durLabel=durationMins!==60?` (${durationMins}m)`:"";
       evt.innerHTML=`<div class="cal-evt-resize cal-evt-resize-top"></div><div class="et">${esc(t.title)}</div><div class="es">${timeStr}${durLabel}${t.procedureType?" "+PROC_ICON[t.procedureType]:""}</div><div class="cal-evt-resize cal-evt-resize-bottom"></div>`;
