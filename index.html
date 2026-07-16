@@ -2506,18 +2506,25 @@ function animalModal(id){
       termination, alive:termination==="alive",
       comments:document.getElementById("am_com").value.trim()};
     if(id){
-      const oldName=a.name;
       Object.assign(a,rec);
-      // propagate rename to any procedure task whose title was auto-generated from the old animal name
-      if(name!==oldName){
-        DB.tasks.forEach(t=>{
-          if(t.autoTitle&&t.procedureType&&(t.linkedAnimals||[]).includes(a.id)){
-            const cap=t.procedureType.charAt(0).toUpperCase()+t.procedureType.slice(1);
-            // only update if the title still matches the old auto-generated pattern
-            if(t.title===`${cap} — ${oldName}`) t.title=`${cap} — ${name}`;
-          }
-        });
-      }
+      // Keep every auto-titled procedure task's title in sync with this animal's
+      // current name. Runs on every save (not just when the name changed) so it's
+      // self-healing: previously this only fired on a rename AND only if the
+      // task's stored title still matched "<Type> — <the immediately-previous
+      // name>" exactly — if a rename was ever missed (or the animal was renamed
+      // twice before either sync ran), the title was checking against the wrong
+      // "old" name forever after and could never catch up. Trusting autoTitle
+      // (explicitly cleared the moment anyone hand-edits a title, see e_title's
+      // input handler) instead of pattern-matching the old string fixes that:
+      // just always regenerate from the current name. Restricted to
+      // single-animal tasks so a title shared across multiple linked animals
+      // isn't collapsed down to just one of their names.
+      DB.tasks.forEach(t=>{
+        if(t.autoTitle&&t.procedureType&&(t.linkedAnimals||[]).length===1&&t.linkedAnimals[0]===a.id){
+          const cap=t.procedureType.charAt(0).toUpperCase()+t.procedureType.slice(1);
+          t.title=`${cap} — ${a.name}`;
+        }
+      });
     } else DB.animals.push({id:uid("a_"),perfusion:null,histology:null,microscopy:null,weights:{},...rec});
     persist(); closeModal(); render(); toast(id?"Animal updated":"Animal added");
   };
