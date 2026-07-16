@@ -166,13 +166,23 @@
   .bv-flag{font-family:var(--mono);font-size:9px;color:var(--ink-faint);margin-top:5px;line-height:1.5}
   /* week calendar */
   #timeline{overflow:hidden}  /* display:none from .view.hidden must win; flex moved to inner wrapper */
-  .cal-outer{display:flex;flex-direction:column;height:100%;overflow:hidden}
+  /* iOS Safari treats a touch-and-hold-then-move on text content as "select text"
+     (magnifier loupe + blue highlight), which hijacks the drag gesture entirely and
+     can trigger the browser's own edge-autoscroll — nothing in this calendar is
+     meant to be text-selected, so disable selection across the whole thing rather
+     than just the draggable chips. */
+  .cal-outer{display:flex;flex-direction:column;height:100%;overflow:hidden;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
   .cal-nav-bar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:6;flex-shrink:0}
   .cal-nav-bar h2{font-family:var(--disp);font-size:16px;margin:0;font-weight:600}
   .cal-nav-btn{border:1px solid var(--line2);background:var(--panel);color:var(--ink);border-radius:8px;padding:6px 13px;cursor:pointer;font-size:13px}
   .cal-nav-btn:hover{border-color:var(--gcamp)}
   .cal-nav-btn.today{color:var(--gcamp);border-color:var(--gcamp)}
-  .cal-outer{display:flex;flex-direction:column;height:100%;overflow:hidden}
+  /* iOS Safari treats a touch-and-hold-then-move on text content as "select text"
+     (magnifier loupe + blue highlight), which hijacks the drag gesture entirely and
+     can trigger the browser's own edge-autoscroll — nothing in this calendar is
+     meant to be text-selected, so disable selection across the whole thing rather
+     than just the draggable chips. */
+  .cal-outer{display:flex;flex-direction:column;height:100%;overflow:hidden;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
   .cal-allday-zone{flex-shrink:0;border-bottom:2px solid var(--line2);background:var(--bg)}
   .cal-grid-wrap{flex:1;overflow:auto;padding:0}
   .week-grid{display:grid;grid-template-columns:52px repeat(7,minmax(0,1fr));min-width:640px}
@@ -1144,6 +1154,16 @@ function renderTimeline(){
   // hours section: scrollable
   const wrap=document.createElement("div"); wrap.className="cal-grid-wrap"; outer.appendChild(wrap);
   const grid=document.createElement("div"); grid.className="week-grid"; wrap.appendChild(grid);
+  // The day-header/all-day row (alldayGrid, above) and the hourly grid (wrap,
+  // below) are two independently-scrollable regions with no built-in link
+  // between them — on a narrow phone screen the week grid is wider than the
+  // viewport, so any horizontal scroll of one (a manual swipe, or the errant
+  // native-text-selection autoscroll this same fix disables above) used to
+  // leave the other behind, misaligning which day column lines up with which
+  // header. Mirror wrap's horizontal position onto alldayGrid on every scroll
+  // so they can never drift apart regardless of what caused the scroll.
+  alldayZone.style.overflow="hidden";
+  wrap.addEventListener("scroll",()=>{ alldayGrid.style.transform=`translateX(${-wrap.scrollLeft}px)`; });
   const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const HOURS=Array.from({length:24},(_,i)=>i); // 0–23
 
