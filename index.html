@@ -195,7 +195,7 @@
   .cal-evt:hover{filter:brightness(1.18)}
   .cal-evt .et{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .cal-evt .es{font-family:var(--mono);font-size:9px;opacity:.8}
-  .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden}
+  .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:none}
   .cal-evt-timed:hover{filter:brightness(1.18)}
   .cal-evt-timed.dragging{opacity:.85;box-shadow:0 6px 18px rgba(0,0,0,.45);cursor:grabbing;z-index:50}
   .cal-evt-timed.dragging.drag-invalid{opacity:.35}
@@ -1266,7 +1266,10 @@ function renderTimeline(){
       const timeStr=dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
       const durLabel=durationMins!==60?` (${durationMins}m)`:"";
       evt.innerHTML=`<div class="cal-evt-resize cal-evt-resize-top"></div><div class="et">${esc(t.title)}</div><div class="es">${timeStr}${durLabel}${t.procedureType?" "+PROC_ICON[t.procedureType]:""}</div><div class="cal-evt-resize cal-evt-resize-bottom"></div>`;
-      evt.addEventListener("mousedown",e=>{
+      // Pointer Events (not mousedown) so this works from touch too — mobile never
+      // fires mousemove/mouseup during a touch-drag gesture, which is why dragging
+      // had no effect at all on the phone (the whole feature was mouse-only).
+      evt.addEventListener("pointerdown",e=>{
         e.stopPropagation();
         const mode=e.target.classList.contains("cal-evt-resize")?(e.target.classList.contains("cal-evt-resize-top")?"resize-top":"resize-bottom"):"move";
         beginTimedEventDrag(mode,t,evt,e);
@@ -1357,9 +1360,13 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
       evtEl.style.height=Math.max((newDur/60)*52,14)+"px";
     }
   }
+  function cleanup(){
+    document.removeEventListener("pointermove",onMove);
+    document.removeEventListener("pointerup",onUp);
+    document.removeEventListener("pointercancel",onCancel);
+  }
   function onUp(e){
-    document.removeEventListener("mousemove",onMove);
-    document.removeEventListener("mouseup",onUp);
+    cleanup();
     if(!moved){ openDetail(t.id); return; }
     evtEl.remove();
     const dy=e.clientY-startY;
@@ -1385,8 +1392,12 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
     }
     persist(); renderTimeline();
   }
-  document.addEventListener("mousemove",onMove);
-  document.addEventListener("mouseup",onUp);
+  // an interrupted gesture (e.g. iOS swipe-back, an incoming call) — discard
+  // rather than commit a possibly-mid-drag position
+  function onCancel(){ cleanup(); if(moved){ evtEl.remove(); renderTimeline(); } }
+  document.addEventListener("pointermove",onMove);
+  document.addEventListener("pointerup",onUp);
+  document.addEventListener("pointercancel",onCancel);
 }
 
 /* ---------- MATERIALS (shared identity = name; edits sync to tasks) ---------- */
