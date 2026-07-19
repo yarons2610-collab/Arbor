@@ -45,12 +45,13 @@ function RenderLogo([int]$size, [double]$margin = 0.01) {
 
   $availW = $size * (1 - $margin * 2)
   $availH = $size * (1 - $margin * 2)
-  # Full cover-crop cuts off the treetop, trunk, and goose feet - all
-  # recognizable parts of the logo - because the art is portrait (109x152)
-  # and a square cover-crop needs ~28% cropped off the height. Contain (Min)
-  # is the non-destructive choice: it fills the full height edge-to-edge
-  # (this art's constrained axis) and only leaves margin on the sides.
-  $scale = [Math]::Min($availW / $contentBounds.Width, $availH / $contentBounds.Height)
+  # Cover-crop (Max): fills the square edge-to-edge on the constrained axis
+  # (width, since the art is portrait 108x152) and crops the treetop tip and
+  # trunk/goose-feet on the other axis. Chosen deliberately over "contain"
+  # (Min) after comparing both at actual taskbar size - the icon read as too
+  # small with the whole composition preserved; full-bleed reads much bigger
+  # at a glance, and the crop is minor at icon sizes.
+  $scale = [Math]::Max($availW / $contentBounds.Width, $availH / $contentBounds.Height)
   $drawW = $contentBounds.Width * $scale
   $drawH = $contentBounds.Height * $scale
   $drawX = ($size - $drawW) / 2
@@ -87,12 +88,10 @@ $targets = @(
   # Maskable icons (purpose="maskable" in manifest.json): Chromium/Windows
   # renders these full-bleed and trusts the source to keep content inside
   # a safe zone, instead of applying its own extra shrink to avoid clipping
-  # by the taskbar's rounded-corner mask - which is what was making the
-  # regular icon look small even with an opaque background. Needs a solid
-  # background (transparency would show through the mask) and enough margin
-  # (0.1, i.e. content in the middle 80%) that the corner mask never bites in.
-  @{size=192; name="icon-192-maskable.png"; opaque=$true; margin=0.1},
-  @{size=512; name="icon-512-maskable.png"; opaque=$true; margin=0.1}
+  # by the taskbar's rounded-corner mask. Needs a solid background
+  # (transparency would show through the mask).
+  @{size=192; name="icon-192-maskable.png"; opaque=$true; margin=0.01},
+  @{size=512; name="icon-512-maskable.png"; opaque=$true; margin=0.01}
 )
 foreach ($t in $targets) {
   $img = if ($t.opaque) { RenderOpaque $t.size $t.margin } else { RenderLogo $t.size $t.margin }
