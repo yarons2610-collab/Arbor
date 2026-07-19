@@ -1,7 +1,8 @@
 <#
-  Generates PWA icon PNGs (192, 512, 180-apple-touch, 32-favicon) using the exact
-  same dendritic-tree glyph as the desktop app's build/make-icon.ps1, so the
-  iPhone home-screen icon matches the Windows app icon.
+  Generates PWA icon PNGs (192, 512, 180-apple-touch, 32-favicon) from the official
+  Arbor logo (logo-source.png — tree + goose, transparent background), the same
+  source used by the desktop app's build/make-icon.ps1, so the iPhone home-screen
+  icon matches the Windows app icon.
 #>
 Add-Type -AssemblyName System.Drawing
 
@@ -10,126 +11,43 @@ function Col([string]$hex, [int]$a=255) {
   return [System.Drawing.Color]::FromArgb($a, $c.R, $c.G, $c.B)
 }
 
-function RenderTree([int]$size) {
-  $SS = 8
-  $big = $size * $SS
-  $bmp = New-Object System.Drawing.Bitmap $big, $big, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+$sourcePath = Join-Path $PSScriptRoot "logo-source.png"
+$sourceImg = [System.Drawing.Image]::FromFile($sourcePath)
+
+function RenderLogo([int]$size) {
+  $bmp = New-Object System.Drawing.Bitmap $size, $size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
   $g = [System.Drawing.Graphics]::FromImage($bmp)
   $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
   $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+  $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
   $g.Clear([System.Drawing.Color]::Transparent)
-  $cx = $big / 2.0
-  $outlineCol = Col "#12240f"
 
-  $trunkW = $big * 0.15
-  $trunkTop = $big * 0.60
-  $trunkBottom = $big * 0.88
-  $hubX = $cx; $hubY = $trunkTop
+  $margin = 0.05
+  $availW = $size * (1 - $margin * 2)
+  $availH = $size * (1 - $margin * 2)
+  $scale = [Math]::Min($availW / $sourceImg.Width, $availH / $sourceImg.Height)
+  $drawW = $sourceImg.Width * $scale
+  $drawH = $sourceImg.Height * $scale
+  $drawX = ($size - $drawW) / 2
+  $drawY = ($size - $drawH) / 2
+  $g.DrawImage($sourceImg, $drawX, $drawY, $drawW, $drawH)
 
-  # Branches: [x1,y1, x2,y2, widthFrac] — x is an offset from center, y is absolute,
-  # both as fractions of $big. Only two limbs leave the trunk hub (not three), at
-  # different lengths/angles; each then re-forks independently — the left limb once,
-  # the right limb twice — so neither side mirrors the other.
-  $branches = @(
-    @(0.00,0.60, -0.11,0.40, 0.064),
-    @(-0.11,0.40, -0.27,0.23, 0.040),
-    @(-0.11,0.40, -0.09,0.16, 0.032),
-    @(0.00,0.60,  0.09,0.46, 0.052),
-    @(0.09,0.46,  0.27,0.26, 0.038),
-    @(0.09,0.46,  0.10,0.24, 0.030),
-    @(0.10,0.24,  0.06,0.08, 0.026),
-    @(0.10,0.24,  0.20,0.04, 0.020)
-  )
-  # canopy lobes: [dx, dy, radius, colorHex] — one dominant lobe, two mid, two small
-  $lobes = @(
-    @(-0.27, 0.23, 0.22,  "#1f9e5e"),
-    @(-0.09, 0.16, 0.15,  "#3fe089"),
-    @(0.27,  0.26, 0.20,  "#27b06c"),
-    @(0.06,  0.08, 0.14,  "#27b06c"),
-    @(0.20,  0.04, 0.095, "#3fe089")
-  )
-  # dendritic spines: a handful of small red accent dots along branch/lobe edges —
-  # a hint of texture, not a canopy full of fruit
-  $spines = @(
-    @(-0.20, 0.30, 0.030),
-    @(-0.10, 0.13, 0.022),
-    @(0.22,  0.31, 0.028),
-    @(0.10,  0.05, 0.024),
-    @(0.19,  0.01, 0.018)
-  )
-
-  function DrawPass([bool]$outline) {
-    $extra = if ($outline) { $big*0.030 } else { 0 }
-    if (-not $outline) {
-      $shR = $big * 0.20; $shY = $big * 0.90
-      $shadowBrush = New-Object System.Drawing.SolidBrush((Col "#000000" 60))
-      $g.FillEllipse($shadowBrush, ($cx - $shR), ($shY - $shR*0.28), ($shR*2), ($shR*0.56))
-    }
-    $tw = $trunkW + $extra*2
-    $tCol = if ($outline) { $outlineCol } else { Col "#6b4527" }
-    $trunkPath = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $tr = New-Object System.Drawing.RectangleF(($cx - $tw/2), ($trunkTop-$extra), $tw, ($trunkBottom - $trunkTop + $extra*2))
-    $rad = $tw * 0.5
-    $trunkPath.AddArc($tr.X, $tr.Y, $rad*2, $rad*2, 180, 90)
-    $trunkPath.AddArc(($tr.Right-$rad*2), $tr.Y, $rad*2, $rad*2, 270, 90)
-    $trunkPath.AddArc(($tr.Right-$rad*2), ($tr.Bottom-$rad*2), $rad*2, $rad*2, 0, 90)
-    $trunkPath.AddArc($tr.X, ($tr.Bottom-$rad*2), $rad*2, $rad*2, 90, 90)
-    $trunkPath.CloseFigure()
-    $g.FillPath((New-Object System.Drawing.SolidBrush($tCol)), $trunkPath)
-
-    foreach ($lobe in $lobes) {
-      $r = ($big*$lobe[2]) + $extra
-      $col = if ($outline) { $outlineCol } else { Col $lobe[3] }
-      $b = New-Object System.Drawing.SolidBrush($col)
-      $g.FillEllipse($b, ($cx + $big*$lobe[0] - $r), ($big*$lobe[1] - $r), ($r*2), ($r*2))
-    }
-
-    $bCol = if ($outline) { $outlineCol } else { Col "#7a5330" }
-    foreach ($br in $branches) {
-      $bw = ($big * $br[4]) + $extra*2
-      $pen = New-Object System.Drawing.Pen($bCol, $bw)
-      $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-      $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-      $g.DrawLine($pen, (New-Object System.Drawing.PointF(($cx+$big*$br[0]),($big*$br[1]))), (New-Object System.Drawing.PointF(($cx+$big*$br[2]),($big*$br[3]))))
-    }
-
-    if (-not $outline) {
-      foreach ($sp in $spines) {
-        $r = $big*$sp[2]
-        $sx = $cx + $big*$sp[0]; $sy = $big*$sp[1]
-        $ol = $big*0.012
-        $g.FillEllipse((New-Object System.Drawing.SolidBrush($outlineCol)), ($sx-$r-$ol), ($sy-$r-$ol), (($r+$ol)*2), (($r+$ol)*2))
-        $g.FillEllipse((New-Object System.Drawing.SolidBrush((Col "#ff5f70"))), ($sx-$r), ($sy-$r), ($r*2), ($r*2))
-      }
-    }
-  }
-
-  DrawPass $true
-  DrawPass $false
   $g.Dispose()
-
-  $final = New-Object System.Drawing.Bitmap $size, $size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-  $gf = [System.Drawing.Graphics]::FromImage($final)
-  $gf.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-  $gf.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-  $gf.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
-  $gf.DrawImage($bmp, 0, 0, $size, $size)
-  $gf.Dispose()
-  $bmp.Dispose()
-  return $final
+  return $bmp
 }
 
 # iOS home-screen icons render on an opaque background (no transparency support in
 # the springboard), so bake the dark app background behind the glyph for those sizes.
 function RenderOpaque([int]$size) {
-  $tree = RenderTree $size
+  $logo = RenderLogo $size
   $final = New-Object System.Drawing.Bitmap $size, $size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
   $gf = [System.Drawing.Graphics]::FromImage($final)
   $gf.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
   $gf.Clear((Col "#080a0f"))
-  $gf.DrawImage($tree, 0, 0, $size, $size)
+  $gf.DrawImage($logo, 0, 0, $size, $size)
   $gf.Dispose()
-  $tree.Dispose()
+  $logo.Dispose()
   return $final
 }
 
@@ -143,8 +61,10 @@ $targets = @(
   @{size=32;  name="favicon-32.png"; opaque=$false}
 )
 foreach ($t in $targets) {
-  $img = if ($t.opaque) { RenderOpaque $t.size } else { RenderTree $t.size }
+  $img = if ($t.opaque) { RenderOpaque $t.size } else { RenderLogo $t.size }
   $img.Save((Join-Path $outDir $t.name), [System.Drawing.Imaging.ImageFormat]::Png)
   $img.Dispose()
   Write-Output "Wrote $($t.name) ($($t.size)px, opaque=$($t.opaque))"
 }
+
+$sourceImg.Dispose()
