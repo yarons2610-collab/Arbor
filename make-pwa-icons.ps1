@@ -55,8 +55,8 @@ $outDir = Join-Path $PSScriptRoot "icons"
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 $targets = @(
-  @{size=192; name="icon-192.png"; opaque=$false},
-  @{size=512; name="icon-512.png"; opaque=$false},
+  @{size=192; name="icon-192.png"; opaque=$true},
+  @{size=512; name="icon-512.png"; opaque=$true},
   @{size=180; name="apple-touch-icon.png"; opaque=$true},
   @{size=32;  name="favicon-32.png"; opaque=$false}
 )
