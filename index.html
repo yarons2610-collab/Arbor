@@ -37,7 +37,7 @@
   ::-webkit-scrollbar-track{background:transparent}
   .app{display:flex;flex-direction:column;height:100vh}
 
-  .top{display:flex;align-items:center;gap:16px;padding:12px 18px;padding-top:calc(12px + env(safe-area-inset-top));border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--bg2),var(--bg))}
+  .top{display:flex;align-items:center;gap:16px;padding:12px 18px;padding-top:calc(12px + max(env(safe-area-inset-top),24px));border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--bg2),var(--bg))}
   .brand{display:flex;align-items:baseline;gap:10px;user-select:none}
   .brand h1{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:-.02em;margin:0}
   .brand .sub{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);letter-spacing:.03em}
@@ -362,7 +362,7 @@
   .mat-subview.hidden{display:none}
   /* ── MOBILE (≤600px) ─────────────────────────────────────────────────────── */
   @media(max-width:600px){
-    .top{flex-wrap:wrap;gap:8px;padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top))}
+    .top{flex-wrap:wrap;gap:8px;padding:8px 10px;padding-top:calc(8px + max(env(safe-area-inset-top),24px))}
     .brand h1{font-size:15px} .brand .sub{display:none}
     .tabs{order:-1;width:100%;justify-content:stretch}
     .tab{flex:1;padding:6px 2px;font-size:11px;white-space:nowrap}
