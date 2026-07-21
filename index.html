@@ -130,6 +130,20 @@
   .wt-cal-day .wt-up{color:var(--gcamp);font-size:7px;margin-left:1px}
   .wt-cal-day .wt-down{color:var(--overdue);font-size:7px;margin-left:1px}
   .wt-nav{border:1px solid var(--line2);background:var(--panel);color:var(--ink);border-radius:6px;width:22px;height:22px;cursor:pointer;font-size:12px}
+  /* diary (unified calendar: weight + post-op + training + comment + note) */
+  .dg-dots{display:flex;gap:1.5px;justify-content:center;flex-wrap:wrap;max-width:26px}
+  .dg-dot{width:4px;height:4px;border-radius:50%;flex:0 0 auto}
+  .dg-typebar{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+  .dg-typebtn{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:20px;padding:3px 9px 3px 7px;font-size:10px;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+  .dg-typebtn.on{color:var(--ink);border-color:var(--line-strong,var(--line2))}
+  .dg-entry{border:1px solid var(--line2);border-radius:8px;padding:7px 9px;margin-bottom:6px;font-size:11.5px}
+  .dg-entry .dg-erow{display:flex;align-items:center;gap:6px}
+  .dg-entry .dg-esum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-dim)}
+  .dg-entry button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:1px 7px;font-size:11px;cursor:pointer;flex:0 0 auto}
+  .dg-form input,.dg-form select,.dg-form textarea{background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:5px 8px;font-size:12px;width:100%;box-sizing:border-box}
+  .dg-form textarea{min-height:44px;resize:vertical;font-family:inherit}
+  .dg-form .dg-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px}
+  .dg-form label{display:block;font-family:var(--mono);font-size:9px;color:var(--ink-faint);margin-bottom:2px}
   .cal-foot{display:flex;gap:7px;align-items:center;margin-top:11px}
   .cal-foot label{font-family:var(--mono);font-size:9px;color:var(--ink-faint);text-transform:uppercase}
   .drum-item{scroll-snap-align:center;padding:6px 8px;border-radius:6px;cursor:pointer;font-family:var(--mono);font-size:13px;text-align:center;color:var(--ink-dim)}
@@ -523,6 +537,7 @@ if("serviceWorker" in navigator){
 const KEY="arbor_workspace_v3";   // v3: retire stale v2 storage that carried old example tasks; load embedded (uploaded) data fresh
 const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   animalFilters:{cohort:"all",status:"all",pipe:"all",search:""},
+  taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   keywords:[], // was hardcoded to a specific project's reading-list topics; the Reading view that used this was dropped from this fork, left empty for a clean shared build
   siteLib:[
     {name:"M1 forelimb (MOs/MOp)", ap:0.8,  ml:1.5,  dv:-1.0},
@@ -668,6 +683,7 @@ function migrate(){                       // backfill fields added in later vers
     if(!DB.config.siteLib)  DB.config.siteLib=[...DEFAULT_CONFIG.siteLib];
     if(!DB.config.virusLib) DB.config.virusLib=[...DEFAULT_CONFIG.virusLib];
     if(!DB.config.animalFilters) DB.config.animalFilters={...DEFAULT_CONFIG.animalFilters};
+    if(!DB.config.taskLib)  DB.config.taskLib=[...DEFAULT_CONFIG.taskLib];
   }
   // pull the persisted animal filter selections into the live module-level state —
   // runs on boot and after every JSON import so filters travel with the workspace
@@ -693,6 +709,22 @@ function migrate(){                       // backfill fields added in later vers
   });
   DB.animals.forEach(a=>{
     if(!Array.isArray(a.tasks))a.tasks=[];
+    // the diary (a.diary) replaces a.weights as the general per-animal log — a
+    // flexible array of typed entries (weight/postop/training/comment/note)
+    // instead of a flat date→number map. Backfill existing weight data into it
+    // losslessly and idempotently; a.weights itself is deliberately kept (not
+    // deleted) as a fallback in case a device still on old code pulls this DB
+    // mid-rollout via Gist sync — that device would otherwise see its weight
+    // calendar go blank. Drop a.weights in a later release once safe.
+    if(!Array.isArray(a.diary))a.diary=[];
+    if(a.weights && !a._weightsMigrated){
+      Object.keys(a.weights).sort().forEach(ds=>{
+        a.diary.push({id:uid("d_"), type:"weight", date:ds,
+          created:new Date(ds+"T12:00:00").getTime(), edited:null,
+          data:{grams:a.weights[ds], note:""}});
+      });
+      a._weightsMigrated=true;
+    }
     // backfill termination field from alive boolean + comments heuristic
     if(!a.termination){
       if(a.alive===true) a.termination="alive";
@@ -1822,6 +1854,28 @@ let animalCohort="all", animalStatus="all", animalPipe="all", animalSearch="";
 const WEEK=6048e5;
 function ageWeeks(a){ if(!a.dob)return null; const end=a.sacrificed?new Date(a.sacrificed):new Date(); return Math.round((end-new Date(a.dob))/WEEK); }
 function daysSurg(a){ if(!a.surgery)return null; const end=a.sacrificed?new Date(a.sacrificed):new Date(); return Math.round((end-new Date(a.surgery))/864e5); }
+// diary: flexible per-animal log (replaces the old flat a.weights map) — a
+// list of typed entries (weight/postop/training/comment/note) sharing a
+// common envelope {id,type,date,created,edited} plus a type-specific data
+// payload. See migrate() for the a.weights -> a.diary backfill.
+const DIARY_TYPES={
+  weight:  {icon:"⚖",  label:"Weight",   color:"var(--gcamp)"},
+  postop:  {icon:"🩹", label:"Post-op",  color:"var(--overdue)"},
+  training:{icon:"🎓", label:"Training", color:"var(--violet)"},
+  comment: {icon:"💬", label:"Comment",  color:"var(--cyan)"},
+  note:    {icon:"📌", label:"Note",     color:"var(--ink-faint)"}
+};
+function diaryWeightEntries(a){ return (a.diary||[]).filter(e=>e.type==="weight").sort((x,y)=>x.date.localeCompare(y.date)||x.created-y.created); }
+function latestWeight(a){ const w=diaryWeightEntries(a); return w.length?w[w.length-1].data.grams:null; }
+function diaryEntrySummary(e){
+  const d=e.data||{};
+  if(e.type==="weight")   return `${d.grams} g${d.note?" — "+d.note:""}`;
+  if(e.type==="postop")   return [d.daysPost!=null?`day ${d.daysPost}`:null, d.severity, d.woundOk===false?"wound issue":null, d.analgesia, d.note].filter(Boolean).join(" · ")||"—";
+  if(e.type==="training") return [d.task, d.stage, (d.metrics&&d.metrics.trials!=null)?`${d.metrics.correct!=null?d.metrics.correct+"/":""}${d.metrics.trials} trials`:null, (d.metrics&&d.metrics.accuracy!=null)?`${Math.round(d.metrics.accuracy*100)}%`:null, d.note].filter(Boolean).join(" · ")||"—";
+  if(e.type==="comment")  return d.text||"—";
+  if(e.type==="note")     return [d.label,d.text].filter(Boolean).join(": ")||"—";
+  return "—";
+}
 function pipe(v){ return v===true?{c:"var(--gcamp)",m:"✓"}:v===false?{c:"var(--overdue)",m:"✕"}:{c:"var(--ink-faint)",m:"·"}; }
 function renderAnimals(){
   const host=document.getElementById("animals"); host.innerHTML="";
@@ -1933,7 +1987,7 @@ function cohortModal(name){
 function animalCard(a){
   const card=document.createElement("div");
   card.style.cssText=`background:var(--panel);border:1px solid var(--line);border-left:3px solid ${{alive:"var(--line)",sacrificed:"#3a4252",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"var(--line)"};border-radius:11px;padding:12px 15px;margin-bottom:8px;${a.termination!=="alive"?"opacity:.68":""}`;
-  const dS=daysSurg(a), aw=ageWeeks(a);
+  const dS=daysSurg(a), aw=ageWeeks(a), lw=latestWeight(a);
   const PERF_DAYS=28; // AAV expression plateau (Aschauer et al. 2013, PLOS ONE 8:e82312)
   const perfReady=a.termination==="alive"&&a.surgery&&a.perfusion!==true&&(daysSurg(a)??0)>=PERF_DAYS;
   // pipelineChip: unified state machine for surgery/perf/histo/scope.
@@ -1981,7 +2035,7 @@ function animalCard(a){
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="width:9px;height:9px;border-radius:50%;background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};flex:0 0 auto" title="${{alive:"Alive",sacrificed:"Sacrificed",early_death:"Early death",excluded:"Excluded"}[a.termination]||""}"></span>
       <span style="font-weight:500;font-size:14px">${esc(a.name)}</span>
-      <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">${esc(a.cage||"")}${a.sex?" · "+esc(a.sex):""}${a.strain?" · "+esc(a.strain):""}${aw!=null?" · "+aw+"w":""}</span>
+      <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">${esc(a.cage||"")}${a.sex?" · "+esc(a.sex):""}${a.strain?" · "+esc(a.strain):""}${aw!=null?" · "+aw+"w":""}${lw!=null?" · ⚖ "+lw+"g":""}</span>
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:100%;justify-content:flex-end">
         ${pipelineChip("surgery")}${pipelineChip("perfusion")}${pipelineChip("histology")}${pipelineChip("microscopy")}
         <button class="a-edit" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px">✎</button>
@@ -2004,7 +2058,7 @@ function animalCard(a){
           <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:6px">🧠 Surgery map</div>
           <div class="am-bv-card"></div>
         </div>`:""}
-        <div class="am-weight-block" style="flex:0 1 380px;min-width:260px;max-width:380px"></div>
+        <div class="am-diary-block" style="flex:0 1 420px;min-width:280px;max-width:420px"></div>
       </div>
     </div>`;
   card.querySelector(".a-exp").onclick=()=>{const d=card.querySelector(".a-detail");const open=d.style.display!=="none";d.style.display=open?"none":"block";card.querySelector(".a-exp").textContent=open?"▾":"▴";
@@ -2071,88 +2125,235 @@ function animalCard(a){
   });
   const bvc=card.querySelector(".am-bv-card");
   const bvInstance=bvc?mountBrainViewer(bvc, ()=>a.surgeryDetail||{}):null;
-  paintWeights(card.querySelector(".am-weight-block"), a);
+  paintDiary(card.querySelector(".am-diary-block"), a);
 
   return card;
 }
 function arow(label,val){ return val?`<div><span style="display:inline-block;width:78px;color:var(--ink-faint);font-family:var(--mono);font-size:10px">${label}</span>${esc(String(val))}</div>`:""; }
-// weight tracker as a small month calendar — each day cell shows that day's weight,
-// filling the space beside the brain viewer instead of a separate chart+list block.
-// Self-contained: repaints just this block (not the whole animal list) on every
-// add/edit, so recording a weight doesn't collapse the card's expanded detail.
-function paintWeights(container,a){
+// diary as a unified small month calendar — every entry type (weight, post-op,
+// training, comment, note) shows on the same calendar: weight gets its usual
+// numeric+trend display, other types show as small colored dots, and a type
+// filter bar controls which are visible on the grid at any moment. Clicking a
+// day lists/edits/adds entries for that date. Self-contained: repaints just
+// this block (not the whole animal list) on every add/edit, so logging an
+// entry doesn't collapse the card's expanded detail.
+function paintDiary(container,a){
   if(!container)return;
-  if(!a.weights)a.weights={};
-  const keys=Object.keys(a.weights).sort();
-  const startD=keys.length?new Date(keys[keys.length-1]+"T00:00:00"):new Date();
-  let viewY=startD.getFullYear(), viewM=startD.getMonth(), wSel=null;
+  if(!Array.isArray(a.diary))a.diary=[];
+  const startD=a.diary.length?new Date([...a.diary].sort((x,y)=>x.date.localeCompare(y.date)).pop().date+"T00:00:00"):new Date();
+  let viewY=startD.getFullYear(), viewM=startD.getMonth();
+  let selDate=todayDateStr();
+  let visibleTypes=new Set(Object.keys(DIARY_TYPES));
+  let formType=null, editingId=null;
   const WD=["Su","Mo","Tu","We","Th","Fr","Sa"];
+
+  function formActions(){
+    return `<div style="display:flex;gap:6px;margin-top:8px">
+      <button type="button" class="btn ghost dg-cancel" style="font-size:11px;padding:4px 10px">Cancel</button>
+      <button type="button" class="btn accent dg-save" style="font-size:11px;padding:4px 10px">Save</button>
+    </div>`;
+  }
+  function renderForm(type,d){
+    d=d||{};
+    if(type==="weight") return `<div class="dg-form">
+      <label>Weight (g)</label><input class="dg-f-grams" type="text" inputmode="decimal" value="${d.grams!=null?d.grams:""}" placeholder="e.g. 24.3">
+      <label style="margin-top:6px">Note (optional)</label><input class="dg-f-note" type="text" value="${escAttr(d.note||"")}">
+      ${formActions()}</div>`;
+    if(type==="postop") return `<div class="dg-form">
+      <div class="dg-row">
+        <div><label>Days post-op</label><input class="dg-f-daysPost" type="text" inputmode="numeric" value="${d.daysPost!=null?d.daysPost:""}"></div>
+        <div><label>Body condition (1-5)</label><select class="dg-f-bc"><option value="">—</option>${[1,2,3,4,5].map(n=>`<option value="${n}" ${d.bodyCondition===n?"selected":""}>${n}</option>`).join("")}</select></div>
+      </div>
+      <div class="dg-row">
+        <div><label>Wound OK?</label><select class="dg-f-wound"><option value="">—</option><option value="1" ${d.woundOk===true?"selected":""}>Yes</option><option value="0" ${d.woundOk===false?"selected":""}>No</option></select></div>
+        <div><label>Severity</label><select class="dg-f-sev"><option value="">—</option>${["none","mild","moderate","severe"].map(s=>`<option value="${s}" ${d.severity===s?"selected":""}>${s}</option>`).join("")}</select></div>
+      </div>
+      <label>Analgesia</label><input class="dg-f-analgesia" type="text" value="${escAttr(d.analgesia||"")}">
+      <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(d.note||"")}</textarea>
+      ${formActions()}</div>`;
+    if(type==="training") return `<div class="dg-form">
+      <label>Task</label><input class="dg-f-task" list="dg-tasklib" type="text" value="${escAttr(d.task||"")}" placeholder="e.g. 2AFC lick">
+      <datalist id="dg-tasklib">${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t)}">`).join("")}</datalist>
+      <label style="margin-top:6px">Stage</label><input class="dg-f-stage" type="text" value="${escAttr(d.stage||"")}">
+      <div class="dg-row" style="margin-top:6px">
+        <div><label>Trials</label><input class="dg-f-trials" type="text" inputmode="numeric" value="${d.metrics&&d.metrics.trials!=null?d.metrics.trials:""}"></div>
+        <div><label>Correct</label><input class="dg-f-correct" type="text" inputmode="numeric" value="${d.metrics&&d.metrics.correct!=null?d.metrics.correct:""}"></div>
+      </div>
+      <div class="dg-row">
+        <div><label>Reward (µL)</label><input class="dg-f-reward" type="text" inputmode="decimal" value="${d.metrics&&d.metrics.rewardUl!=null?d.metrics.rewardUl:""}"></div>
+        <div><label>Session (min)</label><input class="dg-f-sessionmin" type="text" inputmode="numeric" value="${d.metrics&&d.metrics.sessionMin!=null?d.metrics.sessionMin:""}"></div>
+      </div>
+      <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(d.note||"")}</textarea>
+      <label style="margin-top:4px;display:flex;align-items:center;gap:5px"><input type="checkbox" class="dg-f-savelib" style="width:auto"> save task name to library</label>
+      ${formActions()}</div>`;
+    if(type==="comment") return `<div class="dg-form">
+      <label>Comment</label><textarea class="dg-f-text">${esc(d.text||"")}</textarea>
+      ${formActions()}</div>`;
+    if(type==="note") return `<div class="dg-form">
+      <label>Label</label><input class="dg-f-label" type="text" value="${escAttr(d.label||"")}" placeholder="e.g. Cage change">
+      <label style="margin-top:6px">Details</label><textarea class="dg-f-text">${esc(d.text||"")}</textarea>
+      ${formActions()}</div>`;
+    return "";
+  }
+  function wireForm(host,type,editing){
+    host.querySelector(".dg-cancel").onclick=()=>{ formType=null; editingId=null; draw(); };
+    host.querySelector(".dg-save").onclick=()=>{
+      const num=sel=>{ const el=host.querySelector(sel); const raw=(el?el.value:"").trim().replace(",","."); if(raw==="")return null; const n=parseFloat(raw); return isNaN(n)?null:n; };
+      let data=null;
+      if(type==="weight"){
+        const raw=host.querySelector(".dg-f-grams").value.trim().replace(",",".");
+        if(raw===""){ toast("Enter a weight"); return; }
+        const n=parseFloat(raw);
+        if(isNaN(n)){ toast("Enter a number"); return; }
+        if(n<=0||n>200) toast(`${n}g is unusual for a mouse — check the decimal point`);
+        data={grams:n, note:host.querySelector(".dg-f-note").value.trim()};
+      } else if(type==="postop"){
+        const woundSel=host.querySelector(".dg-f-wound").value;
+        data={
+          daysPost:num(".dg-f-daysPost"),
+          bodyCondition:host.querySelector(".dg-f-bc").value?+host.querySelector(".dg-f-bc").value:null,
+          woundOk:woundSel===""?null:woundSel==="1",
+          severity:host.querySelector(".dg-f-sev").value||null,
+          analgesia:host.querySelector(".dg-f-analgesia").value.trim(),
+          note:host.querySelector(".dg-f-note").value.trim()
+        };
+      } else if(type==="training"){
+        const trials=num(".dg-f-trials"), correct=num(".dg-f-correct");
+        const taskName=host.querySelector(".dg-f-task").value.trim();
+        if(host.querySelector(".dg-f-savelib").checked && taskName && !(DB.config.taskLib||[]).includes(taskName)){
+          (DB.config.taskLib=DB.config.taskLib||[]).push(taskName);
+        }
+        data={
+          task:taskName, stage:host.querySelector(".dg-f-stage").value.trim(),
+          metrics:{
+            trials, correct,
+            accuracy:(trials&&correct!=null)?+(correct/trials).toFixed(3):null,
+            rewardUl:num(".dg-f-reward"), sessionMin:num(".dg-f-sessionmin")
+          },
+          note:host.querySelector(".dg-f-note").value.trim()
+        };
+      } else if(type==="comment"){
+        const text=host.querySelector(".dg-f-text").value.trim();
+        if(!text){ toast("Enter a comment"); return; }
+        data={text};
+      } else if(type==="note"){
+        const text=host.querySelector(".dg-f-text").value.trim();
+        if(!text){ toast("Enter some text"); return; }
+        data={label:host.querySelector(".dg-f-label").value.trim(), text};
+      }
+      if(!data)return;
+      if(editing){ editing.data=data; editing.edited=Date.now(); }
+      else { a.diary.push({id:uid("d_"), type, date:selDate, created:Date.now(), edited:null, data}); }
+      persist();
+      formType=null; editingId=null;
+      draw();
+    };
+  }
 
   function draw(){
     const pad=n=>String(n).padStart(2,"0");
     const first=new Date(viewY,viewM,1), lead=first.getDay(), dim=new Date(viewY,viewM+1,0).getDate();
-    const sortedKeys=Object.keys(a.weights).sort(); // for simple day-over-day trend arrows
+    const wSorted=diaryWeightEntries(a);
     let cells="";
     for(let i=0;i<lead;i++) cells+=`<div class="wt-cal-day blank"></div>`;
     for(let d=1;d<=dim;d++){
       const ds=`${viewY}-${pad(viewM+1)}-${pad(d)}`;
-      const val=a.weights[ds];
+      const dayEntries=a.diary.filter(e=>e.date===ds);
+      const wEntry=dayEntries.find(e=>e.type==="weight");
       const cls=["wt-cal-day"];
       if(ds===todayDateStr())cls.push("today");
-      if(val!=null)cls.push("has-val");
-      if(ds===wSel)cls.push("sel");
+      if(dayEntries.length)cls.push("has-val");
+      if(ds===selDate)cls.push("sel");
       let trend="";
-      if(val!=null){
-        const idx=sortedKeys.indexOf(ds);
-        const prevKey=idx>0?sortedKeys[idx-1]:null;
-        const prevVal=prevKey!=null?a.weights[prevKey]:null;
-        if(prevVal!=null&&val>prevVal) trend=`<span class="wt-up" title="+${(val-prevVal).toFixed(1)}g since ${prevKey}">▲</span>`;
-        else if(prevVal!=null&&val<prevVal) trend=`<span class="wt-down" title="${(val-prevVal).toFixed(1)}g since ${prevKey}">▼</span>`;
+      if(wEntry&&visibleTypes.has("weight")){
+        const idx=wSorted.findIndex(e=>e.id===wEntry.id);
+        const prev=idx>0?wSorted[idx-1]:null;
+        if(prev){
+          const dv=wEntry.data.grams-prev.data.grams;
+          if(dv>0) trend=`<span class="wt-up" title="+${dv.toFixed(1)}g since ${prev.date}">▲</span>`;
+          else if(dv<0) trend=`<span class="wt-down" title="${dv.toFixed(1)}g since ${prev.date}">▼</span>`;
+        }
       }
-      cells+=`<div class="${cls.join(" ")}" data-date="${ds}" title="${val!=null?`${val} g — click to edit`:"click to add a weight"}">
-        <span class="dn">${d}</span>${val!=null?`<span class="wv">${val}${trend}</span>`:""}</div>`;
+      const otherTypes=[...new Set(dayEntries.filter(e=>e.type!=="weight"&&visibleTypes.has(e.type)).map(e=>e.type))];
+      const dots=otherTypes.map(t=>`<span class="dg-dot" style="background:${DIARY_TYPES[t].color}" title="${DIARY_TYPES[t].label}"></span>`).join("");
+      const wv=(wEntry&&visibleTypes.has("weight"))?`<span class="wv">${wEntry.data.grams}${trend}</span>`:"";
+      cells+=`<div class="${cls.join(" ")}" data-date="${ds}" title="${dayEntries.length?dayEntries.length+" entr"+(dayEntries.length===1?"y":"ies"):"click to add an entry"}">
+        <span class="dn">${d}</span>${wv}${dots?`<span class="dg-dots">${dots}</span>`:""}</div>`;
     }
+
+    const typebar=Object.entries(DIARY_TYPES).map(([k,t])=>
+      `<button type="button" class="dg-typebtn ${visibleTypes.has(k)?"on":""}" data-t="${k}"><span style="width:6px;height:6px;border-radius:50%;background:${t.color};display:inline-block"></span>${t.icon} ${t.label}</button>`
+    ).join("");
+    const dayEntries=a.diary.filter(e=>e.date===selDate).sort((x,y)=>x.created-y.created);
+
     container.innerHTML=`
-      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:6px">⚖ Weight tracker (g)</div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:6px">📔 Diary</div>
+      <div class="dg-typebar">${typebar}</div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <button type="button" class="wt-nav" data-nav="-1" title="previous month">‹</button>
         <b style="font-family:var(--disp);font-size:12px;color:var(--ink)">${new Date(viewY,viewM,1).toLocaleDateString(undefined,{month:"long",year:"numeric"})}</b>
         <button type="button" class="wt-nav" data-nav="1" title="next month">›</button>
       </div>
       <div class="wt-cal">${WD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
-      <div style="display:flex;gap:6px;align-items:center;margin-top:10px">
-        <input class="am-w-val" type="text" inputmode="decimal" placeholder="${wSel?"weight on "+wSel:"click a day first"}" ${wSel?"":"disabled"} style="flex:1;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:8px;padding:6px 8px;font-size:12px">
-        <button type="button" class="btn accent am-w-save" ${wSel?"":"disabled"} style="font-size:11px;padding:5px 10px">Save</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 6px">
+        <b style="font-size:11.5px">${selDate||"—"}</b>
+        ${formType?"":`<select class="dg-addpick" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:3px 7px;font-size:11px">
+          <option value="">＋ add entry…</option>
+          ${Object.entries(DIARY_TYPES).map(([k,t])=>`<option value="${k}">${t.icon} ${t.label}</option>`).join("")}
+        </select>`}
       </div>
-      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:5px">click a day to add/edit its weight — clear the value and save to remove it</div>`;
+      <div class="dg-list">
+        ${formType?"":(dayEntries.length? dayEntries.map(e=>`
+          <div class="dg-entry" style="border-left:3px solid ${DIARY_TYPES[e.type].color}">
+            <div class="dg-erow">
+              <span>${DIARY_TYPES[e.type].icon}</span>
+              <span class="dg-esum" title="${escAttr(diaryEntrySummary(e))}">${esc(diaryEntrySummary(e))}</span>
+              <button class="dg-edit" data-id="${e.id}">✎</button>
+              <button class="dg-del" data-id="${e.id}">✕</button>
+            </div>
+          </div>`).join("") : `<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">no entries this day</div>`)}
+        <div class="dg-formhost"></div>
+      </div>`;
 
+    container.querySelectorAll(".dg-typebtn").forEach(b=>b.onclick=()=>{
+      const t=b.dataset.t;
+      if(visibleTypes.has(t))visibleTypes.delete(t); else visibleTypes.add(t);
+      draw();
+    });
     container.querySelectorAll(".wt-nav").forEach(b=>b.onclick=()=>{
       viewM+=+b.dataset.nav; if(viewM<0){viewM=11;viewY--;} if(viewM>11){viewM=0;viewY++;} draw();
     });
     container.querySelectorAll(".wt-cal-day:not(.blank)").forEach(cell=>{
-      cell.onclick=()=>{ wSel=cell.dataset.date; draw();
-        const input=container.querySelector(".am-w-val");
-        input.value = a.weights[wSel]!=null ? a.weights[wSel] : "";
-        input.focus();
-      };
+      cell.onclick=()=>{ selDate=cell.dataset.date; formType=null; editingId=null; draw(); };
     });
-    const saveBtn=container.querySelector(".am-w-save");
-    if(saveBtn) saveBtn.onclick=()=>{
-      if(!wSel)return;
-      // accept either "." or "," as the decimal separator — a plain type="number" input
-      // silently drops "," on locales where that's the keyboard's decimal key, which is
-      // what turned "21.3" into "213"
-      const raw=container.querySelector(".am-w-val").value.trim().replace(",",".");
-      if(raw===""){ delete a.weights[wSel]; }
-      else {
-        const n=parseFloat(raw);
-        if(isNaN(n)){ toast("Enter a number"); return; }
-        if(n<=0||n>200) toast(`${n}g is unusual for a mouse — check the decimal point`);
-        a.weights[wSel]=n;
-      }
-      persist(); draw();
+    const addPick=container.querySelector(".dg-addpick");
+    if(addPick) addPick.onchange=()=>{
+      if(!addPick.value)return;
+      formType=addPick.value; editingId=null; draw();
     };
+    if(formType){
+      const host=container.querySelector(".dg-formhost");
+      const editing=editingId?a.diary.find(e=>e.id===editingId):null;
+      host.innerHTML=renderForm(formType, editing?editing.data:{});
+      wireForm(host,formType,editing);
+    }
   }
+
+  // delegated on the container (a stable node across draw() calls, which only
+  // replace its innerHTML) so this doesn't need re-binding on every redraw
+  container.addEventListener("click", e=>{
+    const editBtn=e.target.closest(".dg-edit"), delBtn=e.target.closest(".dg-del");
+    if(editBtn){
+      const entry=a.diary.find(x=>x.id===editBtn.dataset.id); if(!entry)return;
+      formType=entry.type; editingId=entry.id; draw();
+    } else if(delBtn){
+      if(confirm("Delete this diary entry?")){
+        a.diary=a.diary.filter(x=>x.id!==delBtn.dataset.id);
+        persist(); draw();
+      }
+    }
+  });
+
   draw();
 }
 /* ---------- BRAIN ILLUSTRATION (schematic, coordinate-driven) ----------
@@ -2626,7 +2827,7 @@ function animalModal(id){
           t.title=`${cap} — ${a.name}`;
         }
       });
-    } else DB.animals.push({id:uid("a_"),perfusion:null,histology:null,microscopy:null,weights:{},...rec});
+    } else DB.animals.push({id:uid("a_"),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],...rec});
     persist(); closeModal(); render(); toast(id?"Animal updated":"Animal added");
   };
   if(id)document.getElementById("am_del").onclick=()=>{ if(confirm("Delete this animal record?")){DB.animals=DB.animals.filter(x=>x.id!==id);persist();closeModal();render();toast("Deleted");}};
