@@ -522,7 +522,7 @@ if("serviceWorker" in navigator){
 }
 const KEY="arbor_workspace_v3";   // v3: retire stale v2 storage that carried old example tasks; load embedded (uploaded) data fresh
 const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
-  animalFilters:{cohort:"all",status:"all",pipe:"all"},
+  animalFilters:{cohort:"all",status:"all",pipe:"all",search:""},
   keywords:[], // was hardcoded to a specific project's reading-list topics; the Reading view that used this was dropped from this fork, left empty for a clean shared build
   siteLib:[
     {name:"M1 forelimb (MOs/MOp)", ap:0.8,  ml:1.5,  dv:-1.0},
@@ -674,6 +674,7 @@ function migrate(){                       // backfill fields added in later vers
   animalCohort=DB.config.animalFilters.cohort||"all";
   animalStatus=DB.config.animalFilters.status||"all";
   animalPipe=DB.config.animalFilters.pipe||"all";
+  animalSearch=DB.config.animalFilters.search||"";
   // backfill new virus fields
   (DB.config.virusLib||[]).forEach(v=>{ if(!v.promoter)v.promoter=""; if(!v.titer)v.titer=""; if(!v.source)v.source=""; if(!v.note)v.note=""; });
   if(!DB.inventory)DB.inventory={};
@@ -1817,7 +1818,7 @@ function addReadingModal(){
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
-let animalCohort="all", animalStatus="all", animalPipe="all";
+let animalCohort="all", animalStatus="all", animalPipe="all", animalSearch="";
 const WEEK=6048e5;
 function ageWeeks(a){ if(!a.dob)return null; const end=a.sacrificed?new Date(a.sacrificed):new Date(); return Math.round((end-new Date(a.dob))/WEEK); }
 function daysSurg(a){ if(!a.surgery)return null; const end=a.sacrificed?new Date(a.sacrificed):new Date(); return Math.round((end-new Date(a.surgery))/864e5); }
@@ -1829,8 +1830,12 @@ function renderAnimals(){
   bar.style.cssText="margin-bottom:16px";
   const row=(label,id,cur,opts)=>`<div class="af-row"><span class="af-label">${label}</span><div class="seg" id="${id}">${opts.map(o=>`<button data-v="${o[0]}" class="${cur===o[0]?"on":""}">${o[1]}</button>`).join("")}</div></div>`;
   bar.innerHTML=`
-    <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:10px">
-      <button class="btn ghost" id="a_cohortNew">＋ Cohort</button><button class="btn accent" id="a_add">＋ Animal</button>
+    <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:10px;align-items:center">
+      <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search name, cage, cohort, strain, notes…"
+        style="flex:1;max-width:340px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost" id="a_cohortNew">＋ Cohort</button><button class="btn accent" id="a_add">＋ Animal</button>
+      </div>
     </div>
     ${row("Cohort","a_cohort",animalCohort,[["all","All"],...cohortNames.map(c=>[c,c])])}
     ${row("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
@@ -1846,6 +1851,14 @@ function renderAnimals(){
   bar.querySelector("#a_cohort").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalCohort=b.dataset.v;DB.config.animalFilters.cohort=animalCohort;persist();renderAnimals();});
   bar.querySelector("#a_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalStatus=b.dataset.v;DB.config.animalFilters.status=animalStatus;persist();renderAnimals();});
   bar.querySelector("#a_pipe").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalPipe=b.dataset.v;DB.config.animalFilters.pipe=animalPipe;persist();renderAnimals();});
+  bar.querySelector("#a_search").addEventListener("input",e=>{
+    const pos=e.target.selectionStart;
+    animalSearch=e.target.value;
+    DB.config.animalFilters.search=animalSearch;
+    persist(); renderAnimals();
+    const ni=document.getElementById("a_search");
+    if(ni){ ni.focus(); ni.setSelectionRange(pos,pos); }
+  });
   bar.querySelector("#a_add").onclick=()=>animalModal(null);
   bar.querySelector("#a_cohortNew").onclick=()=>cohortModal(null);
 
@@ -1861,10 +1874,15 @@ function renderAnimals(){
     if(animalPipe==="complete")      return !!a.surgery && a.perfusion===true && a.histology===true && a.microscopy===true;
     return true;
   }
+  const q=animalSearch.trim().toLowerCase();
+  function searchMatch(a){
+    if(!q) return true;
+    return [a.name,a.cage,a.cohort,a.strain,a.comments].some(v=>v && String(v).toLowerCase().includes(q));
+  }
   let list=DB.animals.filter(a=>
     (animalCohort==="all"||a.cohort===animalCohort) &&
     (animalStatus==="all"||a.termination===animalStatus) &&
-    pipeMatch(a));
+    pipeMatch(a) && searchMatch(a));
   const cnt=(f)=>list.filter(f).length;
   const sum=document.createElement("div");
   sum.style.cssText="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:18px;font-family:var(--mono);font-size:11.5px;color:var(--ink-dim)";
