@@ -144,6 +144,7 @@
   .dg-form input,.dg-form select,.dg-form textarea{background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:5px 8px;font-size:12px;width:100%;box-sizing:border-box}
   .dg-form textarea{min-height:44px;resize:vertical;font-family:inherit}
   .dg-form .dg-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px}
+  .dg-metrics-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;margin-bottom:6px}
   .dg-form label{display:block;font-family:var(--mono);font-size:9px;color:var(--ink-faint);margin-bottom:2px}
   .cal-foot{display:flex;gap:7px;align-items:center;margin-top:11px}
   .cal-foot label{font-family:var(--mono);font-size:9px;color:var(--ink-faint);text-transform:uppercase}
@@ -436,10 +437,12 @@
       <div class="mat-subtabs" id="matSubTabs">
         <button class="mat-stab on" data-ms="viruses">Viruses</button>
         <button class="mat-stab" data-ms="sites">Injection Sites</button>
+        <button class="mat-stab" data-ms="tasks">Behavioral Tasks</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-sites"></div>
+      <div class="wrap mat-subview hidden" id="ms-tasks"></div>
     </div>
     <div class="view hidden wrap" id="reading"></div>
     <div class="view wrap" id="animals"></div>
@@ -685,6 +688,11 @@ function migrate(){                       // backfill fields added in later vers
     if(!DB.config.virusLib) DB.config.virusLib=[...DEFAULT_CONFIG.virusLib];
     if(!DB.config.animalFilters) DB.config.animalFilters={...DEFAULT_CONFIG.animalFilters};
     if(!DB.config.taskLib)  DB.config.taskLib=[...DEFAULT_CONFIG.taskLib];
+    // taskLib upgraded from plain task-name strings (autocomplete-only) to
+    // objects with a flexible per-task parameter list (different behavioral
+    // tasks log different metrics — a 2AFC session and an open-field session
+    // have nothing in common). Convert any leftover strings in place.
+    DB.config.taskLib=(DB.config.taskLib||[]).map(t=>typeof t==="string"?{name:t,params:[]}:t);
   }
   // pull the persisted animal filter selections into the live module-level state —
   // runs on boot and after every JSON import so filters travel with the workspace
@@ -1513,6 +1521,7 @@ function renderMatSubTab(){
   if(matSubTab === "inventory") renderInventory();
   else if(matSubTab === "viruses")  renderVirusLib();
   else if(matSubTab === "sites")    renderSiteLib();
+  else if(matSubTab === "tasks")    renderTaskLib();
 }
 
 /* ── INVENTORY ─────────────────────────────────────────────────────────────── */
@@ -1741,6 +1750,86 @@ function renderSiteLib(){
   });
 }
 
+/* ── BEHAVIORAL TASK LIBRARY ───────────────────────────────────────────────
+   Unlike viruses/sites (fixed fields), tasks are inherently varied — a 2AFC
+   session and an open-field session log nothing in common. Each task defines
+   its own list of parameters (label + number/text), and the diary's training
+   entry form renders exactly those fields for whichever task is selected.
+   Each parameter gets a stable random key at creation, independent of its
+   label, so renaming a label later doesn't orphan already-logged data. */
+function renderTaskLib(){
+  const host = document.getElementById("ms-tasks"); host.innerHTML = "";
+  const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
+
+  const hdr = document.createElement("div");
+  hdr.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap";
+  hdr.innerHTML = `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
+      Define the parameters each behavioral task logs — the diary's training entry form will show exactly these fields for a matching task name.</span>
+    <button id="tlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New task</button>`;
+  host.appendChild(hdr);
+
+  const wrap = document.createElement("div"); wrap.id = "tlib_rows"; host.appendChild(wrap);
+  function paintTRows(){
+    const tl = DB.config.taskLib||[];
+    wrap.innerHTML = tl.length ? tl.map((t,i) => `
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:9px">
+          <input class="lt_name" data-ti="${i}" value="${escAttr(t.name)}" placeholder="Task / paradigm name (e.g. 2AFC lick)" style="flex:1;min-width:160px;${IST}">
+          <button class="lt_del" data-ti="${i}"
+            style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ task</button>
+        </div>
+        <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:6px">Parameters logged for this task</div>
+        ${(t.params||[]).map((p,pi)=>`
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+            <input class="lp_label" data-ti="${i}" data-pi="${pi}" value="${escAttr(p.label)}" placeholder="Parameter name (e.g. Trials)" style="flex:1;${IST}">
+            <select class="lp_type" data-ti="${i}" data-pi="${pi}" style="${IST};flex:0 0 auto">
+              <option value="number" ${p.type==="number"?"selected":""}>number</option>
+              <option value="text"   ${p.type==="text"  ?"selected":""}>text</option>
+            </select>
+            <button class="lp_del" data-ti="${i}" data-pi="${pi}"
+              style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
+          </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">no parameters yet — just Note will show for this task</div>`}
+        <button class="lt_addparam" data-ti="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add parameter</button>
+      </div>`).join("")
+    : `<div class="empty" style="padding:20px 0">No tasks yet — add one above.</div>`;
+  }
+  paintTRows();
+
+  host.querySelector("#tlib_add").onclick = () => {
+    (DB.config.taskLib=DB.config.taskLib||[]).push({name:"",params:[]});
+    persist(); paintTRows();
+    const rows = wrap.querySelectorAll(".lt_name"); if(rows.length) rows[rows.length-1].focus();
+  };
+  wrap.addEventListener("input", e => {
+    const ti = +e.target.dataset.ti; const t = (DB.config.taskLib||[])[ti]; if(!t) return;
+    if(e.target.classList.contains("lt_name")) { t.name = e.target.value; persist(); return; }
+    if(e.target.classList.contains("lp_label")) {
+      const p = (t.params||[])[+e.target.dataset.pi]; if(p){ p.label = e.target.value; persist(); }
+    }
+  });
+  wrap.addEventListener("change", e => {
+    const ti = +e.target.dataset.ti; const t = (DB.config.taskLib||[])[ti]; if(!t) return;
+    if(e.target.classList.contains("lp_type")) {
+      const p = (t.params||[])[+e.target.dataset.pi]; if(p){ p.type = e.target.value; persist(); }
+    }
+  });
+  wrap.addEventListener("click", e => {
+    const delT = e.target.closest(".lt_del"), addP = e.target.closest(".lt_addparam"), delP = e.target.closest(".lp_del");
+    if(delT){
+      if(confirm("Delete this task? Already-logged training entries keep their data, but it'll show unlabeled without this definition.")){
+        (DB.config.taskLib||[]).splice(+delT.dataset.ti,1); persist(); paintTRows();
+      }
+    } else if(addP){
+      const t = (DB.config.taskLib||[])[+addP.dataset.ti]; if(!t) return;
+      (t.params=t.params||[]).push({key:uid("p_"),label:"",type:"number"});
+      persist(); paintTRows();
+      const rows = wrap.querySelectorAll(`.lp_label[data-ti="${addP.dataset.ti}"]`); if(rows.length) rows[rows.length-1].focus();
+    } else if(delP){
+      const t = (DB.config.taskLib||[])[+delP.dataset.ti]; if(!t) return;
+      t.params.splice(+delP.dataset.pi,1); persist(); paintTRows();
+    }
+  });
+}
 
 /* ---------- READING (two-track: core canon + capped frontier) ---------- */
 const daysSince=ts=>ts?Math.floor((Date.now()-ts)/864e5):0;
@@ -1868,11 +1957,60 @@ const DIARY_TYPES={
 };
 function diaryWeightEntries(a){ return (a.diary||[]).filter(e=>e.type==="weight").sort((x,y)=>x.date.localeCompare(y.date)||x.created-y.created); }
 function latestWeight(a){ const w=diaryWeightEntries(a); return w.length?w[w.length-1].data.grams:null; }
+// each behavioral task defines its own flexible parameter list in
+// DB.config.taskLib (2AFC and open-field sessions have nothing in common) —
+// look it up by task name to know how to label a logged training entry's
+// metrics object (which is keyed by opaque param ids, not the label text).
+function trainingParamDefs(taskName){
+  const t=(DB.config.taskLib||[]).find(x=>x.name===taskName);
+  return t?(t.params||[]):[];
+}
+// renders the training entry form's metric inputs for whichever task is
+// currently typed/selected — re-invoked live as the task field changes, so
+// picking a different task swaps in that task's own parameter set.
+function renderMetricsFields(taskName,metrics){
+  metrics=metrics||{};
+  const defs=trainingParamDefs(taskName);
+  if(!defs.length){
+    return taskName
+      ? `<div style="font-size:11px;color:var(--ink-faint)">no parameters defined for "${esc(taskName)}" yet — add some in Materials → Behavioral Tasks, or just use Note below</div>`
+      : "";
+  }
+  return `<div class="dg-metrics-grid">${defs.map(p=>`
+    <div><label>${esc(p.label||"(unnamed)")}</label><input class="dg-metric-field" data-key="${escAttr(p.key)}" data-type="${p.type}" type="text" inputmode="${p.type==="number"?"decimal":"text"}" value="${escAttr(metrics[p.key]!=null?metrics[p.key]:"")}"></div>`).join("")}</div>`;
+}
+// returns ["Label: value", ...] for display (summary/detail views), handling
+// both the current shape (metrics keyed by param.key, looked up via the task's
+// library definition) and the older fixed-field shape from before tasks had
+// flexible parameters (trials/correct/accuracy/rewardUl/sessionMin), so
+// entries logged before this change keep displaying correctly.
+function trainingMetricsDisplay(e){
+  const d=e.data||{}, m=d.metrics||{};
+  const defs=trainingParamDefs(d.task);
+  const out=defs.filter(p=>m[p.key]!=null&&m[p.key]!=="").map(p=>({label:p.label,val:m[p.key]}));
+  const usedKeys=new Set(out.map(x=>x.label.trim().toLowerCase()));
+  const trials=defs.find(p=>p.label.trim().toLowerCase()==="trials"), correct=defs.find(p=>p.label.trim().toLowerCase()==="correct");
+  if(trials&&correct&&m[trials.key]&&m[correct.key]!=null){
+    out.push({label:"Accuracy", val:Math.round((m[correct.key]/m[trials.key])*100)+"%"});
+    usedKeys.add("accuracy");
+  }
+  // legacy fixed-shape fallback — always checked too (not just when this task
+  // has no library definition), so an entry logged before this task had
+  // params defined (or before flexible params existed at all) keeps
+  // displaying its data instead of going dark once new-shape params exist
+  // under the same task name.
+  if(m.trials!=null     && !usedKeys.has("trials"))   out.push({label:"Trials",   val:m.trials});
+  if(m.correct!=null    && !usedKeys.has("correct"))  out.push({label:"Correct",  val:m.correct});
+  if(m.accuracy!=null   && !usedKeys.has("accuracy")) out.push({label:"Accuracy", val:Math.round(m.accuracy*100)+"%"});
+  if(m.rewardUl!=null   && !usedKeys.has("reward"))   out.push({label:"Reward",   val:m.rewardUl+" µL"});
+  if(m.sessionMin!=null && !usedKeys.has("session"))  out.push({label:"Session",  val:m.sessionMin+" min"});
+  return out;
+}
 function diaryEntrySummary(e){
   const d=e.data||{};
   if(e.type==="weight")   return `${d.grams} g${d.note?" — "+d.note:""}`;
   if(e.type==="postop")   return [d.daysPost!=null?`day ${d.daysPost}`:null, d.severity, d.woundOk===false?"wound issue":null, d.analgesia, d.note].filter(Boolean).join(" · ")||"—";
-  if(e.type==="training") return [d.task, d.stage, (d.metrics&&d.metrics.trials!=null)?`${d.metrics.correct!=null?d.metrics.correct+"/":""}${d.metrics.trials} trials`:null, (d.metrics&&d.metrics.accuracy!=null)?`${Math.round(d.metrics.accuracy*100)}%`:null, d.note].filter(Boolean).join(" · ")||"—";
+  if(e.type==="training") return [d.task, d.stage, ...trainingMetricsDisplay(e).map(x=>`${x.label} ${x.val}`), d.note].filter(Boolean).join(" · ")||"—";
   if(e.type==="comment")  return d.text||"—";
   if(e.type==="note")     return [d.label,d.text].filter(Boolean).join(": ")||"—";
   return "—";
@@ -1880,7 +2018,7 @@ function diaryEntrySummary(e){
 // full read-only breakdown of an entry (view mode, as opposed to the edit
 // form) — reuses the same labeled-row look as the surgery detail rows (arow).
 function diaryEntryDetailHTML(e){
-  const d=e.data||{}, m=d.metrics||{};
+  const d=e.data||{};
   const rows=[];
   if(e.type==="weight"){
     rows.push(arow("Weight", d.grams!=null?d.grams+" g":null));
@@ -1895,11 +2033,7 @@ function diaryEntryDetailHTML(e){
   } else if(e.type==="training"){
     rows.push(arow("Task", d.task));
     rows.push(arow("Stage", d.stage));
-    rows.push(arow("Trials", m.trials));
-    rows.push(arow("Correct", m.correct));
-    rows.push(arow("Accuracy", m.accuracy!=null?Math.round(m.accuracy*100)+"%":null));
-    rows.push(arow("Reward", m.rewardUl!=null?m.rewardUl+" µL":null));
-    rows.push(arow("Session", m.sessionMin!=null?m.sessionMin+" min":null));
+    trainingMetricsDisplay(e).forEach(x=>rows.push(arow(x.label, x.val)));
     rows.push(arow("Note", d.note));
   } else if(e.type==="comment"){
     rows.push(arow("Comment", d.text));
@@ -2208,16 +2342,9 @@ function paintDiary(container,a){
       ${formActions()}</div>`;
     if(type==="training") return `<div class="dg-form">
       <label>Task</label><input class="dg-f-task" list="dg-tasklib" type="text" value="${escAttr(d.task||"")}" placeholder="e.g. 2AFC lick">
-      <datalist id="dg-tasklib">${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t)}">`).join("")}</datalist>
+      <datalist id="dg-tasklib">${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t.name)}">`).join("")}</datalist>
       <label style="margin-top:6px">Stage</label><input class="dg-f-stage" type="text" value="${escAttr(d.stage||"")}">
-      <div class="dg-row" style="margin-top:6px">
-        <div><label>Trials</label><input class="dg-f-trials" type="text" inputmode="numeric" value="${d.metrics&&d.metrics.trials!=null?d.metrics.trials:""}"></div>
-        <div><label>Correct</label><input class="dg-f-correct" type="text" inputmode="numeric" value="${d.metrics&&d.metrics.correct!=null?d.metrics.correct:""}"></div>
-      </div>
-      <div class="dg-row">
-        <div><label>Reward (µL)</label><input class="dg-f-reward" type="text" inputmode="decimal" value="${d.metrics&&d.metrics.rewardUl!=null?d.metrics.rewardUl:""}"></div>
-        <div><label>Session (min)</label><input class="dg-f-sessionmin" type="text" inputmode="numeric" value="${d.metrics&&d.metrics.sessionMin!=null?d.metrics.sessionMin:""}"></div>
-      </div>
+      <div class="dg-metrics-host" style="margin-top:6px">${renderMetricsFields(d.task,d.metrics)}</div>
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(d.note||"")}</textarea>
       <label style="margin-top:4px;display:flex;align-items:center;gap:5px"><input type="checkbox" class="dg-f-savelib" style="width:auto"> save task name to library</label>
       ${formActions()}</div>`;
@@ -2232,6 +2359,12 @@ function paintDiary(container,a){
   }
   function wireForm(host,type,editing){
     host.querySelector(".dg-cancel").onclick=()=>{ formType=null; editingId=null; draw(); };
+    if(type==="training"){
+      // swap in the selected task's own parameter fields as its name changes -
+      // typing a new value or picking one from the datalist both fire "input"
+      const taskInput=host.querySelector(".dg-f-task"), metricsHost=host.querySelector(".dg-metrics-host");
+      taskInput.addEventListener("input",()=>{ metricsHost.innerHTML=renderMetricsFields(taskInput.value.trim(), editing?editing.data.metrics:{}); });
+    }
     host.querySelector(".dg-save").onclick=()=>{
       const num=sel=>{ const el=host.querySelector(sel); const raw=(el?el.value:"").trim().replace(",","."); if(raw==="")return null; const n=parseFloat(raw); return isNaN(n)?null:n; };
       let data=null;
@@ -2253,18 +2386,26 @@ function paintDiary(container,a){
           note:host.querySelector(".dg-f-note").value.trim()
         };
       } else if(type==="training"){
-        const trials=num(".dg-f-trials"), correct=num(".dg-f-correct");
         const taskName=host.querySelector(".dg-f-task").value.trim();
-        if(host.querySelector(".dg-f-savelib").checked && taskName && !(DB.config.taskLib||[]).includes(taskName)){
-          (DB.config.taskLib=DB.config.taskLib||[]).push(taskName);
+        if(host.querySelector(".dg-f-savelib").checked && taskName && !(DB.config.taskLib||[]).some(t=>t.name===taskName)){
+          (DB.config.taskLib=DB.config.taskLib||[]).push({name:taskName,params:[]});
         }
+        // metrics fields are whatever this task's library definition currently
+        // specifies (flexible per task) - read each by its stable param key
+        const metrics={};
+        host.querySelectorAll(".dg-metric-field").forEach(el=>{
+          const raw=el.value.trim();
+          if(raw==="")return;
+          if(el.dataset.type==="number"){
+            const n=parseFloat(raw.replace(",","."));
+            if(!isNaN(n)) metrics[el.dataset.key]=n;
+          } else {
+            metrics[el.dataset.key]=raw;
+          }
+        });
         data={
           task:taskName, stage:host.querySelector(".dg-f-stage").value.trim(),
-          metrics:{
-            trials, correct,
-            accuracy:(trials&&correct!=null)?+(correct/trials).toFixed(3):null,
-            rewardUl:num(".dg-f-reward"), sessionMin:num(".dg-f-sessionmin")
-          },
+          metrics,
           note:host.querySelector(".dg-f-note").value.trim()
         };
       } else if(type==="comment"){
