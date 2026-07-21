@@ -140,6 +140,7 @@
   .dg-entry .dg-erow{display:flex;align-items:center;gap:6px}
   .dg-entry .dg-esum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-dim)}
   .dg-entry button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:1px 7px;font-size:11px;cursor:pointer;flex:0 0 auto}
+  .dg-detail{margin-top:6px;padding-top:6px;border-top:1px dashed var(--line2)}
   .dg-form input,.dg-form select,.dg-form textarea{background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:5px 8px;font-size:12px;width:100%;box-sizing:border-box}
   .dg-form textarea{min-height:44px;resize:vertical;font-family:inherit}
   .dg-form .dg-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px}
@@ -1876,6 +1877,39 @@ function diaryEntrySummary(e){
   if(e.type==="note")     return [d.label,d.text].filter(Boolean).join(": ")||"—";
   return "—";
 }
+// full read-only breakdown of an entry (view mode, as opposed to the edit
+// form) — reuses the same labeled-row look as the surgery detail rows (arow).
+function diaryEntryDetailHTML(e){
+  const d=e.data||{}, m=d.metrics||{};
+  const rows=[];
+  if(e.type==="weight"){
+    rows.push(arow("Weight", d.grams!=null?d.grams+" g":null));
+    rows.push(arow("Note", d.note));
+  } else if(e.type==="postop"){
+    rows.push(arow("Days post-op", d.daysPost));
+    rows.push(arow("Body condition", d.bodyCondition));
+    rows.push(arow("Wound OK", d.woundOk===true?"Yes":d.woundOk===false?"No":null));
+    rows.push(arow("Severity", d.severity));
+    rows.push(arow("Analgesia", d.analgesia));
+    rows.push(arow("Note", d.note));
+  } else if(e.type==="training"){
+    rows.push(arow("Task", d.task));
+    rows.push(arow("Stage", d.stage));
+    rows.push(arow("Trials", m.trials));
+    rows.push(arow("Correct", m.correct));
+    rows.push(arow("Accuracy", m.accuracy!=null?Math.round(m.accuracy*100)+"%":null));
+    rows.push(arow("Reward", m.rewardUl!=null?m.rewardUl+" µL":null));
+    rows.push(arow("Session", m.sessionMin!=null?m.sessionMin+" min":null));
+    rows.push(arow("Note", d.note));
+  } else if(e.type==="comment"){
+    rows.push(arow("Comment", d.text));
+  } else if(e.type==="note"){
+    rows.push(arow("Label", d.label));
+    rows.push(arow("Details", d.text));
+  }
+  rows.push(arow("Logged", new Date(e.created).toLocaleString()+(e.edited?" · edited "+new Date(e.edited).toLocaleString():"")));
+  return `<div class="dg-detail">${rows.join("")}</div>`;
+}
 function pipe(v){ return v===true?{c:"var(--gcamp)",m:"✓"}:v===false?{c:"var(--overdue)",m:"✕"}:{c:"var(--ink-faint)",m:"·"}; }
 function renderAnimals(){
   const host=document.getElementById("animals"); host.innerHTML="";
@@ -2145,6 +2179,7 @@ function paintDiary(container,a){
   let selDate=todayDateStr();
   let visibleTypes=new Set(Object.keys(DIARY_TYPES));
   let formType=null, editingId=null;
+  let expandedIds=new Set(); // entries currently showing their full read-only detail
   const WD=["Su","Mo","Tu","We","Th","Fr","Sa"];
 
   function formActions(){
@@ -2303,15 +2338,17 @@ function paintDiary(container,a){
         </select>`}
       </div>
       <div class="dg-list">
-        ${formType?"":(dayEntries.length? dayEntries.map(e=>`
+        ${formType?"":(dayEntries.length? dayEntries.map(e=>{const open=expandedIds.has(e.id);return`
           <div class="dg-entry" style="border-left:3px solid ${DIARY_TYPES[e.type].color}">
             <div class="dg-erow">
               <span>${DIARY_TYPES[e.type].icon}</span>
               <span class="dg-esum" title="${escAttr(diaryEntrySummary(e))}">${esc(diaryEntrySummary(e))}</span>
+              <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
               <button class="dg-edit" data-id="${e.id}">✎</button>
               <button class="dg-del" data-id="${e.id}">✕</button>
             </div>
-          </div>`).join("") : `<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">no entries this day</div>`)}
+            ${open?diaryEntryDetailHTML(e):""}
+          </div>`;}).join("") : `<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">no entries this day</div>`)}
         <div class="dg-formhost"></div>
       </div>`;
 
@@ -2342,8 +2379,12 @@ function paintDiary(container,a){
   // delegated on the container (a stable node across draw() calls, which only
   // replace its innerHTML) so this doesn't need re-binding on every redraw
   container.addEventListener("click", e=>{
-    const editBtn=e.target.closest(".dg-edit"), delBtn=e.target.closest(".dg-del");
-    if(editBtn){
+    const viewBtn=e.target.closest(".dg-view"), editBtn=e.target.closest(".dg-edit"), delBtn=e.target.closest(".dg-del");
+    if(viewBtn){
+      const id=viewBtn.dataset.id;
+      if(expandedIds.has(id))expandedIds.delete(id); else expandedIds.add(id);
+      draw();
+    } else if(editBtn){
       const entry=a.diary.find(x=>x.id===editBtn.dataset.id); if(!entry)return;
       formType=entry.type; editingId=entry.id; draw();
     } else if(delBtn){
