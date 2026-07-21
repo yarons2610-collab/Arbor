@@ -145,6 +145,12 @@
   .dg-form textarea{min-height:44px;resize:vertical;font-family:inherit}
   .dg-form .dg-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px}
   .dg-metrics-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;margin-bottom:6px}
+  .dg-taskwrap{position:relative}
+  .dg-tasksuggest{position:absolute;left:0;right:0;top:calc(100% + 3px);background:var(--panel2);border:1px solid var(--line2);border-radius:8px;max-height:170px;overflow-y:auto;z-index:30;display:none;box-shadow:0 8px 20px rgba(0,0,0,.4)}
+  .dg-tasksuggest.show{display:block}
+  .dg-tasksuggest .dg-tsitem{padding:7px 11px;font-size:12px;color:var(--ink-dim);cursor:pointer}
+  .dg-tasksuggest .dg-tsitem:hover,.dg-tasksuggest .dg-tsitem.hl{background:var(--bg2);color:var(--ink)}
+  .dg-tasksuggest .dg-tsitem+.dg-tsitem{border-top:1px solid var(--line)}
   .dg-form label{display:block;font-family:var(--mono);font-size:9px;color:var(--ink-faint);margin-bottom:2px}
   .cal-foot{display:flex;gap:7px;align-items:center;margin-top:11px}
   .cal-foot label{font-family:var(--mono);font-size:9px;color:var(--ink-faint);text-transform:uppercase}
@@ -2341,8 +2347,11 @@ function paintDiary(container,a){
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(d.note||"")}</textarea>
       ${formActions()}</div>`;
     if(type==="training") return `<div class="dg-form">
-      <label>Task</label><input class="dg-f-task" list="dg-tasklib" type="text" value="${escAttr(d.task||"")}" placeholder="e.g. 2AFC lick">
-      <datalist id="dg-tasklib">${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t.name)}">`).join("")}</datalist>
+      <label>Task</label>
+      <div class="dg-taskwrap">
+        <input class="dg-f-task" type="text" autocomplete="off" value="${escAttr(d.task||"")}" placeholder="e.g. 2AFC lick">
+        <div class="dg-tasksuggest"></div>
+      </div>
       <label style="margin-top:6px">Stage</label><input class="dg-f-stage" type="text" value="${escAttr(d.stage||"")}">
       <div class="dg-metrics-host" style="margin-top:6px">${renderMetricsFields(d.task,d.metrics)}</div>
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(d.note||"")}</textarea>
@@ -2360,10 +2369,49 @@ function paintDiary(container,a){
   function wireForm(host,type,editing){
     host.querySelector(".dg-cancel").onclick=()=>{ formType=null; editingId=null; draw(); };
     if(type==="training"){
-      // swap in the selected task's own parameter fields as its name changes -
-      // typing a new value or picking one from the datalist both fire "input"
+      // swap in the selected task's own parameter fields as its name changes,
+      // and drive a themed suggestion dropdown in place of a native <datalist>
+      // (unstyleable - shows as a jarring plain white browser popup)
       const taskInput=host.querySelector(".dg-f-task"), metricsHost=host.querySelector(".dg-metrics-host");
-      taskInput.addEventListener("input",()=>{ metricsHost.innerHTML=renderMetricsFields(taskInput.value.trim(), editing?editing.data.metrics:{}); });
+      const suggestBox=host.querySelector(".dg-tasksuggest");
+      let hlIdx=-1;
+      const matches=()=>{
+        const q=taskInput.value.trim().toLowerCase();
+        return (DB.config.taskLib||[]).map(t=>t.name).filter(Boolean).filter(n=>!q||n.toLowerCase().includes(q));
+      };
+      function paintSuggest(){
+        const ms=matches();
+        if(!ms.length){ suggestBox.classList.remove("show"); suggestBox.innerHTML=""; return; }
+        suggestBox.innerHTML=ms.map((n,i)=>`<div class="dg-tsitem${i===hlIdx?" hl":""}" data-n="${escAttr(n)}">${esc(n)}</div>`).join("");
+        suggestBox.classList.add("show");
+      }
+      function selectTask(name){
+        taskInput.value=name;
+        suggestBox.classList.remove("show"); suggestBox.innerHTML="";
+        metricsHost.innerHTML=renderMetricsFields(name, editing?editing.data.metrics:{});
+        taskInput.focus();
+      }
+      taskInput.addEventListener("input",()=>{
+        hlIdx=-1;
+        metricsHost.innerHTML=renderMetricsFields(taskInput.value.trim(), editing?editing.data.metrics:{});
+        paintSuggest();
+      });
+      taskInput.addEventListener("focus",()=>{ hlIdx=-1; paintSuggest(); });
+      taskInput.addEventListener("keydown",e=>{
+        const items=[...suggestBox.querySelectorAll(".dg-tsitem")];
+        if(!items.length)return;
+        if(e.key==="ArrowDown"){ e.preventDefault(); hlIdx=Math.min(hlIdx+1,items.length-1); paintSuggest(); }
+        else if(e.key==="ArrowUp"){ e.preventDefault(); hlIdx=Math.max(hlIdx-1,0); paintSuggest(); }
+        else if(e.key==="Enter"){ if(hlIdx>=0){ e.preventDefault(); selectTask(items[hlIdx].dataset.n); } }
+        else if(e.key==="Escape"){ suggestBox.classList.remove("show"); }
+      });
+      // mousedown (not click) fires before the input's blur, so the selection
+      // registers before blur would otherwise hide the dropdown out from under it
+      suggestBox.addEventListener("mousedown",e=>{
+        const item=e.target.closest(".dg-tsitem"); if(!item)return;
+        e.preventDefault(); selectTask(item.dataset.n);
+      });
+      taskInput.addEventListener("blur",()=>{ setTimeout(()=>suggestBox.classList.remove("show"),120); });
     }
     host.querySelector(".dg-save").onclick=()=>{
       const num=sel=>{ const el=host.querySelector(sel); const raw=(el?el.value:"").trim().replace(",","."); if(raw==="")return null; const n=parseFloat(raw); return isNaN(n)?null:n; };
