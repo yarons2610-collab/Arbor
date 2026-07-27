@@ -444,11 +444,13 @@
         <button class="mat-stab on" data-ms="viruses">Viruses</button>
         <button class="mat-stab" data-ms="sites">Injection Sites</button>
         <button class="mat-stab" data-ms="tasks">Behavioral Tasks</button>
+        <button class="mat-stab" data-ms="diarytypes">Diary Types</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-tasks"></div>
+      <div class="wrap mat-subview hidden" id="ms-diarytypes"></div>
     </div>
     <div class="view hidden wrap" id="reading"></div>
     <div class="view wrap" id="animals"></div>
@@ -548,6 +550,25 @@ const KEY="arbor_workspace_v3";   // v3: retire stale v2 storage that carried ol
 const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   animalFilters:{cohort:"all",status:"all",pipe:"all",search:""},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
+  // seeded diary entry types - fully user-editable/deletable afterward, not a
+  // locked-in schema. "timeline:true" means entries of that type surface on
+  // the global Timeline (procedures - the "big things happening" view).
+  diaryTypes:[
+    {key:"weight",   label:"Weight",    icon:"⚖",  color:"#54e08a", timeline:false, fields:[
+      {key:"grams",label:"Weight (g)",type:"number"}]},
+    {key:"postop",   label:"Post-op",   icon:"🩹", color:"#ff5f6d", timeline:false, fields:[
+      {key:"daysPost",label:"Days post-op",type:"number"},
+      {key:"bodyCondition",label:"Body condition (1-5)",type:"select",options:["1","2","3","4","5"]},
+      {key:"woundOk",label:"Wound OK?",type:"yesno"},
+      {key:"severity",label:"Severity",type:"select",options:["none","mild","moderate","severe"]},
+      {key:"analgesia",label:"Analgesia",type:"text"}]},
+    {key:"training", label:"Training",  icon:"🎓", color:"#a98cff", timeline:true,  fields:[]},
+    {key:"comment",  label:"Comment",   icon:"💬", color:"#3fd0d6", timeline:false, fields:[]},
+    {key:"surgery",  label:"Surgery",   icon:"🔪", color:"#f2b756", timeline:true,  fields:[]},
+    {key:"perfusion",label:"Perfusion", icon:"💉", color:"#ff8a6b", timeline:true,  fields:[]},
+    {key:"histology",label:"Histology", icon:"🧫", color:"#7db4ff", timeline:true,  fields:[]},
+    {key:"microscopy",label:"Microscopy",icon:"🔬",color:"#e0d454", timeline:true,  fields:[]}
+  ],
   keywords:[], // was hardcoded to a specific project's reading-list topics; the Reading view that used this was dropped from this fork, left empty for a clean shared build
   siteLib:[
     {name:"M1 forelimb (MOs/MOp)", ap:0.8,  ml:1.5,  dv:-1.0},
@@ -699,6 +720,7 @@ function migrate(){                       // backfill fields added in later vers
     // tasks log different metrics — a 2AFC session and an open-field session
     // have nothing in common). Convert any leftover strings in place.
     DB.config.taskLib=(DB.config.taskLib||[]).map(t=>typeof t==="string"?{name:t,params:[]}:t);
+    if(!DB.config.diaryTypes) DB.config.diaryTypes=DEFAULT_CONFIG.diaryTypes.map(t=>({...t,fields:t.fields.map(f=>({...f}))}));
   }
   // pull the persisted animal filter selections into the live module-level state —
   // runs on boot and after every JSON import so filters travel with the workspace
@@ -740,6 +762,29 @@ function migrate(){                       // backfill fields added in later vers
       });
       a._weightsMigrated=true;
     }
+    // procedures (surgery/perfusion/histology/microscopy) move from dedicated
+    // animal fields + linked DB.tasks into diary entries, tracked the same
+    // flexible way as everything else. Both completed AND still-scheduled
+    // procedure tasks convert - a diary entry's date alone conveys done vs.
+    // upcoming, so nothing currently scheduled disappears. The old fields are
+    // kept, unused, as a safety net (same reasoning as a.weights above). The
+    // now-redundant procedure tasks themselves are pruned from DB.tasks once,
+    // after every animal has run through this (see below the animals loop).
+    if(!a._proceduresMigrated){
+      ["surgery","perfusion","histology","microscopy"].forEach(ptype=>{
+        const linked=DB.tasks.filter(t=>t.procedureType===ptype&&(t.linkedAnimals||[]).includes(a.id));
+        if(linked.length){
+          linked.forEach(t=>{
+            a.diary.push({id:uid("d_"), type:ptype, date:(t.deadline||todayDateStr()).slice(0,10),
+              created:Date.now(), edited:null, data:{note:t.notes||""}});
+          });
+        } else if(ptype==="surgery" ? a.surgery : a[ptype]===true){
+          const date=ptype==="surgery"?a.surgery:(ptype==="perfusion"?(a.sacrificed||todayDateStr()):todayDateStr());
+          a.diary.push({id:uid("d_"), type:ptype, date, created:Date.now(), edited:null, data:{note:""}});
+        }
+      });
+      a._proceduresMigrated=true;
+    }
     // backfill termination field from alive boolean + comments heuristic
     if(!a.termination){
       if(a.alive===true) a.termination="alive";
@@ -751,6 +796,10 @@ function migrate(){                       // backfill fields added in later vers
     // keep alive in sync with termination for all existing code
     a.alive = a.termination==="alive";
   });
+  // now-redundant procedure tasks were converted to diary entries above (or
+  // had no linked animal to convert onto) - drop them so the Timeline doesn't
+  // show the same procedure twice once it starts reading diary entries too.
+  DB.tasks=DB.tasks.filter(t=>!t.procedureType);
   if(!DB.cohorts)DB.cohorts=[];
   // build cohort entities from any cohort names present on animals, linking via the seed map
   const names=[...new Set([...DB.animals.map(a=>a.cohort).filter(Boolean), ...Object.keys(COHORT_DOMAIN_SEED)])];
@@ -1264,6 +1313,36 @@ function renderTimeline(){
     }
   });
 
+  // ── Diary entries whose type is flagged "shows on Timeline" ─────────────
+  // Procedures (surgery/perfusion/histology/microscopy/training by default,
+  // any type the user flags) are logged per-animal in the diary now instead
+  // of as separate linked tasks, but still need to surface here so the week
+  // view reflects the big things happening across every animal, not just
+  // this animal's own diary. Diary entries have no time-of-day, so they're
+  // always all-day banner chips; a future-dated entry reads as a planned/
+  // scheduled procedure rather than a completed one.
+  const timelineTypeKeys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
+  const today0=todayDateStr();
+  DB.animals.forEach(an=>{
+    (an.diary||[]).forEach(e=>{
+      if(!timelineTypeKeys.has(e.type))return;
+      const day=new Date(e.date+"T00:00:00");
+      const d=Math.round((day-ws)/864e5);
+      if(d<0||d>6)return;
+      const def=diaryTypeDef(e.type);
+      const isFuture=e.date>today0;
+      const chip=document.createElement("div"); chip.className="cal-evt";
+      chip.style.cssText=`background:${def.color}22;border-left:3px solid ${def.color};color:${def.color}`;
+      chip.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
+      chip.title=`${def.label} — ${an.name} — ${e.date}${isFuture?" (scheduled)":""}`;
+      chip.onclick=()=>{
+        animalSearch=an.name; DB.config.animalFilters.search=animalSearch; persist();
+        switchTo("animals");
+      };
+      alldayCells[d].appendChild(chip);
+    });
+  });
+
   // ── Overlap layout for timed same-day events ────────────────────────────
   // Two events sharing time on the same day used to render fully on top of
   // each other — both absolute-positioned at left:2px/right:2px in their hour
@@ -1528,6 +1607,7 @@ function renderMatSubTab(){
   else if(matSubTab === "viruses")  renderVirusLib();
   else if(matSubTab === "sites")    renderSiteLib();
   else if(matSubTab === "tasks")    renderTaskLib();
+  else if(matSubTab === "diarytypes") renderDiaryTypesLib();
 }
 
 /* ── INVENTORY ─────────────────────────────────────────────────────────────── */
@@ -1837,6 +1917,104 @@ function renderTaskLib(){
   });
 }
 
+/* ── DIARY TYPES ────────────────────────────────────────────────────────────
+   Diary entry types themselves are fully user-editable - the seeded defaults
+   (weight/postop/training/comment/surgery/perfusion/histology/microscopy) are
+   not a locked-in schema, just a starting point. Each type owns its own list
+   of custom fields (number/text/yesno/select) and a "shows on Timeline" flag.
+   A type's `key` is immutable once created (existing entries reference it) -
+   only label/icon/color/timeline/fields are editable. */
+const DIARY_FIELD_TYPES=["number","text","yesno","select"];
+function renderDiaryTypesLib(){
+  const host = document.getElementById("ms-diarytypes"); host.innerHTML = "";
+  const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
+
+  const hdr = document.createElement("div");
+  hdr.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap";
+  hdr.innerHTML = `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
+      Define the animal diary's entry types — each gets its own icon, color, custom fields, and whether it shows on the global Timeline.</span>
+    <button id="dtlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New type</button>`;
+  host.appendChild(hdr);
+
+  const wrap = document.createElement("div"); wrap.id = "dtlib_rows"; host.appendChild(wrap);
+  function paintDTRows(){
+    const dt = DB.config.diaryTypes||[];
+    wrap.innerHTML = dt.length ? dt.map((t,i) => `
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:9px;flex-wrap:wrap">
+          <input type="color" class="ldt_color" data-ti="${i}" value="${t.color&&t.color.startsWith("#")?t.color:"#54e08a"}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
+          <input class="ldt_icon" data-ti="${i}" value="${escAttr(t.icon||"")}" placeholder="🔖" style="width:44px;text-align:center;flex:0 0 auto;${IST}">
+          <input class="ldt_label" data-ti="${i}" value="${escAttr(t.label)}" placeholder="Type name (e.g. Cage change)" style="flex:1;min-width:140px;${IST}">
+          <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto"><input type="checkbox" class="ldt_timeline" data-ti="${i}" style="width:auto" ${t.timeline?"checked":""}> shows on Timeline</label>
+          <button class="ldt_del" data-ti="${i}"
+            style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ type</button>
+        </div>
+        <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:6px">Custom fields (every entry also always has a free-text Note, in addition to these)</div>
+        ${t.key==="training" ? `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">Training's fields come from Materials → Behavioral Tasks instead (per-task parameters), not a fixed list here.</div>` : `
+        ${(t.fields||[]).map((f,fi)=>`
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+            <input class="ldf_label" data-ti="${i}" data-fi="${fi}" value="${escAttr(f.label)}" placeholder="Field name (e.g. Severity)" style="flex:1;min-width:120px;${IST}">
+            <select class="ldf_type" data-ti="${i}" data-fi="${fi}" style="${IST};flex:0 0 auto">
+              ${DIARY_FIELD_TYPES.map(ft=>`<option value="${ft}" ${f.type===ft?"selected":""}>${ft}</option>`).join("")}
+            </select>
+            ${f.type==="text"?`<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)"><input type="checkbox" class="ldf_multiline" data-ti="${i}" data-fi="${fi}" style="width:auto" ${f.multiline?"checked":""}> multi-line</label>`:""}
+            ${f.type==="select"?`<input class="ldf_options" data-ti="${i}" data-fi="${fi}" value="${escAttr((f.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:160px;${IST}">`:""}
+            <button class="ldf_del" data-ti="${i}" data-fi="${fi}"
+              style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
+          </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">no custom fields — just the free-text Note will show</div>`}
+        <button class="ldt_addfield" data-ti="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add field</button>
+        `}
+      </div>`).join("")
+    : `<div class="empty" style="padding:20px 0">No diary types yet — add one above.</div>`;
+  }
+  paintDTRows();
+
+  host.querySelector("#dtlib_add").onclick = () => {
+    (DB.config.diaryTypes=DB.config.diaryTypes||[]).push({key:uid("dt_"),label:"",icon:"🔖",color:"#54e08a",timeline:false,fields:[]});
+    persist(); paintDTRows();
+    const rows = wrap.querySelectorAll(".ldt_label"); if(rows.length) rows[rows.length-1].focus();
+  };
+  wrap.addEventListener("input", e => {
+    const ti = +e.target.dataset.ti; const t = (DB.config.diaryTypes||[])[ti]; if(!t) return;
+    if(e.target.classList.contains("ldt_label")) { t.label = e.target.value; persist(); return; }
+    if(e.target.classList.contains("ldt_icon"))  { t.icon  = e.target.value; persist(); return; }
+    if(e.target.classList.contains("ldf_label")) {
+      const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.label = e.target.value; persist(); }
+    }
+    if(e.target.classList.contains("ldf_options")) {
+      const f = (t.fields||[])[+e.target.dataset.fi];
+      if(f){ f.options = e.target.value.split(",").map(s=>s.trim()).filter(Boolean); persist(); }
+    }
+  });
+  wrap.addEventListener("change", e => {
+    const ti = +e.target.dataset.ti; const t = (DB.config.diaryTypes||[])[ti]; if(!t) return;
+    if(e.target.classList.contains("ldt_color"))    { t.color = e.target.value; persist(); return; }
+    if(e.target.classList.contains("ldt_timeline")) { t.timeline = e.target.checked; persist(); return; }
+    if(e.target.classList.contains("ldf_type")) {
+      const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.type = e.target.value; persist(); paintDTRows(); }
+    }
+    if(e.target.classList.contains("ldf_multiline")) {
+      const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.multiline = e.target.checked; persist(); }
+    }
+  });
+  wrap.addEventListener("click", e => {
+    const delT = e.target.closest(".ldt_del"), addF = e.target.closest(".ldt_addfield"), delF = e.target.closest(".ldf_del");
+    if(delT){
+      if(confirm("Delete this diary type? Already-logged entries keep their data, but it'll show without labels/colors without this definition.")){
+        (DB.config.diaryTypes||[]).splice(+delT.dataset.ti,1); persist(); paintDTRows();
+      }
+    } else if(addF){
+      const t = (DB.config.diaryTypes||[])[+addF.dataset.ti]; if(!t) return;
+      (t.fields=t.fields||[]).push({key:uid("f_"),label:"",type:"text"});
+      persist(); paintDTRows();
+      const rows = wrap.querySelectorAll(`.ldf_label[data-ti="${addF.dataset.ti}"]`); if(rows.length) rows[rows.length-1].focus();
+    } else if(delF){
+      const t = (DB.config.diaryTypes||[])[+delF.dataset.ti]; if(!t) return;
+      t.fields.splice(+delF.dataset.fi,1); persist(); paintDTRows();
+    }
+  });
+}
+
 /* ---------- READING (two-track: core canon + capped frontier) ---------- */
 const daysSince=ts=>ts?Math.floor((Date.now()-ts)/864e5):0;
 const frontierQueue=()=>DB.readings.filter(r=>r.track==="frontier"&&r.status!=="read");
@@ -1949,20 +2127,35 @@ function addReadingModal(){
 let animalCohort="all", animalStatus="all", animalPipe="all", animalSearch="";
 const WEEK=6048e5;
 function ageWeeks(a){ if(!a.dob)return null; const end=a.sacrificed?new Date(a.sacrificed):new Date(); return Math.round((end-new Date(a.dob))/WEEK); }
-function daysSurg(a){ if(!a.surgery)return null; const end=a.sacrificed?new Date(a.sacrificed):new Date(); return Math.round((end-new Date(a.surgery))/864e5); }
+// surgery date now comes from the diary (earliest surgery-type entry dated
+// today or earlier); a.surgery is checked as a fallback for pre-migration data.
+function surgeryDate(a){
+  const entries=(a.diary||[]).filter(e=>e.type==="surgery"&&e.date<=todayDateStr()).sort((x,y)=>x.date.localeCompare(y.date));
+  return entries.length?entries[0].date:(a.surgery||null);
+}
+function daysSurg(a){ const sd=surgeryDate(a); if(!sd)return null; const end=a.sacrificed?new Date(a.sacrificed):new Date(); return Math.round((end-new Date(sd))/864e5); }
 // diary: flexible per-animal log (replaces the old flat a.weights map) — a
 // list of typed entries (weight/postop/training/comment/note) sharing a
 // common envelope {id,type,date,created,edited} plus a type-specific data
 // payload. See migrate() for the a.weights -> a.diary backfill.
-const DIARY_TYPES={
-  weight:  {icon:"⚖",  label:"Weight",   color:"var(--gcamp)"},
-  postop:  {icon:"🩹", label:"Post-op",  color:"var(--overdue)"},
-  training:{icon:"🎓", label:"Training", color:"var(--violet)"},
-  comment: {icon:"💬", label:"Comment",  color:"var(--cyan)"},
-  note:    {icon:"📌", label:"Note",     color:"var(--ink-faint)"}
-};
+// Diary entry types are fully data-driven (DB.config.diaryTypes) rather than a
+// fixed set - the user can edit/delete the seeded defaults or add their own
+// (Materials -> Diary Types), each with its own custom fields (number/text/
+// yesno/select) and a "timeline" flag controlling whether its entries surface
+// on the global Timeline. "training" is the one special case: its fields come
+// from DB.config.taskLib per selected task instead of a fixed field list.
+function diaryTypeDefs(){ return DB.config.diaryTypes||[]; }
+function diaryTypeDef(key){ return diaryTypeDefs().find(t=>t.key===key) || {key,label:key||"—",icon:"❔",color:"var(--ink-faint)",timeline:false,fields:[]}; }
 function diaryWeightEntries(a){ return (a.diary||[]).filter(e=>e.type==="weight").sort((x,y)=>x.date.localeCompare(y.date)||x.created-y.created); }
 function latestWeight(a){ const w=diaryWeightEntries(a); return w.length?w[w.length-1].data.grams:null; }
+// pipeline status (surgery/perfusion/histology/microscopy done-vs-pending) is
+// now derived from diary entries instead of dedicated animal fields - "done"
+// means an entry of that type exists dated today or earlier (a future-dated
+// entry is a scheduled/planned procedure, not yet done).
+function hasProcEntry(a,ptype,onlyPast){
+  const today=todayDateStr();
+  return (a.diary||[]).some(e=>e.type===ptype && (!onlyPast || e.date<=today));
+}
 // each behavioral task defines its own flexible parameter list in
 // DB.config.taskLib (2AFC and open-field sessions have nothing in common) —
 // look it up by task name to know how to label a logged training entry's
@@ -2012,41 +2205,56 @@ function trainingMetricsDisplay(e){
   if(m.sessionMin!=null && !usedKeys.has("session"))  out.push({label:"Session",  val:m.sessionMin+" min"});
   return out;
 }
+// a type's custom fields (number/text/yesno/select) render generically; the
+// universal Note is always present in addition, on every type including ones
+// with zero custom fields (comment/surgery/perfusion/histology/microscopy are
+// just Note underneath - proof the system is genuinely generic, not a fixed
+// set with one extra bucket). "note" reads d.note, falling back to the older
+// shapes (comment used data.text; the removed "note" catch-all used
+// data.label+data.text) so entries logged before this change keep displaying.
+function diaryNoteOf(d){
+  if(d.note!=null) return d.note;
+  if(d.label!=null) return [d.label,d.text].filter(Boolean).join(": ");
+  return d.text||"";
+}
+function renderTypeField(f,val){
+  if(f.type==="yesno") return `<select class="dg-field" data-key="${escAttr(f.key)}" data-type="yesno"><option value="">—</option><option value="1" ${val===true?"selected":""}>Yes</option><option value="0" ${val===false?"selected":""}>No</option></select>`;
+  if(f.type==="select") return `<select class="dg-field" data-key="${escAttr(f.key)}" data-type="select"><option value="">—</option>${(f.options||[]).map(o=>`<option value="${escAttr(o)}" ${val===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+  if(f.type==="text"&&f.multiline) return `<textarea class="dg-field" data-key="${escAttr(f.key)}" data-type="text">${esc(val!=null?val:"")}</textarea>`;
+  return `<input class="dg-field" data-key="${escAttr(f.key)}" data-type="${f.type==="number"?"number":"text"}" type="text" inputmode="${f.type==="number"?"decimal":"text"}" value="${escAttr(val!=null?val:"")}">`;
+}
+function renderTypeFields(type,d){
+  const def=diaryTypeDef(type);
+  if(!def.fields.length) return "";
+  return `<div class="dg-metrics-grid">${def.fields.map(f=>`<div><label>${esc(f.label||"(unnamed)")}</label>${renderTypeField(f,d[f.key])}</div>`).join("")}</div>`;
+}
 function diaryEntrySummary(e){
   const d=e.data||{};
-  if(e.type==="weight")   return `${d.grams} g${d.note?" — "+d.note:""}`;
-  if(e.type==="postop")   return [d.daysPost!=null?`day ${d.daysPost}`:null, d.severity, d.woundOk===false?"wound issue":null, d.analgesia, d.note].filter(Boolean).join(" · ")||"—";
   if(e.type==="training") return [d.task, d.stage, ...trainingMetricsDisplay(e).map(x=>`${x.label} ${x.val}`), d.note].filter(Boolean).join(" · ")||"—";
-  if(e.type==="comment")  return d.text||"—";
-  if(e.type==="note")     return [d.label,d.text].filter(Boolean).join(": ")||"—";
-  return "—";
+  const def=diaryTypeDef(e.type);
+  const parts=def.fields.map(f=>{
+    const v=d[f.key]; if(v==null||v==="")return null;
+    return `${f.label} ${f.type==="yesno"?(v?"Yes":"No"):v}`;
+  }).filter(Boolean);
+  const note=diaryNoteOf(d); if(note)parts.push(note);
+  return parts.join(" · ")||"—";
 }
 // full read-only breakdown of an entry (view mode, as opposed to the edit
 // form) — reuses the same labeled-row look as the surgery detail rows (arow).
 function diaryEntryDetailHTML(e){
   const d=e.data||{};
   const rows=[];
-  if(e.type==="weight"){
-    rows.push(arow("Weight", d.grams!=null?d.grams+" g":null));
-    rows.push(arow("Note", d.note));
-  } else if(e.type==="postop"){
-    rows.push(arow("Days post-op", d.daysPost));
-    rows.push(arow("Body condition", d.bodyCondition));
-    rows.push(arow("Wound OK", d.woundOk===true?"Yes":d.woundOk===false?"No":null));
-    rows.push(arow("Severity", d.severity));
-    rows.push(arow("Analgesia", d.analgesia));
-    rows.push(arow("Note", d.note));
-  } else if(e.type==="training"){
+  if(e.type==="training"){
     rows.push(arow("Task", d.task));
     rows.push(arow("Stage", d.stage));
     trainingMetricsDisplay(e).forEach(x=>rows.push(arow(x.label, x.val)));
-    rows.push(arow("Note", d.note));
-  } else if(e.type==="comment"){
-    rows.push(arow("Comment", d.text));
-  } else if(e.type==="note"){
-    rows.push(arow("Label", d.label));
-    rows.push(arow("Details", d.text));
+  } else {
+    diaryTypeDef(e.type).fields.forEach(f=>{
+      const v=d[f.key];
+      rows.push(arow(f.label, v==null||v===""?null:(f.type==="yesno"?(v?"Yes":"No"):v)));
+    });
   }
+  rows.push(arow("Note", diaryNoteOf(d)));
   rows.push(arow("Logged", new Date(e.created).toLocaleString()+(e.edited?" · edited "+new Date(e.edited).toLocaleString():"")));
   return `<div class="dg-detail">${rows.join("")}</div>`;
 }
@@ -2092,14 +2300,14 @@ function renderAnimals(){
 
   function pipeMatch(a){
     if(animalPipe==="all")           return true;
-    if(animalPipe==="surgery_pending") return a.termination==="alive" && !a.surgery;
-    if(animalPipe==="surgery_done")  return !!a.surgery;
-    if(animalPipe==="perf_pending")  return a.termination==="alive" && !a.perfusion;
-    if(animalPipe==="perf_done")     return a.perfusion===true;
-    if(animalPipe==="histo_pending") return a.perfusion===true && !a.histology;
-    if(animalPipe==="histo_done")    return a.histology===true;
-    if(animalPipe==="scope_done")    return a.microscopy===true;
-    if(animalPipe==="complete")      return !!a.surgery && a.perfusion===true && a.histology===true && a.microscopy===true;
+    if(animalPipe==="surgery_pending") return a.termination==="alive" && !hasProcEntry(a,"surgery",true);
+    if(animalPipe==="surgery_done")  return hasProcEntry(a,"surgery",true);
+    if(animalPipe==="perf_pending")  return a.termination==="alive" && !hasProcEntry(a,"perfusion",true);
+    if(animalPipe==="perf_done")     return hasProcEntry(a,"perfusion",true);
+    if(animalPipe==="histo_pending") return hasProcEntry(a,"perfusion",true) && !hasProcEntry(a,"histology",true);
+    if(animalPipe==="histo_done")    return hasProcEntry(a,"histology",true);
+    if(animalPipe==="scope_done")    return hasProcEntry(a,"microscopy",true);
+    if(animalPipe==="complete")      return hasProcEntry(a,"surgery",true) && hasProcEntry(a,"perfusion",true) && hasProcEntry(a,"histology",true) && hasProcEntry(a,"microscopy",true);
     return true;
   }
   const q=animalSearch.trim().toLowerCase();
@@ -2115,8 +2323,8 @@ function renderAnimals(){
   const sum=document.createElement("div");
   sum.style.cssText="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:18px;font-family:var(--mono);font-size:11.5px;color:var(--ink-dim)";
   sum.innerHTML=`<span>${list.length} animals</span><span style="color:var(--gcamp)">${cnt(a=>a.termination==="alive")} alive</span>
-    <span>surgery ${cnt(a=>a.surgery)}</span><span>perfused ${cnt(a=>a.perfusion===true)}</span>
-    <span>histology ${cnt(a=>a.histology===true)}</span><span>microscopy ${cnt(a=>a.microscopy===true)}</span>`;
+    <span>surgery ${cnt(a=>hasProcEntry(a,"surgery",true))}</span><span>perfused ${cnt(a=>hasProcEntry(a,"perfusion",true))}</span>
+    <span>histology ${cnt(a=>hasProcEntry(a,"histology",true))}</span><span>microscopy ${cnt(a=>hasProcEntry(a,"microscopy",true))}</span>`;
   host.appendChild(sum);
 
   // show every cohort group (even empty ones) so new cohorts are visible
@@ -2162,56 +2370,12 @@ function animalCard(a){
   const card=document.createElement("div");
   card.style.cssText=`background:var(--panel);border:1px solid var(--line);border-left:3px solid ${{alive:"var(--line)",sacrificed:"#3a4252",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"var(--line)"};border-radius:11px;padding:12px 15px;margin-bottom:8px;${a.termination!=="alive"?"opacity:.68":""}`;
   const dS=daysSurg(a), aw=ageWeeks(a), lw=latestWeight(a);
-  const PERF_DAYS=28; // AAV expression plateau (Aschauer et al. 2013, PLOS ONE 8:e82312)
-  const perfReady=a.termination==="alive"&&a.surgery&&a.perfusion!==true&&(daysSurg(a)??0)>=PERF_DAYS;
-  // pipelineChip: unified state machine for surgery/perf/histo/scope.
-  // Clicking the chip's label marks it done directly; a small 📅 icon opens the
-  // calendar to schedule/reschedule without marking done.
-  // States: done (green) | overdue (red) | scheduled (amber) | ready-to-perfuse (pulsing amber) | unscheduled (grey)
-  function pipelineChip(ptype){
-    const ICONS={surgery:"surg",perfusion:"perf",histology:"histo",microscopy:"scope"};
-    const lab=ICONS[ptype];
-    const pipeVal = ptype==="surgery" ? !!a.surgery : {perfusion:a.perfusion,histology:a.histology,microscopy:a.microscopy}[ptype];
-    const procTask=DB.tasks.find(t=>t.procedureType===ptype&&(t.linkedAnimals||[]).includes(a.id));
-
-    // STATE 1: Done — click anywhere on the chip to undo
-    if(pipeVal===true){
-      const doneDate = ptype==="surgery" ? a.surgery : (procTask&&procTask.deadline?procTask.deadline.slice(0,10):"");
-      return `<button class="pipe-chip done" data-proc="${ptype}" title="${ptype} complete${doneDate?" on "+doneDate:""} — click to undo"
-        style="border:1px solid var(--gcamp);color:var(--gcamp);background:rgba(84,224,138,.08);
-               border-radius:20px;padding:2px 9px;font-family:var(--mono);font-size:10px;cursor:pointer">
-        ${lab} ✓${doneDate?" "+doneDate:""}</button>`;
-    }
-
-    // STATE 2/3: not done yet — a checkbox (mark done now) + a date label (schedule/reschedule)
-    let col,bg,dateLabel,dateTip,suggestCls="";
-    if(procTask&&procTask.deadline){
-      const isOverdue=daysTo(procTask.deadline)<0;
-      col=isOverdue?"var(--overdue)":"var(--amber)";
-      bg=isOverdue?"rgba(255,95,109,.08)":"rgba(242,183,86,.08)";
-      dateLabel=isOverdue?`${lab} overdue ${procTask.deadline.slice(0,10)}`:`${lab} ${procTask.deadline.slice(0,10)}`;
-      dateTip=`${ptype} scheduled for ${procTask.deadline.slice(0,10)} — click to reschedule`;
-    } else if(ptype==="perfusion"&&perfReady){
-      col="var(--amber)"; bg="rgba(242,183,86,.08)"; suggestCls=" perf-suggest";
-      dateLabel=`${lab} ?`;
-      dateTip=`≥${PERF_DAYS}d post-surgery — AAV expression likely at plateau (Aschauer et al. 2013). Click to schedule perfusion.`;
-    } else {
-      col="var(--ink-faint)"; bg="transparent";
-      dateLabel=`${lab} ·`;
-      dateTip=`Click to schedule ${ptype}`;
-    }
-    return `<span class="pipe-chip${suggestCls}" style="display:inline-flex;align-items:center;border:1px solid ${col};background:${bg};border-radius:20px;overflow:hidden">
-      <button class="pipe-check" data-proc="${ptype}" title="Click to mark ${ptype} done" style="border:0;background:transparent;color:${col};padding:2px 6px 2px 9px;font-family:var(--mono);font-size:10px;cursor:pointer">${dateLabel}</button>
-      <button class="pipe-sched" data-proc="${ptype}" title="${dateTip}" style="border:0;border-left:1px solid ${col}55;color:${col};background:transparent;padding:2px 7px;font-size:11px;line-height:1;cursor:pointer">📅</button>
-    </span>`;
-  }
   card.innerHTML=`
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="width:9px;height:9px;border-radius:50%;background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};flex:0 0 auto" title="${{alive:"Alive",sacrificed:"Sacrificed",early_death:"Early death",excluded:"Excluded"}[a.termination]||""}"></span>
       <span style="font-weight:500;font-size:14px">${esc(a.name)}</span>
       <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">${esc(a.cage||"")}${a.sex?" · "+esc(a.sex):""}${a.strain?" · "+esc(a.strain):""}${aw!=null?" · "+aw+"w":""}${lw!=null?" · ⚖ "+lw+"g":""}</span>
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:100%;justify-content:flex-end">
-        ${pipelineChip("surgery")}${pipelineChip("perfusion")}${pipelineChip("histology")}${pipelineChip("microscopy")}
         <button class="a-edit" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px">✎</button>
         <button class="a-exp" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">▾</button>
       </span>
@@ -2223,7 +2387,7 @@ function animalCard(a){
       ${a.surgeryDetail?`<span style="color:var(--cyan)">${esc(surgerySummary(a))}</span>`:(a.targets?`<span style="color:var(--ink-dim)">→ ${esc(a.targets)}</span>`:"")}
     </div>
     <div class="a-detail" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px;line-height:1.6;color:var(--ink-dim)">
-      ${arow("Born",a.dob)}${arow("Surgery",a.surgery)}${arow("Sacrificed",a.sacrificed)}${arow("Cage",`${a.cage||"—"} · ${a.cageStatus||""} (${a.cageOpen||"?"}→${a.cageClose||"open"})`)}
+      ${arow("Born",a.dob)}${arow("Sacrificed",a.sacrificed)}${arow("Cage",`${a.cage||"—"} · ${a.cageStatus||""} (${a.cageOpen||"?"}→${a.cageClose||"open"})`)}
       ${arow("Virus",a.virus)}${arow("Targets",a.targets)}${arow("Coords",a.coords)}${arow("Volume",a.volume)}
       ${a.comments?arow("Notes",a.comments):""}
       ${(a.tasks&&a.tasks.length)?arow("Tasks",a.tasks.map(tid=>{const t=taskById(tid);return t?t.title:null;}).filter(Boolean).join("  ·  ")):""}
@@ -2255,48 +2419,6 @@ function animalCard(a){
       if(currentView==="outline")  renderOutline();
     });
   });
-  // pipeline chip: clicking the label directly marks it done (today, or the already-
-  // scheduled date if there is one) — a done chip itself undoes; the small 📅 icon opens
-  // the calendar to schedule/reschedule without marking done yet. Same interaction for
-  // surgery/perfusion/histology/microscopy.
-  card.querySelectorAll(".pipe-chip.done").forEach(btn=>{
-    btn.onclick=()=>{
-      markProcedureUndone(a,btn.dataset.proc);
-      renderAnimals();
-      if(currentView==="timeline") renderTimeline();
-    };
-  });
-  card.querySelectorAll(".pipe-check").forEach(btn=>{
-    btn.onclick=()=>{
-      markProcedureDone(a,btn.dataset.proc);
-      renderAnimals();
-      if(currentView==="timeline") renderTimeline();
-    };
-  });
-  card.querySelectorAll(".pipe-sched").forEach(btn=>{
-    const ptype=btn.dataset.proc;
-    const getTask=()=>DB.tasks.find(t=>t.procedureType===ptype&&(t.linkedAnimals||[]).includes(a.id)&&t.status!=="done");
-    const getDate=()=>{ const t=getTask(); return t?t.deadline||"":""; };
-    bindDateButton(btn, getDate, v=>{
-      let et=getTask();
-      if(!v){
-        // clear: remove animal from task, delete task if empty
-        if(et){ et.linkedAnimals=et.linkedAnimals.filter(id=>id!==a.id);
-          if(!et.linkedAnimals.length) DB.tasks=DB.tasks.filter(t=>t.id!==et.id); }
-        persist(); renderAnimals(); return;
-      }
-      if(!et){
-        et={id:uid("t_"),title:`${ptype.charAt(0).toUpperCase()+ptype.slice(1)} — ${a.name}`,
-          domainId:null,parentId:null,status:"todo",priority:2,deadline:v,endDate:null,
-          procedureType:ptype,linkedAnimals:[a.id],autoTitle:true,materials:[],notes:"",deps:[],created:Date.now()};
-        DB.tasks.push(et);
-        toast(`Scheduled: ${ptype} on ${v.slice(0,10)}`);
-      } else { et.deadline=v; }
-      persist();
-      if(currentView==="timeline") renderTimeline();
-      renderAnimals(); // redraw chips to show new state
-    });
-  });
   const bvc=card.querySelector(".am-bv-card");
   const bvInstance=bvc?mountBrainViewer(bvc, ()=>a.surgeryDetail||{}):null;
   paintDiary(card.querySelector(".am-diary-block"), a);
@@ -2317,7 +2439,7 @@ function paintDiary(container,a){
   const startD=a.diary.length?new Date([...a.diary].sort((x,y)=>x.date.localeCompare(y.date)).pop().date+"T00:00:00"):new Date();
   let viewY=startD.getFullYear(), viewM=startD.getMonth();
   let selDate=todayDateStr();
-  let visibleTypes=new Set(Object.keys(DIARY_TYPES));
+  let visibleTypes=new Set(diaryTypeDefs().map(t=>t.key));
   let formType=null, editingId=null;
   let expandedIds=new Set(); // entries currently showing their full read-only detail
   const WD=["Su","Mo","Tu","We","Th","Fr","Sa"];
@@ -2328,43 +2450,24 @@ function paintDiary(container,a){
       <button type="button" class="btn accent dg-save" style="font-size:11px;padding:4px 10px">Save</button>
     </div>`;
   }
-  function renderForm(type,d){
+  function renderForm(type,d,entryDate){
     d=d||{};
-    if(type==="weight") return `<div class="dg-form">
-      <label>Weight (g)</label><input class="dg-f-grams" type="text" inputmode="decimal" value="${d.grams!=null?d.grams:""}" placeholder="e.g. 24.3">
-      <label style="margin-top:6px">Note (optional)</label><input class="dg-f-note" type="text" value="${escAttr(d.note||"")}">
-      ${formActions()}</div>`;
-    if(type==="postop") return `<div class="dg-form">
-      <div class="dg-row">
-        <div><label>Days post-op</label><input class="dg-f-daysPost" type="text" inputmode="numeric" value="${d.daysPost!=null?d.daysPost:""}"></div>
-        <div><label>Body condition (1-5)</label><select class="dg-f-bc"><option value="">—</option>${[1,2,3,4,5].map(n=>`<option value="${n}" ${d.bodyCondition===n?"selected":""}>${n}</option>`).join("")}</select></div>
-      </div>
-      <div class="dg-row">
-        <div><label>Wound OK?</label><select class="dg-f-wound"><option value="">—</option><option value="1" ${d.woundOk===true?"selected":""}>Yes</option><option value="0" ${d.woundOk===false?"selected":""}>No</option></select></div>
-        <div><label>Severity</label><select class="dg-f-sev"><option value="">—</option>${["none","mild","moderate","severe"].map(s=>`<option value="${s}" ${d.severity===s?"selected":""}>${s}</option>`).join("")}</select></div>
-      </div>
-      <label>Analgesia</label><input class="dg-f-analgesia" type="text" value="${escAttr(d.analgesia||"")}">
-      <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(d.note||"")}</textarea>
-      ${formActions()}</div>`;
-    if(type==="training") return `<div class="dg-form">
-      <label>Task</label>
+    const isTraining=type==="training";
+    const fieldsHTML=isTraining ? `
+      <label style="margin-top:6px">Task</label>
       <div class="dg-taskwrap">
         <input class="dg-f-task" type="text" autocomplete="off" value="${escAttr(d.task||"")}" placeholder="e.g. 2AFC lick">
         <div class="dg-tasksuggest"></div>
       </div>
       <label style="margin-top:6px">Stage</label><input class="dg-f-stage" type="text" value="${escAttr(d.stage||"")}">
       <div class="dg-metrics-host" style="margin-top:6px">${renderMetricsFields(d.task,d.metrics)}</div>
-      <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(d.note||"")}</textarea>
-      <label style="margin-top:4px;display:flex;align-items:center;gap:5px"><input type="checkbox" class="dg-f-savelib" style="width:auto"> save task name to library</label>
+      <label style="margin-top:4px;display:flex;align-items:center;gap:5px"><input type="checkbox" class="dg-f-savelib" style="width:auto"> save task name to library</label>`
+      : renderTypeFields(type,d);
+    return `<div class="dg-form">
+      <label>Date</label><input class="dg-f-date" type="date" value="${escAttr(entryDate||selDate)}">
+      ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
+      <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
       ${formActions()}</div>`;
-    if(type==="comment") return `<div class="dg-form">
-      <label>Comment</label><textarea class="dg-f-text">${esc(d.text||"")}</textarea>
-      ${formActions()}</div>`;
-    if(type==="note") return `<div class="dg-form">
-      <label>Label</label><input class="dg-f-label" type="text" value="${escAttr(d.label||"")}" placeholder="e.g. Cage change">
-      <label style="margin-top:6px">Details</label><textarea class="dg-f-text">${esc(d.text||"")}</textarea>
-      ${formActions()}</div>`;
-    return "";
   }
   function wireForm(host,type,editing){
     host.querySelector(".dg-cancel").onclick=()=>{ formType=null; editingId=null; draw(); };
@@ -2414,26 +2517,9 @@ function paintDiary(container,a){
       taskInput.addEventListener("blur",()=>{ setTimeout(()=>suggestBox.classList.remove("show"),120); });
     }
     host.querySelector(".dg-save").onclick=()=>{
-      const num=sel=>{ const el=host.querySelector(sel); const raw=(el?el.value:"").trim().replace(",","."); if(raw==="")return null; const n=parseFloat(raw); return isNaN(n)?null:n; };
-      let data=null;
-      if(type==="weight"){
-        const raw=host.querySelector(".dg-f-grams").value.trim().replace(",",".");
-        if(raw===""){ toast("Enter a weight"); return; }
-        const n=parseFloat(raw);
-        if(isNaN(n)){ toast("Enter a number"); return; }
-        if(n<=0||n>200) toast(`${n}g is unusual for a mouse — check the decimal point`);
-        data={grams:n, note:host.querySelector(".dg-f-note").value.trim()};
-      } else if(type==="postop"){
-        const woundSel=host.querySelector(".dg-f-wound").value;
-        data={
-          daysPost:num(".dg-f-daysPost"),
-          bodyCondition:host.querySelector(".dg-f-bc").value?+host.querySelector(".dg-f-bc").value:null,
-          woundOk:woundSel===""?null:woundSel==="1",
-          severity:host.querySelector(".dg-f-sev").value||null,
-          analgesia:host.querySelector(".dg-f-analgesia").value.trim(),
-          note:host.querySelector(".dg-f-note").value.trim()
-        };
-      } else if(type==="training"){
+      const entryDate=host.querySelector(".dg-f-date").value || selDate;
+      let data={};
+      if(type==="training"){
         const taskName=host.querySelector(".dg-f-task").value.trim();
         if(host.querySelector(".dg-f-savelib").checked && taskName && !(DB.config.taskLib||[]).some(t=>t.name===taskName)){
           (DB.config.taskLib=DB.config.taskLib||[]).push({name:taskName,params:[]});
@@ -2451,23 +2537,29 @@ function paintDiary(container,a){
             metrics[el.dataset.key]=raw;
           }
         });
-        data={
-          task:taskName, stage:host.querySelector(".dg-f-stage").value.trim(),
-          metrics,
-          note:host.querySelector(".dg-f-note").value.trim()
-        };
-      } else if(type==="comment"){
-        const text=host.querySelector(".dg-f-text").value.trim();
-        if(!text){ toast("Enter a comment"); return; }
-        data={text};
-      } else if(type==="note"){
-        const text=host.querySelector(".dg-f-text").value.trim();
-        if(!text){ toast("Enter some text"); return; }
-        data={label:host.querySelector(".dg-f-label").value.trim(), text};
+        data={task:taskName, stage:host.querySelector(".dg-f-stage").value.trim(), metrics};
+      } else {
+        // generic field-driven types: read each of this type's defined
+        // fields by its stable key, typed per the field's declared type
+        const def=diaryTypeDef(type);
+        def.fields.forEach(f=>{
+          const el=[...host.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
+          if(!el)return;
+          const raw=el.value;
+          if(f.type==="yesno"){ if(raw!=="")data[f.key]=raw==="1"; return; }
+          if(f.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))data[f.key]=n; return; }
+          if(raw.trim()!=="")data[f.key]=raw.trim();
+        });
+        const noteVal=host.querySelector(".dg-f-note").value.trim();
+        if(!def.fields.length && !noteVal){ toast("Enter something in Note"); return; }
       }
-      if(!data)return;
-      if(editing){ editing.data=data; editing.edited=Date.now(); }
-      else { a.diary.push({id:uid("d_"), type, date:selDate, created:Date.now(), edited:null, data}); }
+      data.note=host.querySelector(".dg-f-note").value.trim();
+      if(editing){ editing.data=data; editing.date=entryDate; editing.edited=Date.now(); }
+      else { a.diary.push({id:uid("d_"), type, date:entryDate, created:Date.now(), edited:null, data}); }
+      // perfusion terminates the animal as part of the procedure, so it always
+      // implies sacrifice (not the reverse) - only for a completed (today or
+      // earlier), not a future-scheduled, entry.
+      if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
       persist();
       formType=null; editingId=null;
       draw();
@@ -2499,14 +2591,14 @@ function paintDiary(container,a){
         }
       }
       const otherTypes=[...new Set(dayEntries.filter(e=>e.type!=="weight"&&visibleTypes.has(e.type)).map(e=>e.type))];
-      const dots=otherTypes.map(t=>`<span class="dg-dot" style="background:${DIARY_TYPES[t].color}" title="${DIARY_TYPES[t].label}"></span>`).join("");
+      const dots=otherTypes.map(t=>`<span class="dg-dot" style="background:${diaryTypeDef(t).color}" title="${diaryTypeDef(t).label}"></span>`).join("");
       const wv=(wEntry&&visibleTypes.has("weight"))?`<span class="wv">${wEntry.data.grams}${trend}</span>`:"";
       cells+=`<div class="${cls.join(" ")}" data-date="${ds}" title="${dayEntries.length?dayEntries.length+" entr"+(dayEntries.length===1?"y":"ies"):"click to add an entry"}">
         <span class="dn">${d}</span>${wv}${dots?`<span class="dg-dots">${dots}</span>`:""}</div>`;
     }
 
-    const typebar=Object.entries(DIARY_TYPES).map(([k,t])=>
-      `<button type="button" class="dg-typebtn ${visibleTypes.has(k)?"on":""}" data-t="${k}"><span style="width:6px;height:6px;border-radius:50%;background:${t.color};display:inline-block"></span>${t.icon} ${t.label}</button>`
+    const typebar=diaryTypeDefs().map(t=>
+      `<button type="button" class="dg-typebtn ${visibleTypes.has(t.key)?"on":""}" data-t="${t.key}"><span style="width:6px;height:6px;border-radius:50%;background:${t.color};display:inline-block"></span>${t.icon} ${t.label}</button>`
     ).join("");
     const dayEntries=a.diary.filter(e=>e.date===selDate).sort((x,y)=>x.created-y.created);
 
@@ -2523,14 +2615,14 @@ function paintDiary(container,a){
         <b style="font-size:11.5px">${selDate||"—"}</b>
         ${formType?"":`<select class="dg-addpick" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:3px 7px;font-size:11px">
           <option value="">＋ add entry…</option>
-          ${Object.entries(DIARY_TYPES).map(([k,t])=>`<option value="${k}">${t.icon} ${t.label}</option>`).join("")}
+          ${diaryTypeDefs().map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}
         </select>`}
       </div>
       <div class="dg-list">
         ${formType?"":(dayEntries.length? dayEntries.map(e=>{const open=expandedIds.has(e.id);return`
-          <div class="dg-entry" style="border-left:3px solid ${DIARY_TYPES[e.type].color}">
+          <div class="dg-entry" style="border-left:3px solid ${diaryTypeDef(e.type).color}">
             <div class="dg-erow">
-              <span>${DIARY_TYPES[e.type].icon}</span>
+              <span>${diaryTypeDef(e.type).icon}</span>
               <span class="dg-esum" title="${escAttr(diaryEntrySummary(e))}">${esc(diaryEntrySummary(e))}</span>
               <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
               <button class="dg-edit" data-id="${e.id}">✎</button>
@@ -2560,7 +2652,7 @@ function paintDiary(container,a){
     if(formType){
       const host=container.querySelector(".dg-formhost");
       const editing=editingId?a.diary.find(e=>e.id===editingId):null;
-      host.innerHTML=renderForm(formType, editing?editing.data:{});
+      host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate);
       wireForm(host,formType,editing);
     }
   }
@@ -2891,7 +2983,6 @@ function animalModal(id){
     <div class="drow">${F("am_cage","Cage",a.cage)}${F("am_sex","Sex",a.sex)}${F("am_strain","Strain",a.strain)}</div>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",a.dob)}</div>
-      <div class="fld" style="flex:1"><label>Surgery</label>${dbtn("am_surg",a.surgery)}</div>
       <div class="fld" style="flex:1"><label>Sacrificed</label>${dbtn("am_sac",a.sacrificed)}</div></div>
     <div class="fld"><label>Status</label>
       <div class="seg" id="am_alive">
@@ -2916,9 +3007,8 @@ function animalModal(id){
     <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`);
 
   // dates
-  let vDob=a.dob||"", vSurg=a.surgery||"", vSac=a.sacrificed||"";
+  let vDob=a.dob||"", vSac=a.sacrificed||"";
   bindDateButton(document.getElementById("am_dob"), ()=>vDob, v=>{vDob=v||"";});
-  bindDateButton(document.getElementById("am_surg"), ()=>vSurg, v=>{vSurg=v||"";});
   bindDateButton(document.getElementById("am_sac"), ()=>vSac, v=>{vSac=v||"";});
 
   // procedure toggles
@@ -3034,7 +3124,7 @@ function animalModal(id){
     const surgery=(hp||win||cleanInjs.length)?{headpost:hp,window:win,injections:cleanInjs}:null;
     const rec={name,cohort:document.getElementById("am_cohort").value,cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
-      dob:vDob,surgery:vSurg,sacrificed:vSac,surgeryDetail:surgery,
+      dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
       termination, alive:termination==="alive",
       comments:document.getElementById("am_com").value.trim()};
     if(id){
@@ -3157,35 +3247,6 @@ function todayDateStr(){ const d=new Date(); const pad=n=>String(n).padStart(2,"
 function applyPerfusionSacrifice(a,date){
   if(!a.sacrificed) a.sacrificed=date;
   if(a.termination==="alive"){ a.termination="sacrificed"; a.alive=false; }
-}
-// direct "mark done" path for a pipeline chip's checkbox — distinct from scheduling a date.
-// surgery is handled separately since a.surgery is a date string (done = has a date), not
-// a boolean like perfusion/histology/microscopy.
-function markProcedureDone(a,ptype){
-  if(ptype==="surgery"){
-    const t=DB.tasks.find(x=>x.procedureType==="surgery"&&(x.linkedAnimals||[]).includes(a.id)&&x.status!=="done");
-    if(t){ t.status="done"; a.surgery=(t.deadline||todayDateStr()).slice(0,10); }
-    else a.surgery=todayDateStr();
-    persist(); toast(`Surgery marked done — ${a.surgery}`);
-    return;
-  }
-  const t=DB.tasks.find(x=>x.procedureType===ptype&&(x.linkedAnimals||[]).includes(a.id)&&x.status!=="done");
-  if(t){ const prev=t.status; t.status="done"; syncProcedureToAnimals(t,prev); }
-  else {
-    a[ptype]=true; toast(`${ptype} marked done`);
-    if(ptype==="perfusion") applyPerfusionSacrifice(a, todayDateStr());
-  }
-  persist();
-}
-// undo path for a done chip — clears the pipeline field and re-opens any linked task
-function markProcedureUndone(a,ptype){
-  if(ptype==="surgery"){ a.surgery=null; }
-  else {
-    a[ptype]=null;
-    const t=DB.tasks.find(x=>x.procedureType===ptype&&(x.linkedAnimals||[]).includes(a.id)&&x.status==="done");
-    if(t) t.status="active";
-  }
-  persist(); toast(`${ptype} marked not done`);
 }
 function cycleStatus(id){
   const t=taskById(id),o=["todo","active","blocked","done"];
