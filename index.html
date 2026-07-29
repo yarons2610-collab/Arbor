@@ -1318,11 +1318,13 @@ function renderTimeline(){
   // any type the user flags) are logged per-animal in the diary now instead
   // of as separate linked tasks, but still need to surface here so the week
   // view reflects the big things happening across every animal, not just
-  // this animal's own diary. Diary entries have no time-of-day, so they're
-  // always all-day banner chips; a future-dated entry reads as a planned/
-  // scheduled procedure rather than a completed one.
+  // this animal's own diary. An entry with no time set is an all-day banner
+  // chip; one with a time renders in the hourly grid at that time, same as a
+  // timed task (see diaryTimedEvents below). A future-dated entry reads as a
+  // planned/scheduled procedure rather than a completed one either way.
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
   const today0=todayDateStr();
+  const diaryTimedEvents=[]; // {an,e,def,isFuture} - rendered into the hourly grid further down
   DB.animals.forEach(an=>{
     (an.diary||[]).forEach(e=>{
       if(!timelineTypeKeys.has(e.type))return;
@@ -1331,6 +1333,7 @@ function renderTimeline(){
       if(d<0||d>6)return;
       const def=diaryTypeDef(e.type);
       const isFuture=e.date>today0;
+      if(e.time){ diaryTimedEvents.push({an,e,def,isFuture,dayIdx:d}); return; }
       const chip=document.createElement("div"); chip.className="cal-evt";
       chip.style.cssText=`background:${def.color}22;border-left:3px solid ${def.color};color:${def.color}`;
       chip.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
@@ -1375,6 +1378,36 @@ function renderTimeline(){
       });
       const totalCols=colEnds.length;
       cluster.forEach(ev=>timedLayout.set(ev.t.id,{col:ev.col,totalCols}));
+      cluster=[];
+    };
+    dayEvents.forEach(ev=>{
+      if(ev.startMin>=clusterEnd){ flush(); clusterEnd=-Infinity; }
+      cluster.push(ev);
+      clusterEnd=Math.max(clusterEnd,ev.endMin);
+    });
+    flush();
+  }
+  // same column-packing, run separately for timed diary entries (fixed 60min
+  // slot - diary entries don't have a duration field) so a task and a diary
+  // entry at the same hour don't need to know about each other's layout.
+  const diaryTimedLayout=new Map(); // entry.id -> {col, totalCols}
+  for(let d=0;d<7;d++){
+    const dayEvents=diaryTimedEvents.filter(x=>x.dayIdx===d).map(x=>{
+      const [hh,mm]=x.e.time.split(":").map(Number);
+      const startMin=hh*60+(mm||0);
+      return {x,startMin,endMin:startMin+60};
+    }).sort((a,b)=>a.startMin-b.startMin||a.endMin-b.endMin);
+    let cluster=[], clusterEnd=-Infinity;
+    const flush=()=>{
+      if(!cluster.length)return;
+      const colEnds=[];
+      cluster.forEach(ev=>{
+        let ci=colEnds.findIndex(end=>end<=ev.startMin);
+        if(ci===-1){ ci=colEnds.length; colEnds.push(ev.endMin); } else colEnds[ci]=ev.endMin;
+        ev.col=ci;
+      });
+      const totalCols=colEnds.length;
+      cluster.forEach(ev=>diaryTimedLayout.set(ev.x.e.id,{col:ev.col,totalCols}));
       cluster=[];
     };
     dayEvents.forEach(ev=>{
@@ -1430,6 +1463,25 @@ function renderTimeline(){
         beginTimedEventDrag(mode,t,evt,e);
       });
       hourCells[di].cell.appendChild(evt);
+    });
+    // place timed diary entries (procedures etc. logged with a specific time)
+    // in the same hourly grid - read-only (no drag/resize, unlike tasks),
+    // clicking still navigates to that animal's diary like the all-day chip does.
+    diaryTimedEvents.forEach(({an,e,def,isFuture,dayIdx})=>{
+      const [hh,mm]=e.time.split(":").map(Number);
+      if(hh!==h) return;
+      const topPct=((mm||0)/60)*100;
+      const{col:colIdx,totalCols}=diaryTimedLayout.get(e.id)||{col:0,totalCols:1};
+      const colPct=100/totalCols;
+      const evt=document.createElement("div"); evt.className="cal-evt-timed";
+      evt.style.cssText=`top:${topPct}%;height:100%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${def.color}dd;color:#fff;border-left:3px solid ${def.color};z-index:2`;
+      evt.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div><div class="es">${e.time}</div>`;
+      evt.title=`${def.label} — ${an.name} — ${e.date} ${e.time}${isFuture?" (scheduled)":""}`;
+      evt.onclick=()=>{
+        animalSearch=an.name; DB.config.animalFilters.search=animalSearch; persist();
+        switchTo("animals");
+      };
+      hourCells[dayIdx].cell.appendChild(evt);
     });
     // click-to-create on hour cells
     hourCells.forEach(({cell,day})=>{
@@ -2230,20 +2282,21 @@ function renderTypeFields(type,d){
 }
 function diaryEntrySummary(e){
   const d=e.data||{};
-  if(e.type==="training") return [d.task, d.stage, ...trainingMetricsDisplay(e).map(x=>`${x.label} ${x.val}`), d.note].filter(Boolean).join(" · ")||"—";
+  const timePrefix=e.time?`${e.time} · `:"";
+  if(e.type==="training") return timePrefix+([d.task, d.stage, ...trainingMetricsDisplay(e).map(x=>`${x.label} ${x.val}`), d.note].filter(Boolean).join(" · ")||"—");
   const def=diaryTypeDef(e.type);
   const parts=def.fields.map(f=>{
     const v=d[f.key]; if(v==null||v==="")return null;
     return `${f.label} ${f.type==="yesno"?(v?"Yes":"No"):v}`;
   }).filter(Boolean);
   const note=diaryNoteOf(d); if(note)parts.push(note);
-  return parts.join(" · ")||"—";
+  return timePrefix+(parts.join(" · ")||"—");
 }
 // full read-only breakdown of an entry (view mode, as opposed to the edit
 // form) — reuses the same labeled-row look as the surgery detail rows (arow).
 function diaryEntryDetailHTML(e){
   const d=e.data||{};
-  const rows=[];
+  const rows=[arow("Time", e.time)];
   if(e.type==="training"){
     rows.push(arow("Task", d.task));
     rows.push(arow("Stage", d.stage));
@@ -2450,7 +2503,7 @@ function paintDiary(container,a){
       <button type="button" class="btn accent dg-save" style="font-size:11px;padding:4px 10px">Save</button>
     </div>`;
   }
-  function renderForm(type,d,entryDate){
+  function renderForm(type,d,entryDate,entryTime){
     d=d||{};
     const isTraining=type==="training";
     const fieldsHTML=isTraining ? `
@@ -2464,7 +2517,11 @@ function paintDiary(container,a){
       <label style="margin-top:4px;display:flex;align-items:center;gap:5px"><input type="checkbox" class="dg-f-savelib" style="width:auto"> save task name to library</label>`
       : renderTypeFields(type,d);
     return `<div class="dg-form">
-      <label>Date</label><input class="dg-f-date" type="date" value="${escAttr(entryDate||selDate)}">
+      <div class="dg-row">
+        <div><label>Date</label><input class="dg-f-date" type="date" value="${escAttr(entryDate||selDate)}"></div>
+        <div><label>Time (optional)</label><input class="dg-f-time" type="time" value="${escAttr(entryTime||"")}"></div>
+      </div>
+      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin:-2px 0 6px">no time = shows as an all-day item on the Timeline; set one to place it in the hourly view, like a task</div>
       ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
       ${formActions()}</div>`;
@@ -2518,6 +2575,7 @@ function paintDiary(container,a){
     }
     host.querySelector(".dg-save").onclick=()=>{
       const entryDate=host.querySelector(".dg-f-date").value || selDate;
+      const entryTime=host.querySelector(".dg-f-time").value || null;
       let data={};
       if(type==="training"){
         const taskName=host.querySelector(".dg-f-task").value.trim();
@@ -2554,8 +2612,8 @@ function paintDiary(container,a){
         if(!def.fields.length && !noteVal){ toast("Enter something in Note"); return; }
       }
       data.note=host.querySelector(".dg-f-note").value.trim();
-      if(editing){ editing.data=data; editing.date=entryDate; editing.edited=Date.now(); }
-      else { a.diary.push({id:uid("d_"), type, date:entryDate, created:Date.now(), edited:null, data}); }
+      if(editing){ editing.data=data; editing.date=entryDate; editing.time=entryTime; editing.edited=Date.now(); }
+      else { a.diary.push({id:uid("d_"), type, date:entryDate, time:entryTime, created:Date.now(), edited:null, data}); }
       // perfusion terminates the animal as part of the procedure, so it always
       // implies sacrifice (not the reverse) - only for a completed (today or
       // earlier), not a future-scheduled, entry.
@@ -2652,7 +2710,7 @@ function paintDiary(container,a){
     if(formType){
       const host=container.querySelector(".dg-formhost");
       const editing=editingId?a.diary.find(e=>e.id===editingId):null;
-      host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate);
+      host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate, editing?editing.time:"");
       wireForm(host,formType,editing);
     }
   }
