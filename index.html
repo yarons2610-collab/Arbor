@@ -868,8 +868,9 @@ function fmtWhenFull(s){ if(!s)return""; const d=whenDate(s); let x=d.toLocaleDa
 /* ---- custom calendar popover: click a day, then type the time ---- */
 let _calEls=null;
 function closeCalendar(){ if(_calEls){ _calEls.pop.remove(); document.removeEventListener("mousedown",_calEls.out,true); _calEls=null; } }
-function openCalendar(anchor, value, onPick){
+function openCalendar(anchor, value, onPick, minuteStep){
   closeCalendar();
+  minuteStep=minuteStep||5;
   const WD=["Su","Mo","Tu","We","Th","Fr","Sa"];
   let sel = value ? whenDate(value) : null;
   let selH = (value&&value.length>10) ? +value.slice(11,13) : -1;  // -1 = no time
@@ -906,7 +907,7 @@ function openCalendar(anchor, value, onPick){
     for(let d=1;d<=dim;d++){ const dd=new Date(vy,vm,d);
       cells+=`<div class="cal-day${sameDay(dd,sel)?" sel":""}${sameDay(dd,today)?" today":""}" data-d="${d}">${d}</div>`; }
     const hours=Array.from({length:24},(_,h)=>`<div class="drum-item${h===selH?" sel":""}" data-v="${h}">${String(h).padStart(2,"0")}</div>`).join("");
-    const mins=[0,5,10,15,20,25,30,35,40,45,50,55].map(m=>`<div class="drum-item${m===selM?" sel":""}" data-v="${m}">${String(m).padStart(2,"0")}</div>`).join("");
+    const mins=Array.from({length:Math.ceil(60/minuteStep)},(_,i)=>i*minuteStep).map(m=>`<div class="drum-item${m===selM?" sel":""}" data-v="${m}">${String(m).padStart(2,"0")}</div>`).join("");
     pop.innerHTML=`<div class="cal-h"><button class="cal-nav" data-nav="-1">‹</button>
         <b>${new Date(vy,vm,1).toLocaleDateString(undefined,{month:"long",year:"numeric"})}</b>
         <button class="cal-nav" data-nav="1">›</button></div>
@@ -963,10 +964,10 @@ function openCalendar(anchor, value, onPick){
   document.addEventListener("mousedown",out,true);
   _calEls={pop,out};
 }
-function bindDateButton(btn, getVal, setVal){
+function bindDateButton(btn, getVal, setVal, minuteStep){
   btn.onclick=()=>openCalendar(btn, getVal(), v=>{ setVal(v);
     btn.innerHTML = `<span style="opacity:.55;margin-right:6px">📅</span>${v? fmtWhenFull(v) : "set date"}`;
-    btn.classList.toggle("datebtn-empty",!v); });
+    btn.classList.toggle("datebtn-empty",!v); }, minuteStep);
 }
 function toast(m){ const e=document.getElementById("toast"); e.textContent=m; e.classList.add("show"); clearTimeout(e._t); e._t=setTimeout(()=>e.classList.remove("show"),1900); }
 function esc(s){return String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
@@ -2516,18 +2517,20 @@ function paintDiary(container,a){
       <div class="dg-metrics-host" style="margin-top:6px">${renderMetricsFields(d.task,d.metrics)}</div>
       <label style="margin-top:4px;display:flex;align-items:center;gap:5px"><input type="checkbox" class="dg-f-savelib" style="width:auto"> save task name to library</label>`
       : renderTypeFields(type,d);
+    const dtVal=(entryDate||selDate)+(entryTime?"T"+entryTime:"");
     return `<div class="dg-form">
-      <div class="dg-row">
-        <div><label>Date</label><input class="dg-f-date" type="date" value="${escAttr(entryDate||selDate)}"></div>
-        <div><label>Time (optional)</label><input class="dg-f-time" type="time" value="${escAttr(entryTime||"")}"></div>
-      </div>
-      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin:-2px 0 6px">no time = shows as an all-day item on the Timeline; set one to place it in the hourly view, like a task</div>
+      <label>Date &amp; time</label>
+      <button type="button" class="datebtn dg-f-datetime ${dtVal?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${dtVal?fmtWhenFull(dtVal):"set date"}</button>
+      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin:4px 0 6px">no time set = shows as an all-day item on the Timeline; set one to place it in the hourly view, like a task</div>
       ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
       ${formActions()}</div>`;
   }
   function wireForm(host,type,editing){
     host.querySelector(".dg-cancel").onclick=()=>{ formType=null; editingId=null; draw(); };
+    // shared date+time picker (same drum-scroll UI tasks use), 15-minute steps
+    let dtValue=(editing?editing.date:selDate)+(editing&&editing.time?"T"+editing.time:"");
+    bindDateButton(host.querySelector(".dg-f-datetime"), ()=>dtValue, v=>{ dtValue=v||selDate; }, 15);
     if(type==="training"){
       // swap in the selected task's own parameter fields as its name changes,
       // and drive a themed suggestion dropdown in place of a native <datalist>
@@ -2574,8 +2577,8 @@ function paintDiary(container,a){
       taskInput.addEventListener("blur",()=>{ setTimeout(()=>suggestBox.classList.remove("show"),120); });
     }
     host.querySelector(".dg-save").onclick=()=>{
-      const entryDate=host.querySelector(".dg-f-date").value || selDate;
-      const entryTime=host.querySelector(".dg-f-time").value || null;
+      const entryDate=(dtValue||selDate).slice(0,10);
+      const entryTime=hasTime(dtValue)?dtValue.slice(11,16):null;
       let data={};
       if(type==="training"){
         const taskName=host.querySelector(".dg-f-task").value.trim();
