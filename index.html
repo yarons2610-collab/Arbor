@@ -242,6 +242,9 @@
   .bv-sub-toggle{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);border-radius:8px;padding:5px 10px;font-size:11.5px;cursor:pointer}
   .bv-sub-toggle:hover{border-color:var(--gold)}
   .bv-sub-toggle.on{background:linear-gradient(180deg,#3a2e14,#302410);border-color:#8a6a2f;color:#ffd166}
+  .bv-dvmode{flex:0 0 auto;padding-right:8px;border-right:1px solid var(--line2)}
+  .bv-dvmode button{flex:0 0 auto;padding:5px 10px;font-size:11.5px;border-radius:8px}
+  .bv-dvmode button.on{color:var(--cyan);border-color:var(--cyan)}
   .bv-expand:hover{border-color:var(--gcamp);color:var(--ink)}
   .perf-suggest{animation:pulse 2s ease-in-out infinite}
   .adc-btn{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:20px;padding:2px 9px;font-family:var(--mono);font-size:10.5px;cursor:pointer;transition:.12s}
@@ -350,6 +353,11 @@
   .modal{width:460px;max-width:92vw;max-height:88vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:16px;padding:22px;box-shadow:0 30px 80px -30px #000}
   .modal h3{font-family:var(--disp);margin:0 0 16px;font-size:17px}
   .modal .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
+  /* wide modals (e.g. animal editor) default bigger, and are user-resizable via
+     the native bottom-right resize handle since one screen's "wide enough" isn't another's */
+  .modal.modal-wide{width:760px;min-width:460px;max-width:96vw;resize:horizontal}
+  .modal-back{font-family:var(--mono);font-size:11px;color:var(--ink-dim);background:transparent;border:0;cursor:pointer;padding:2px 0;margin-bottom:10px;display:inline-flex;align-items:center;gap:5px}
+  .modal-back:hover{color:var(--ink)}
   .toast{position:absolute;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--panel2);border:1px solid var(--line2);color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;z-index:60;pointer-events:none}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
   /* Materials sub-tabs */
@@ -374,9 +382,9 @@
       transform:translateY(100%)}
     .detail.open{transform:translateY(0)}
     /* modals: bottom sheet */
-    .modal{width:100%!important;max-width:100%!important;padding:16px;
+    .modal{width:100%!important;max-width:100%!important;min-width:0!important;padding:16px;
       border-radius:16px 16px 0 0;position:fixed;bottom:0;left:0;right:0;
-      max-height:92vh;margin:0}
+      max-height:92vh;margin:0;resize:none}
     .scrim{align-items:flex-end}
     /* short utility modals (e.g. the "⋯" backup/restore menu): centered popup
        instead of a bottom sheet — a 3-button menu pinned to the bottom reads as
@@ -420,6 +428,7 @@
       <button class="tab on" data-v="animals">Animals</button>
     </div>
     <div class="spacer"></div>
+    <button class="readbtn" id="notifyNudge" title="Upcoming/due items" style="display:none">🔔<span class="cnt" id="notifyCnt">0</span></button>
     <button class="readbtn" id="readNudge" title="Unread mandatory reading" style="display:none">📚 Reading<span class="cnt" id="readCnt">0</span></button>
     <button class="btn ghost" id="expCal" title="Export scheduled tasks as an .ics calendar file">↗ Calendar</button>
     <span id="saveState" title="Save status — click to download a backup if auto-save is off" style="font-family:var(--mono);font-size:11px;padding:0 6px;user-select:none"></span>
@@ -799,7 +808,13 @@ function migrate(){                       // backfill fields added in later vers
   // now-redundant procedure tasks were converted to diary entries above (or
   // had no linked animal to convert onto) - drop them so the Timeline doesn't
   // show the same procedure twice once it starts reading diary entries too.
-  DB.tasks=DB.tasks.filter(t=>!t.procedureType);
+  // Gated to run once ever (not every boot): this used to run unconditionally
+  // on every migrate() call, which silently deleted ANY task carrying a
+  // procedureType — including ones a user had just created through the old
+  // "Procedure type" field, which lived on well after this migration (that
+  // field is now removed; see below). A task set that way would look fine
+  // until the next reload, then vanish with no diary entry to show for it.
+  if(!DB._procTasksPruned){ DB.tasks=DB.tasks.filter(t=>!t.procedureType); DB._procTasksPruned=true; }
   if(!DB.cohorts)DB.cohorts=[];
   // build cohort entities from any cohort names present on animals, linking via the seed map
   const names=[...new Set([...DB.animals.map(a=>a.cohort).filter(Boolean), ...Object.keys(COHORT_DOMAIN_SEED)])];
@@ -1051,6 +1066,7 @@ function switchTo(v){
 }
 function render(){
   updateReadNudge();
+  updateNotifyNudge();
   if(currentView==="arbor")renderArbor();
   else if(currentView==="outline")renderOutline();
   else if(currentView==="timeline")renderTimeline();
@@ -1064,6 +1080,68 @@ function updateReadNudge(){
   btn.title=n>0?`${n} mandatory paper${n>1?"s":""} still unread`:"All mandatory reading done";
 }
 document.getElementById("readNudge").addEventListener("click",()=>switchTo("reading"));
+
+// ---- notifications: overdue/due-soon tasks + upcoming/due diary entries (procedures etc.) ----
+// Deliberately a small badge, not a tab: visible the moment something needs
+// attention, invisible (not just quiet) the rest of the time, so it never
+// competes with Timeline/Materials/Animals for a permanent slot.
+const NOTIFY_TASK_LOOKAHEAD_DAYS=3, NOTIFY_DIARY_LOOKAHEAD_DAYS=7;
+function addDays(dateStr,n){ const d=new Date(dateStr+"T00:00:00"); d.setDate(d.getDate()+n);
+  const pad=x=>String(x).padStart(2,"0"); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+function upcomingNotifications(){
+  const today=todayDateStr();
+  const taskHorizon=addDays(today,NOTIFY_TASK_LOOKAHEAD_DAYS);
+  const tasks=DB.tasks.filter(t=>t.deadline&&t.status!=="done"&&t.deadline.slice(0,10)<=taskHorizon)
+    .map(t=>({t,overdue:dueClass(t.deadline,t.status,t.endDate)==="overdue"}))
+    .sort((x,y)=>x.t.deadline.localeCompare(y.t.deadline));
+  const diaryHorizon=addDays(today,NOTIFY_DIARY_LOOKAHEAD_DAYS);
+  const timelineTypeKeys=new Set(diaryTypeDefs().filter(d=>d.timeline).map(d=>d.key));
+  const diaryItems=[];
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
+    if(!timelineTypeKeys.has(e.type))return;
+    if(e.date>=today&&e.date<=diaryHorizon) diaryItems.push({a,e});
+  }));
+  diaryItems.sort((x,y)=>x.e.date.localeCompare(y.e.date));
+  return {tasks,diaryItems};
+}
+function updateNotifyNudge(){
+  const {tasks,diaryItems}=upcomingNotifications();
+  const n=tasks.length+diaryItems.length;
+  const btn=document.getElementById("notifyNudge");
+  document.getElementById("notifyCnt").textContent=n;
+  btn.style.display=n>0?"":"none";
+  btn.classList.toggle("due",tasks.some(x=>x.overdue));
+  btn.title=n>0?`${n} upcoming/due item${n!==1?"s":""}`:"Nothing due";
+}
+function openNotificationsModal(){
+  const {tasks,diaryItems}=upcomingNotifications();
+  const today=todayDateStr();
+  const taskRows=tasks.map(({t,overdue})=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+    <span style="width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:${overdue?"var(--overdue)":"var(--amber)"}"></span>
+    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title||"(untitled task)")}</span>
+    <span style="font-family:var(--mono);font-size:10.5px;color:${overdue?"var(--overdue)":"var(--ink-faint)"};flex:0 0 auto">${overdue?"overdue · ":""}${fmtWhenFull(t.deadline)}</span>
+    <button class="ntf-opentask" data-id="${t.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
+  </div>`).join("");
+  const diaryRows=diaryItems.map(({a,e})=>{ const def=diaryTypeDef(e.type);
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+    <span style="flex:0 0 auto">${def.icon}</span>
+    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)} — ${esc(def.label)}</span>
+    <span style="font-family:var(--mono);font-size:10.5px;color:${e.date===today?"var(--amber)":"var(--ink-faint)"};flex:0 0 auto">${e.date===today?"today":e.date}${e.time?" "+e.time:""}</span>
+    <button class="ntf-openanimal" data-name="${escAttr(a.name)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
+  </div>`; }).join("");
+  modal(`<h3>Upcoming &amp; due</h3>
+    <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px">Tasks (overdue, or due within ${NOTIFY_TASK_LOOKAHEAD_DAYS} days)</div>
+    ${taskRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
+    <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:14px 0 6px">Animal diary — scheduled within ${NOTIFY_DIARY_LOOKAHEAD_DAYS} days</div>
+    ${diaryRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+  document.getElementById("modal").addEventListener("click",e=>{
+    const ot=e.target.closest(".ntf-opentask"), oa=e.target.closest(".ntf-openanimal");
+    if(ot){ closeModal(); switchTo("timeline"); openDetail(ot.dataset.id); }
+    else if(oa){ closeModal(); animalSearch=oa.dataset.name; DB.config.animalFilters.search=animalSearch; persist(); switchTo("animals"); }
+  });
+}
+document.getElementById("notifyNudge").addEventListener("click",openNotificationsModal);
 
 /* ---------- ARBOR — floating somata + branching subtasks (force graph) ----------
    Domains float as somata; tasks branch from their parent (or the soma) via solid links.
@@ -1279,7 +1357,6 @@ function taskNode(t){
 }
 
 /* ---------- TIMELINE (scheduled times) ---------- */
-const PROC_ICON={"surgery":"🔧","perfusion":"🔴","histology":"🔬","microscopy":"🔭"};
 let calWeekOffset=0; // weeks from current week; 0=this week, -1=last, +1=next
 
 function weekStart(offset){
@@ -1522,7 +1599,7 @@ function renderTimeline(){
       evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
       const timeStr=dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
       const durLabel=durationMins!==60?` (${durationMins}m)`:"";
-      evt.innerHTML=`<div class="cal-evt-resize cal-evt-resize-top"></div><div class="et">${esc(t.title)}</div><div class="es">${timeStr}${durLabel}${t.procedureType?" "+PROC_ICON[t.procedureType]:""}</div><div class="cal-evt-resize cal-evt-resize-bottom"></div>`;
+      evt.innerHTML=`<div class="cal-evt-resize cal-evt-resize-top"></div><div class="et">${esc(t.title)}</div><div class="es">${timeStr}${durLabel}</div><div class="cal-evt-resize cal-evt-resize-bottom"></div>`;
       // Pointer Events (not mousedown) so this works from touch too — mobile never
       // fires mousemove/mouseup during a touch-drag gesture, which is why dragging
       // had no effect at all on the phone (the whole feature was mouse-only).
@@ -1568,7 +1645,7 @@ function renderTimeline(){
         if(e.target!==cell&&!e.target.classList.contains("cal-hour-cell")) return;
         const pad=n=>String(n).padStart(2,"0");
         const dl=`${day.getFullYear()}-${pad(day.getMonth()+1)}-${pad(day.getDate())}T${pad(h)}:00`;
-        openNewTaskModal(dl);
+        openTimelineCreateModal(dl);
       });
     });
     // now-line on current hour
@@ -2056,6 +2133,11 @@ function renderTaskLib(){
    A type's `key` is immutable once created (existing entries reference it) -
    only label/icon/color/timeline/fields are editable. */
 const DIARY_FIELD_TYPES=["number","text","yesno","select"];
+// curated picker for diary-type icons — the free-text field next to it still
+// takes any character/emoji typed directly, this is just a quick-pick list
+// covering common lab/animal/medical symbols so most people never need to
+// hunt down an emoji elsewhere.
+const DIARY_ICON_CHOICES=["⚖️","🩹","🎓","💬","🔪","💉","🧫","🔬","🔭","🩺","💊","🧪","🧬","🩸","🦴","🧠","❤️","🫀","🫁","🐭","🐁","📋","📌","📝","📅","⏰","✅","⚠️","🔥","❄️","🧊","🌡️","🔦","📷","🧴","🧯","🔖","⭐","✨","🎯","💧","🧻","🚨","🔋","🧹"];
 function renderDiaryTypesLib(){
   const host = document.getElementById("ms-diarytypes"); host.innerHTML = "";
   const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
@@ -2075,6 +2157,10 @@ function renderDiaryTypesLib(){
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:9px;flex-wrap:wrap">
           <input type="color" class="ldt_color" data-ti="${i}" value="${t.color&&t.color.startsWith("#")?t.color:"#54e08a"}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
           <input class="ldt_icon" data-ti="${i}" value="${escAttr(t.icon||"")}" placeholder="🔖" style="width:44px;text-align:center;flex:0 0 auto;${IST}">
+          <select class="ldt_iconpick" data-ti="${i}" title="pick an icon" style="flex:0 0 auto;width:46px;${IST}">
+            <option value="">▾</option>
+            ${DIARY_ICON_CHOICES.map(e=>`<option value="${e}" ${t.icon===e?"selected":""}>${e}</option>`).join("")}
+          </select>
           <input class="ldt_label" data-ti="${i}" value="${escAttr(t.label)}" placeholder="Type name (e.g. Cage change)" style="flex:1;min-width:140px;${IST}">
           <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto"><input type="checkbox" class="ldt_timeline" data-ti="${i}" style="width:auto" ${t.timeline?"checked":""}> shows on Timeline</label>
           <button class="ldt_del" data-ti="${i}"
@@ -2120,6 +2206,7 @@ function renderDiaryTypesLib(){
   wrap.addEventListener("change", e => {
     const ti = +e.target.dataset.ti; const t = (DB.config.diaryTypes||[])[ti]; if(!t) return;
     if(e.target.classList.contains("ldt_color"))    { t.color = e.target.value; persist(); return; }
+    if(e.target.classList.contains("ldt_iconpick")) { if(e.target.value){ t.icon = e.target.value; persist(); paintDTRows(); } return; }
     if(e.target.classList.contains("ldt_timeline")) { t.timeline = e.target.checked; persist(); return; }
     if(e.target.classList.contains("ldf_type")) {
       const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.type = e.target.value; persist(); paintDTRows(); }
@@ -2398,10 +2485,11 @@ function renderAnimals(){
   bar.style.cssText="margin-bottom:16px";
   const row=(label,id,cur,opts)=>`<div class="af-row"><span class="af-label">${label}</span><div class="seg" id="${id}">${opts.map(o=>`<button data-v="${o[0]}" class="${cur===o[0]?"on":""}">${o[1]}</button>`).join("")}</div></div>`;
   bar.innerHTML=`
-    <div style="display:flex;justify-content:space-between;gap:8px;margin-bottom:10px;align-items:center">
+    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin-bottom:10px;align-items:center">
       <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search name, cage, cohort, strain, notes…"
-        style="flex:1;max-width:340px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
-      <div style="display:flex;gap:8px">
+        style="flex:1 1 160px;max-width:340px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <button class="btn ghost" id="a_eventlog">📋 Event log</button>
         <button class="btn ghost" id="a_cohortNew">＋ Cohort</button><button class="btn accent" id="a_add">＋ Animal</button>
       </div>
     </div>
@@ -2429,6 +2517,7 @@ function renderAnimals(){
   });
   bar.querySelector("#a_add").onclick=()=>animalModal(null);
   bar.querySelector("#a_cohortNew").onclick=()=>cohortModal(null);
+  bar.querySelector("#a_eventlog").onclick=()=>openEventLogModal(null);
 
   function pipeMatch(a){
     if(animalPipe==="all")           return true;
@@ -2508,6 +2597,7 @@ function animalCard(a){
       <span style="font-weight:500;font-size:14px">${esc(a.name)}</span>
       <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">${esc(a.cage||"")}${a.sex?" · "+esc(a.sex):""}${a.strain?" · "+esc(a.strain):""}${aw!=null?" · "+aw+"w":""}${lw!=null?" · ⚖ "+lw+"g":""}</span>
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:100%;justify-content:flex-end">
+        <button class="a-log" data-id="${a.id}" title="Chronological event log" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">📋</button>
         <button class="a-edit" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px">✎</button>
         <button class="a-exp" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">▾</button>
       </span>
@@ -2537,6 +2627,7 @@ function animalCard(a){
     // doesn't require opening "Enlarge" once before the inline view works
     if(!open&&bvInstance)bvInstance.refresh();};
   card.querySelector(".a-edit").onclick=()=>animalModal(a.id);
+  card.querySelector(".a-log").onclick=()=>openEventLogModal([a.id]);
   // inline date buttons for born / surgery / sacrificed
   card.querySelectorAll(".adc-btn").forEach(btn=>{
     const field=btn.dataset.field;
@@ -2556,6 +2647,101 @@ function animalCard(a){
   paintDiary(card.querySelector(".am-diary-block"), a);
 
   return card;
+}
+// Chronological, date-by-date view of every diary entry — for one animal (the
+// card's 📋 button) or any combination (the Animals toolbar's 📋 Event log
+// button, which opens with every animal selected and lets you narrow down).
+// Exportable as plain text or as an Excel workbook.
+function openEventLogModal(presetIds){
+  const allAnimals=[...DB.animals].sort((x,y)=>x.name.localeCompare(y.name));
+  let selected=new Set(presetIds&&presetIds.length?presetIds:allAnimals.map(a=>a.id));
+
+  function events(){
+    const out=[];
+    allAnimals.forEach(a=>{ if(selected.has(a.id)) (a.diary||[]).forEach(e=>out.push({a,e})); });
+    out.sort((x,y)=> x.e.date<y.e.date?-1:x.e.date>y.e.date?1:(x.e.time||"").localeCompare(y.e.time||""));
+    return out;
+  }
+  // diaryEntrySummary already prefixes "HH:MM–HH:MM · " when a time is set —
+  // reused here rather than re-derived, minus that prefix since time gets its
+  // own column/label wherever this is shown.
+  function summaryNoTime(e){
+    const s=diaryEntrySummary(e); if(!e.time) return s;
+    const prefix=`${e.time}${e.endTime?"–"+e.endTime:""} · `;
+    return s.startsWith(prefix)?s.slice(prefix.length):s;
+  }
+  function lineFor(a,e){
+    const def=diaryTypeDef(e.type);
+    const time=e.time?`${e.time}${e.endTime?"–"+e.endTime:""} · `:"";
+    return `${def.icon} ${time}${a.name} — ${def.label}: ${summaryNoTime(e)}`;
+  }
+
+  modal(`<h3>Event log</h3>
+    <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+      <div style="flex:0 0 200px">
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <button type="button" class="btn ghost" id="el_all" style="font-size:11px;padding:3px 8px">All</button>
+          <button type="button" class="btn ghost" id="el_none" style="font-size:11px;padding:3px 8px">None</button>
+        </div>
+        <div id="el_animals" style="max-height:360px;overflow:auto;border:1px solid var(--line2);border-radius:8px;padding:6px"></div>
+      </div>
+      <div style="flex:1;min-width:280px">
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <button class="btn ghost" id="el_txt" style="font-size:12px">↓ Export .txt</button>
+          <button class="btn ghost" id="el_xlsx" style="font-size:12px">↓ Export .xlsx</button>
+        </div>
+        <div id="el_list" style="max-height:400px;overflow:auto;font-size:12.5px;line-height:1.6"></div>
+      </div>
+    </div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+
+  const animalsHost=document.getElementById("el_animals");
+  function paintAnimalList(){
+    animalsHost.innerHTML=allAnimals.map(a=>`<label style="display:flex;align-items:center;gap:6px;padding:2px 0;font-size:12px;cursor:pointer">
+      <input type="checkbox" class="el_a" data-id="${a.id}" style="width:auto" ${selected.has(a.id)?"checked":""}>${esc(a.name)}</label>`).join("")
+      || `<div style="font-size:11px;color:var(--ink-faint)">no animals yet</div>`;
+  }
+  function paintList(){
+    const evs=events();
+    const host=document.getElementById("el_list");
+    if(!evs.length){ host.innerHTML=`<div style="font-size:11px;color:var(--ink-faint)">no events for the selected animal(s)</div>`; return; }
+    let lastDate=null, html="";
+    evs.forEach(({a,e})=>{
+      if(e.date!==lastDate){ lastDate=e.date; html+=`<div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px">${e.date}</div>`; }
+      html+=`<div style="border-left:3px solid ${diaryTypeDef(e.type).color};padding-left:8px;margin-bottom:4px">${esc(lineFor(a,e))}</div>`;
+    });
+    host.innerHTML=html;
+  }
+  paintAnimalList(); paintList();
+
+  animalsHost.addEventListener("change",e=>{
+    const cb=e.target.closest(".el_a"); if(!cb)return;
+    if(cb.checked)selected.add(cb.dataset.id); else selected.delete(cb.dataset.id);
+    paintList();
+  });
+  document.getElementById("el_all").onclick=()=>{ selected=new Set(allAnimals.map(a=>a.id)); paintAnimalList(); paintList(); };
+  document.getElementById("el_none").onclick=()=>{ selected=new Set(); paintAnimalList(); paintList(); };
+
+  document.getElementById("el_txt").onclick=()=>{
+    const evs=events(); if(!evs.length){ toast("Nothing to export"); return; }
+    let lastDate=null, txt=`Arbor event log — exported ${new Date().toLocaleString()}\r\n`;
+    evs.forEach(({a,e})=>{
+      if(e.date!==lastDate){ lastDate=e.date; txt+=`\r\n${e.date}\r\n${"-".repeat(e.date.length)}\r\n`; }
+      txt+=`  ${lineFor(a,e)}\r\n`;
+    });
+    download("arbor_event_log.txt",txt,"text/plain");
+    toast(`Exported ${evs.length} events`);
+  };
+  document.getElementById("el_xlsx").onclick=()=>{
+    const evs=events(); if(!evs.length){ toast("Nothing to export"); return; }
+    const rows=[["Date","Time","Animal","Cohort","Type","Summary"]];
+    evs.forEach(({a,e})=>{
+      const def=diaryTypeDef(e.type);
+      rows.push([e.date, e.time?`${e.time}${e.endTime?"–"+e.endTime:""}`:"", a.name, a.cohort||"", def.label, summaryNoTime(e)]);
+    });
+    downloadExcel("arbor_event_log.xls",[{name:"Events",rows}]);
+    toast(`Exported ${evs.length} events`);
+  };
 }
 function arow(label,val){ return val?`<div><span style="display:inline-block;width:78px;color:var(--ink-faint);font-family:var(--mono);font-size:10px">${label}</span>${esc(String(val))}</div>`:""; }
 // diary as a unified small month calendar — every entry type (weight, post-op,
@@ -2849,6 +3035,7 @@ const REGION_POS={ "M1 / motor cortex":{ap:0.8,ml:1.5,dv:-1.0}, "Thalamus":{ap:-
   "Cerebellum":{ap:-6.0,ml:1.0,dv:-2.4} };
 const REGIONS=Object.keys(REGION_POS);
 const INJ_COLORS=["#54e08a","#ff5f92","#3fd0d6","#f2b756","#a98cff","#ff8a6b"];
+const EXPRESSION_DOT_COUNTS={low:5,medium:12,high:22};
 const _lin=(v,d0,d1,r0,r1)=>r0+((+v||0)-d0)*(r1-r0)/(d1-d0);
 function planeXY(plane,ap,ml,dv){
   if(plane==="sagittal") return [_lin(ap,5,-8,52,250), _lin(dv,0,-6,60,150)];
@@ -2998,6 +3185,49 @@ function bregma2ccf(ap,ml,dv){
   const u2=u*c+w*s, w2=-u*s+w*c;                   // rotate about ML axis for the ~5deg pitch
   return [CCF_AP0-u2, CCF_DV0-w2, CCF_ML0+ml*1000];
 }
+// DV reference point: "bregma" (default, above) treats DV as a flat offset from
+// bregma's own skull height, the same everywhere regardless of AP/ML — simple,
+// but wrong wherever the real brain surface sits higher or lower than bregma's
+// point (which is most places; the skull is curved). "surface" instead
+// raycasts straight down onto the loaded brain mesh at that AP/ML to find the
+// actual local dorsal surface height, then measures DV from there — matching
+// how a coordinate is normally set during surgery (zero the drill at the
+// surface it actually touches, not at a fixed distance from bregma).
+let dvRefMode="bregma"; // "bregma" | "surface"
+let _rawGeoMesh=null,_rawGeoGeo=null;
+function rawCCFGeometry(mesh){
+  if(_rawGeoMesh===mesh&&_rawGeoGeo)return _rawGeoGeo;
+  const g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.BufferAttribute(new Float32Array(mesh.v),3));
+  g.setIndex(mesh.f);
+  _rawGeoMesh=mesh; _rawGeoGeo=g;
+  return g;
+}
+// finds the smallest-y (most dorsal) point where a vertical line at (x,z) crosses
+// the mesh surface, i.e. the real brain-surface height at that AP/ML — null if
+// (x,z) falls outside the mesh's footprint entirely (raycast never hits it).
+function surfaceYAt(mesh,x,z){
+  if(typeof THREE==="undefined")return null;
+  try{
+    const geo=rawCCFGeometry(mesh);
+    const probe=new THREE.Mesh(geo);
+    const ray=new THREE.Raycaster(new THREE.Vector3(x,-1e5,z),new THREE.Vector3(0,1,0),0,3e5);
+    const hits=ray.intersectObject(probe);
+    return hits.length?hits[0].point.y:null;
+  }catch(e){ return null; }
+}
+function bregma2ccfSurface(mesh,ap,ml,dv){
+  ap=+ap||0; ml=+ml||0; dv=+dv||0;
+  const [xFlat,,zFlat]=bregma2ccf(ap,ml,0); // AP/ML placement only — no pitch/dv entanglement needed once DV comes from a real surface
+  const surfaceY=mesh&&surfaceYAt(mesh,xFlat,zFlat);
+  const baseY=surfaceY!=null?surfaceY:CCF_DV0; // off the mesh footprint: fall back to the bregma-flat height rather than drawing nothing
+  return [xFlat, baseY-dv*1000, zFlat];
+}
+// single entry point everything else should call — resolves AP/ML/DV per the
+// active dvRefMode instead of always assuming bregma-relative.
+function resolveCCF(mesh,ap,ml,dv){
+  return dvRefMode==="surface" ? bregma2ccfSurface(mesh,ap,ml,dv) : bregma2ccf(ap,ml,dv);
+}
 let _cC=null,_cS=null;
 function ccfFrame(mesh){ const mn=mesh.min,mx=mesh.max; _cC=[(mn[0]+mx[0])/2,(mn[1]+mx[1])/2,(mn[2]+mx[2])/2];
   _cS=14/Math.max(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2]); }
@@ -3046,11 +3276,11 @@ function render3DBrain(container,surgery,height){
     // not an error, so it's shown visually rather than flagged.
     const resolvedInjs=(surgery&&surgery.injections?surgery.injections:[]).map((inj,i)=>{
       const col=new THREE.Color(inj.color||INJ_COLORS[i%INJ_COLORS.length]);
-      const site=ccf2three(...bregma2ccf(inj.ap,inj.ml,inj.dv));
+      const site=ccf2three(...resolveCCF(mesh,inj.ap,inj.ml,inj.dv));
       const pp=partnerPos(inj);
       let somaAt=null,termAt=null;
       if(pp&&(inj.type==="retro"||inj.type==="antero")){
-        const partner=ccf2three(...bregma2ccf(pp.ap,pp.ml,pp.dv));
+        const partner=ccf2three(...resolveCCF(mesh,pp.ap,pp.ml,pp.dv));
         somaAt=inj.type==="retro"?partner:site; termAt=inj.type==="retro"?site:partner;
       } else if(inj.type==="antero"){ somaAt=site; }
       return {col,site,somaAt,termAt};
@@ -3082,6 +3312,30 @@ function render3DBrain(container,surgery,height){
         cone.position.copy(g.termAt); cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir); group.add(cone);
       }
     });
+    // observed viral expression location(s) — independent of the injection
+    // coordinate itself (expression can spread, or show up where it was
+    // actually looked for under the scope). Rendered as a small scattered
+    // cluster of dots standing in for individual somas; dot count follows the
+    // chosen low/medium/high level. Jitter is seeded per injection/site/dot
+    // index so the cluster looks the same on every re-render instead of
+    // reshuffling every time the view redraws (DV-mode toggle, drag, etc).
+    const seededRand=seed=>{ const x=Math.sin(seed)*10000; return x-Math.floor(x); };
+    (surgery&&surgery.injections?surgery.injections:[]).forEach((inj,ii)=>{
+      const col=new THREE.Color(inj.color||INJ_COLORS[ii%INJ_COLORS.length]);
+      (inj.expressionSites||[]).forEach((es,ei)=>{
+        if(es.ap===""&&es.ml===""&&es.dv==="")return; // not filled in yet
+        const center=ccf2three(...resolveCCF(mesh,es.ap,es.ml,es.dv));
+        const n=EXPRESSION_DOT_COUNTS[es.level]||EXPRESSION_DOT_COUNTS.medium;
+        for(let d=0;d<n;d++){
+          const seed=(ii+1)*971+(ei+1)*131+(d+1)*17;
+          const r=0.55*Math.cbrt(seededRand(seed*1.13));
+          const theta=seededRand(seed*2.31)*Math.PI*2, phi=Math.acos(2*seededRand(seed*3.71)-1);
+          const dot=new THREE.Mesh(new THREE.SphereGeometry(0.055,6,6),new THREE.MeshBasicMaterial({color:col}));
+          dot.position.set(center.x+r*Math.sin(phi)*Math.cos(theta), center.y+r*Math.sin(phi)*Math.sin(theta), center.z+r*Math.cos(phi));
+          group.add(dot);
+        }
+      });
+    });
     let drag=false,px=0,py=0; const dom=renderer.domElement; dom.style.cursor="grab"; dom.style.touchAction="none";
     dom.addEventListener("pointerdown",e=>{drag=true;px=e.clientX;py=e.clientY;dom.style.cursor="grabbing";try{dom.setPointerCapture(e.pointerId);}catch(_){}});
     dom.addEventListener("pointermove",e=>{ if(!drag)return; group.rotation.y+=(e.clientX-px)*0.01; group.rotation.x+=(e.clientY-py)*0.01; px=e.clientX; py=e.clientY; });
@@ -3109,6 +3363,7 @@ function mountBrainViewer(host,getSurgery,opts){
     return `<button class="bv-sub-toggle" data-sub="${key}" title="${esc(s.label)}: ${esc(s.fullName)}">${s.label}</button>`;
   }).join("");
   host.innerHTML='<div class="bv-top">'
+    +'<div class="seg bv-dvmode" title="What DV=0 means: bregma\'s own skull height everywhere, or the real brain surface at each AP/ML"><button data-v="bregma">DV: Bregma</button><button data-v="surface">DV: Surface</button></div>'
     +subButtons
     +'<button class="bv-expand" title="Enlarge">⛶ Enlarge</button></div>'
     +'<div class="bv-body"></div><div class="bv-flag"></div>';
@@ -3116,39 +3371,52 @@ function mountBrainViewer(host,getSurgery,opts){
   function render(){
     render3DBrain(body,getSurgery(), opts.big?Math.round(window.innerHeight*0.66):300);
     host.querySelectorAll(".bv-sub-toggle").forEach(b=>b.classList.toggle("on",activeSubstructures.has(b.dataset.sub)));
+    host.querySelectorAll(".bv-dvmode button").forEach(b=>b.classList.toggle("on",b.dataset.v===dvRefMode));
     flag.innerHTML="Allen CCF root mesh — CCFv3 (Wang et al. 2020). "
       +"Bregma→CCF: 5400/5700/332 µm + 5° pitch (Chon et al. 2019). "
-      +"<b>Linear approximation</b> — residual error grows with distance from bregma (±0.5 mm skull variation).";
+      +(dvRefMode==="surface"
+        ?"<b>DV is measured from the local brain surface</b> at each injection's AP/ML (raycast onto the mesh), not from bregma's own height. "
+        :"<b>DV is measured from bregma's own skull height</b>, flat everywhere — residual error grows with distance from bregma (±0.5 mm skull variation). ")
+      +"Small scattered dots = observed viral expression site(s) (dot count follows low/medium/high, set per injection).";
   }
   host.querySelectorAll(".bv-sub-toggle").forEach(b=>{
     b.onclick=()=>{ const key=b.dataset.sub; activeSubstructures.has(key)?activeSubstructures.delete(key):activeSubstructures.add(key); render(); };
+  });
+  host.querySelector(".bv-dvmode").addEventListener("click",e=>{
+    const b=e.target.closest("button"); if(!b)return; dvRefMode=b.dataset.v; render();
   });
   expand.onclick=()=>openBrainPopup(getSurgery, render);
   render();
   return {refresh:render};
 }
 
-function animalModal(id){
+function animalModal(id,draft){
   const a=id?DB.animals.find(x=>x.id===id):{cohort:((DB.cohorts||[])[0]||{}).name||"Type 2",alive:true,tasks:[]};
   if(!Array.isArray(a.tasks))a.tasks=[];
+  // `view` supplies initial field values: normally the stored record, but when
+  // returning from the virus/site library (opened mid-edit via "✎ edit library")
+  // it's the in-progress draft instead, so unsaved edits survive the round-trip.
+  // `a` itself stays the real DB.animals reference so Save's Object.assign(a,rec)
+  // still mutates the actual stored record in place.
+  const view=draft||a;
   const cohorts=(DB.cohorts||[]).map(c=>c.name);
   const F=(fid,lab,val,type="text")=>`<div class="fld" style="flex:1"><label>${lab}</label><input id="${fid}" type="${type}" value="${escAttr(val||"")}"></div>`;
   const dbtn=(fid,val)=>`<button type="button" id="${fid}" class="datebtn ${val?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${val?fmtWhenFull(val):"set date"}</button>`;
   const seg=(fid,on)=>`<div class="seg" id="${fid}"><button data-v="1" class="${on?"on":""}">Yes</button><button data-v="0" class="${!on?"on":""}">No</button></div>`;
-  let hp=!!(a.surgeryDetail&&a.surgeryDetail.headpost), win=!!(a.surgeryDetail&&a.surgeryDetail.window);
-  const injs=(a.surgeryDetail&&a.surgeryDetail.injections?a.surgeryDetail.injections:[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",...x}));
+  let hp=!!(view.surgeryDetail&&view.surgeryDetail.headpost), win=!!(view.surgeryDetail&&view.surgeryDetail.window);
+  const injs=(view.surgeryDetail&&view.surgeryDetail.injections?view.surgeryDetail.injections:[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],...x}));
   modal(`<h3>${id?"Edit":"New"} animal</h3>
-    <div class="drow">${F("am_name","Name",a.name)}<div class="fld" style="width:120px"><label>Cohort</label><select id="am_cohort">${cohorts.map(c=>`<option ${a.cohort===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></div>
-    <div class="drow">${F("am_cage","Cage",a.cage)}${F("am_sex","Sex",a.sex)}${F("am_strain","Strain",a.strain)}</div>
+    <div class="drow">${F("am_name","Name",view.name)}<div class="fld" style="width:120px"><label>Cohort</label><select id="am_cohort">${cohorts.map(c=>`<option ${view.cohort===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></div>
+    <div class="drow">${F("am_cage","Cage",view.cage)}${F("am_sex","Sex",view.sex)}${F("am_strain","Strain",view.strain)}</div>
     <div class="drow">
-      <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",a.dob)}</div>
-      <div class="fld" style="flex:1"><label>Sacrificed</label>${dbtn("am_sac",a.sacrificed)}</div></div>
+      <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",view.dob)}</div>
+      <div class="fld" style="flex:1"><label>Sacrificed</label>${dbtn("am_sac",view.sacrificed)}</div></div>
     <div class="fld"><label>Status</label>
       <div class="seg" id="am_alive">
-        <button data-v="alive"       class="${(a.termination||"alive")==="alive"?"on":""}">Alive</button>
-        <button data-v="sacrificed"  class="${a.termination==="sacrificed"?"on":""}">Sacrificed</button>
-        <button data-v="early_death" class="${a.termination==="early_death"?"on":""}">Early death</button>
-        <button data-v="excluded"    class="${a.termination==="excluded"?"on":""}">Excluded</button>
+        <button data-v="alive"       class="${(view.termination||"alive")==="alive"?"on":""}">Alive</button>
+        <button data-v="sacrificed"  class="${view.termination==="sacrificed"?"on":""}">Sacrificed</button>
+        <button data-v="early_death" class="${view.termination==="early_death"?"on":""}">Early death</button>
+        <button data-v="excluded"    class="${view.termination==="excluded"?"on":""}">Excluded</button>
       </div></div>
 
     <div style="border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:14px">
@@ -3162,11 +3430,11 @@ function animalModal(id){
       <div style="margin-top:12px"><div id="am_brainview"></div></div>
     </div>
 
-    <div class="fld"><label>Surgical comments / notes</label><textarea id="am_com">${esc(a.comments||"")}</textarea></div>
-    <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`);
+    <div class="fld"><label>Surgical comments / notes</label><textarea id="am_com">${esc(view.comments||"")}</textarea></div>
+    <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
 
   // dates
-  let vDob=a.dob||"", vSac=a.sacrificed||"";
+  let vDob=view.dob||"", vSac=view.sacrificed||"";
   bindDateButton(document.getElementById("am_dob"), ()=>vDob, v=>{vDob=v||"";});
   bindDateButton(document.getElementById("am_sac"), ()=>vSac, v=>{vSac=v||"";});
 
@@ -3227,6 +3495,30 @@ function animalModal(id){
         <input data-i="${i}" data-f="pMl" value="${escAttr(inj.pMl)}" placeholder="ML" style="flex:0 0 auto;width:48px;${IST}">
         <input data-i="${i}" data-f="pDv" value="${escAttr(inj.pDv)}" placeholder="DV" style="flex:0 0 auto;width:48px;${IST}">
       </div>
+
+      <!-- Row E: observed viral expression location(s) — where expression actually
+           showed up (histology), not necessarily the same spot as the injection
+           coordinate above. Each renders as a small cluster of soma dots in the
+           3D view; dot count follows the chosen expression level. -->
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line2)">
+        <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:5px">Expression site(s) observed (shown as soma dots)</div>
+        <div class="inj-es-list">
+        ${(inj.expressionSites||[]).map((es,ei)=>`
+          <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
+            <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 34px">${ei+1}</span>
+            <input data-i="${i}" data-ei="${ei}" data-ef="ap" value="${escAttr(es.ap)}" placeholder="AP" style="flex:0 0 auto;width:48px;${IST}">
+            <input data-i="${i}" data-ei="${ei}" data-ef="ml" value="${escAttr(es.ml)}" placeholder="ML" style="flex:0 0 auto;width:48px;${IST}">
+            <input data-i="${i}" data-ei="${ei}" data-ef="dv" value="${escAttr(es.dv)}" placeholder="DV" style="flex:0 0 auto;width:48px;${IST}">
+            <select data-i="${i}" data-ei="${ei}" data-ef="level" style="flex:0 0 auto;${IST}">
+              <option value="low"    ${es.level==="low"?"selected":""}>low</option>
+              <option value="medium" ${(!es.level||es.level==="medium")?"selected":""}>medium</option>
+              <option value="high"   ${es.level==="high"?"selected":""}>high</option>
+            </select>
+            <button class="inj-es-del" data-i="${i}" data-ei="${ei}" title="remove expression site" style="${BS};color:var(--overdue)">✕</button>
+          </div>`).join("")}
+        </div>
+        <button class="inj-es-add" data-i="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:3px 8px;font-size:11px">＋ expression site</button>
+      </div>
     </div>`;
   }
   function paintInjs(){ document.getElementById("am_injs").innerHTML=injs.map((inj,i)=>injRow(inj,i)).join("")||`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">no injections — add one below</div>`; }
@@ -3238,15 +3530,27 @@ function animalModal(id){
     document.querySelectorAll("#am_injs [data-i][data-f]").forEach(el=>{
       const i=+el.dataset.i; if(i<0||i>=injs.length)return; injs[i][el.dataset.f]=el.value; });
   }
+  function esField(el){
+    // shared by input/change: expression-site sub-fields carry data-ei/data-ef
+    // instead of the top-level injection's data-f, so they never collide with
+    // (or get swallowed by) the plain injection-field read/write below.
+    if(el.dataset.ei==null)return false;
+    const i=+el.dataset.i, ei=+el.dataset.ei;
+    const es=injs[i]&&injs[i].expressionSites&&injs[i].expressionSites[ei];
+    if(es&&el.dataset.ef){ es[el.dataset.ef]=el.value; updatePreview(); }
+    return true;
+  }
   document.getElementById("am_injs").addEventListener("input",e=>{
-    const el=e.target; if(el.dataset.i==null||!el.dataset.f)return;
+    const el=e.target; if(esField(el))return;
+    if(el.dataset.i==null||!el.dataset.f)return;
     injs[+el.dataset.i][el.dataset.f]=el.value; updatePreview();
   });
   document.getElementById("am_injs").addEventListener("change",e=>{
-    const el=e.target; if(el.dataset.i==null)return; const iv=+el.dataset.i;
+    const el=e.target; if(esField(el))return;
+    if(el.dataset.i==null)return; const iv=+el.dataset.i;
     if(el.classList.contains("inj-sitelibpick")){
       const v=el.value;
-      if(v==="__edit_slib"){ el.value=""; closeModal(); renderLibraryModal("site"); return; }
+      if(v==="__edit_slib"){ el.value=""; goToLibrary("site"); return; }
       if(!v.startsWith("__s:"))return; const nm=v.slice(4);
       const s=(DB.config.siteLib||[]).find(x=>x.name===nm); if(!s)return;
       injs[iv].siteRegion=s.name; injs[iv].ap=s.ap; injs[iv].ml=s.ml; injs[iv].dv=s.dv;
@@ -3254,7 +3558,7 @@ function animalModal(id){
     }
     if(el.classList.contains("inj-viruslibpick")){
       const v=el.value;
-      if(v==="__edit_vlib"){ el.value=""; closeModal(); renderLibraryModal("virus"); return; }
+      if(v==="__edit_vlib"){ el.value=""; goToLibrary("virus"); return; }
       if(!v.startsWith("__v:"))return; const nm=v.slice(4);
       const vr=(DB.config.virusLib||[]).find(x=>x.name===nm); if(!vr)return;
       injs[iv].virus=vr.name; injs[iv].type=vr.type||injs[iv].type;
@@ -3265,16 +3569,39 @@ function animalModal(id){
   document.getElementById("am_injs").addEventListener("click",e=>{
     const del=e.target.closest(".inj-del"), up=e.target.closest(".inj-up"), dn=e.target.closest(".inj-dn");
     const oslib=e.target.closest(".inj-open-slib"), ovlib=e.target.closest(".inj-open-vlib");
+    const esAdd=e.target.closest(".inj-es-add"), esDel=e.target.closest(".inj-es-del");
     if(del){ readInjFields(); injs.splice(+del.dataset.i,1); paintInjs(); updatePreview(); }
     else if(up){ const i=+up.dataset.i; if(i>0){ readInjFields(); [injs[i-1],injs[i]]=[injs[i],injs[i-1]]; paintInjs(); updatePreview(); } }
     else if(dn){ const i=+dn.dataset.i; if(i<injs.length-1){ readInjFields(); [injs[i+1],injs[i]]=[injs[i],injs[i+1]]; paintInjs(); updatePreview(); } }
-    else if(oslib){ closeModal(); renderLibraryModal("site"); }
-    else if(ovlib){ closeModal(); renderLibraryModal("virus"); }
+    else if(oslib){ goToLibrary("site"); }
+    else if(ovlib){ goToLibrary("virus"); }
+    else if(esAdd){ const i=+esAdd.dataset.i; (injs[i].expressionSites=injs[i].expressionSites||[]).push({ap:"",ml:"",dv:"",level:"medium"}); paintInjs(); updatePreview(); }
+    else if(esDel){ const i=+esDel.dataset.i, ei=+esDel.dataset.ei; injs[i].expressionSites.splice(ei,1); paintInjs(); updatePreview(); }
   });
-  document.getElementById("am_addinj").onclick=()=>{ injs.push({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:""}); paintInjs(); updatePreview(); };
+  document.getElementById("am_addinj").onclick=()=>{ injs.push({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[]}); paintInjs(); updatePreview(); };
   paintInjs(); updatePreview();
 
-  let termination=a.termination||(a.alive===false?"sacrificed":"alive");
+  let termination=view.termination||(view.alive===false?"sacrificed":"alive");
+  // Snapshot every field currently on screen into a plain draft object, so
+  // navigating to the virus/site library and back (which tears down and
+  // rebuilds this whole modal) doesn't lose an in-progress, unsaved edit.
+  function collectDraft(){
+    return {
+      name:document.getElementById("am_name").value,
+      cohort:document.getElementById("am_cohort").value,
+      cage:document.getElementById("am_cage").value,
+      sex:document.getElementById("am_sex").value,
+      strain:document.getElementById("am_strain").value,
+      dob:vDob, sacrificed:vSac, termination,
+      surgeryDetail:{headpost:hp,window:win,injections:injs.map(x=>({...x}))},
+      comments:document.getElementById("am_com").value
+    };
+  }
+  function goToLibrary(focus){
+    readInjFields();
+    const d=collectDraft(); closeModal();
+    renderLibraryModal(focus,()=>animalModal(id,d));
+  }
   document.getElementById("am_alive").onclick=e=>{const b=e.target.closest("button");if(!b)return;termination=b.dataset.v;document.querySelectorAll("#am_alive button").forEach(x=>x.classList.toggle("on",x===b));};
 
   document.getElementById("am_save").onclick=()=>{
@@ -3288,24 +3615,6 @@ function animalModal(id){
       comments:document.getElementById("am_com").value.trim()};
     if(id){
       Object.assign(a,rec);
-      // Keep every auto-titled procedure task's title in sync with this animal's
-      // current name. Runs on every save (not just when the name changed) so it's
-      // self-healing: previously this only fired on a rename AND only if the
-      // task's stored title still matched "<Type> — <the immediately-previous
-      // name>" exactly — if a rename was ever missed (or the animal was renamed
-      // twice before either sync ran), the title was checking against the wrong
-      // "old" name forever after and could never catch up. Trusting autoTitle
-      // (explicitly cleared the moment anyone hand-edits a title, see e_title's
-      // input handler) instead of pattern-matching the old string fixes that:
-      // just always regenerate from the current name. Restricted to
-      // single-animal tasks so a title shared across multiple linked animals
-      // isn't collapsed down to just one of their names.
-      DB.tasks.forEach(t=>{
-        if(t.autoTitle&&t.procedureType&&(t.linkedAnimals||[]).length===1&&t.linkedAnimals[0]===a.id){
-          const cap=t.procedureType.charAt(0).toUpperCase()+t.procedureType.slice(1);
-          t.title=`${cap} — ${a.name}`;
-        }
-      });
     } else DB.animals.push({id:uid("a_"),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],...rec});
     persist(); closeModal(); render(); toast(id?"Animal updated":"Animal added");
   };
@@ -3334,20 +3643,6 @@ function openDetail(id){
       <div class="fld" style="width:200px"><label>Start (date + hour)</label><button type="button" id="e_due" class="datebtn ${t.deadline?"":"datebtn-empty"}">${t.deadline?fmtWhenFull(t.deadline):"📅  start"}</button></div>
       <div class="fld" style="flex:1"><label>End <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">date + time</span></label>
         <button type="button" id="e_endDate" class="datebtn ${t.endDate?"":"datebtn-empty"}">${t.endDate?fmtWhenFull(t.endDate):"📅  end"}</button></div></div>
-    <div class="fld"><label>Procedure type</label>
-      <select id="e_procType">
-        <option value="">— none —</option>
-        <option value="surgery"     ${t.procedureType==="surgery"    ?"selected":""}>🔧 Surgery</option>
-        <option value="perfusion"   ${t.procedureType==="perfusion"  ?"selected":""}>🔴 Perfusion</option>
-        <option value="histology"   ${t.procedureType==="histology"  ?"selected":""}>🔬 Histology</option>
-        <option value="microscopy"  ${t.procedureType==="microscopy" ?"selected":""}>🔭 Microscopy</option>
-      </select></div>
-    ${t.procedureType?`<div class="fld"><label>Animals covered by this ${t.procedureType} session</label>
-      <div class="taglist" id="e_linkedAnimals">${(t.linkedAnimals||[]).map(aid=>{const a=DB.animals.find(x=>x.id===aid);return a?`<span class="lt-chip" style="--c:var(--gcamp)">${esc(a.name)}<button class="lt-x" data-aid="${aid}">✕</button></span>`:""}).join("")}
-        ${!(t.linkedAnimals||[]).length?'<span class="lt-empty">no animals linked yet</span>':""}</div>
-      <select id="e_linkAnimal" class="lt-add" style="margin-top:8px"><option value="">＋ link an animal to this session…</option>
-        ${DB.animals.filter(a=>a.termination==="alive"&&!(t.linkedAnimals||[]).includes(a.id)).map(a=>`<option value="${a.id}">${esc(a.name)} (${esc(a.cohort)})</option>`).join("")}
-      </select></div>`:""}
     <div class="fld"><label>Notes</label><textarea id="e_notes">${esc(t.notes||"")}</textarea></div>
     ${(() => { const la=DB.animals.filter(a=>(a.tasks||[]).includes(t.id)); return la.length?`<div class="fld"><label>Linked animals (${la.length})</label><div style="font-size:12.5px;line-height:1.7">${la.map(a=>`<div><span class="stat" style="background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};display:inline-block;margin-right:6px"></span>${esc(a.name)} <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${esc(a.cohort)}</span></div>`).join("")}</div><div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:4px">link/unlink from the Animals tab</div></div>`:""; })()}
     <div class="drow" style="margin-top:18px"><button class="btn danger" id="e_del">Delete task</button></div>`;
@@ -3359,18 +3654,8 @@ function wireDetail(t){
   document.getElementById("e_title").addEventListener("input",e=>{ const v=e.target.value; Object.assign(t,{title:v,autoTitle:false}); persist(); document.getElementById("dTitleView").textContent=v||"New task"; if(currentView!=="arbor")render(); });
   bindDateButton(document.getElementById("e_due"), ()=>t.deadline||"", v=>save({deadline:v||null}));
   const edEl=document.getElementById("e_endDate"); if(edEl) bindDateButton(edEl, ()=>t.endDate||"", v=>save({endDate:v||null}));
-  const ptEl=document.getElementById("e_procType");
-  if(ptEl) ptEl.addEventListener("change",e=>{ save({procedureType:e.target.value||null,linkedAnimals:t.linkedAnimals||[]}); openDetail(t.id); });
-  const laEl=document.getElementById("e_linkedAnimals");
-  if(laEl){
-    laEl.addEventListener("click",e=>{const x=e.target.closest(".lt-x");if(!x)return;
-      t.linkedAnimals=(t.linkedAnimals||[]).filter(id=>id!==x.dataset.aid); persist(); openDetail(t.id);});
-  }
-  const laAdd=document.getElementById("e_linkAnimal");
-  if(laAdd) laAdd.addEventListener("change",e=>{ if(!e.target.value)return;
-    t.linkedAnimals=[...new Set([...(t.linkedAnimals||[]),e.target.value])]; persist(); openDetail(t.id); });
   document.getElementById("e_notes").addEventListener("input",e=>save({notes:e.target.value}));
-  document.getElementById("e_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;const prev=t.status;save({status:b.dataset.s});syncProcedureToAnimals(t,prev);persist();openDetail(t.id);});
+  document.getElementById("e_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;save({status:b.dataset.s});persist();openDetail(t.id);});
   document.getElementById("e_del").addEventListener("click",()=>{ if(!confirm("Delete this task?"))return;
     childrenOf(t.id).forEach(k=>k.parentId=t.parentId);
     DB.tasks.forEach(x=>x.deps=(x.deps||[]).filter(d=>d!==t.id));
@@ -3388,18 +3673,6 @@ function closeDetail(){
 }
 document.getElementById("dClose").addEventListener("click",closeDetail);
 function isDescendant(c,of){ let n=taskById(c); while(n&&n.parentId){ if(n.parentId===of)return true; n=taskById(n.parentId);} return false; }
-// when a procedure task transitions into "done", update the pipeline field on all linked animals.
-// shared by every path that can set a task's status (status-dot cycling, detail panel status buttons).
-function syncProcedureToAnimals(t,prevStatus){
-  if(!(t.status==="done"&&prevStatus!=="done"&&t.procedureType&&(t.linkedAnimals||[]).length))return;
-  const field=t.procedureType; // "perfusion"|"histology"|"microscopy"
-  t.linkedAnimals.forEach(aid=>{
-    const a=DB.animals.find(x=>x.id===aid); if(!a)return;
-    if(!a[field]){ a[field]=true; } // only set true, never override true→false via task
-    if(field==="perfusion") applyPerfusionSacrifice(a, t.deadline?t.deadline.slice(0,10):todayDateStr());
-  });
-  toast(`${t.procedureType} marked done — updated ${t.linkedAnimals.length} animal${t.linkedAnimals.length!==1?"s":""}`);
-}
 function todayDateStr(){ const d=new Date(); const pad=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 // perfusion terminates the animal as part of the procedure, so it always implies
 // sacrifice (but not the reverse — an animal can be sacrificed without perfusion).
@@ -3409,14 +3682,13 @@ function applyPerfusionSacrifice(a,date){
 }
 function cycleStatus(id){
   const t=taskById(id),o=["todo","active","blocked","done"];
-  const prev=t.status; t.status=o[(o.indexOf(t.status)+1)%o.length];
-  syncProcedureToAnimals(t,prev);
+  t.status=o[(o.indexOf(t.status)+1)%o.length];
   persist(); render(); if(id===selectedId)openDetail(id);
 }
 
 /* ---------- ADD TASK / DOMAIN ---------- */
 function modal(h,opts){ const s=document.getElementById("scrim"); const m=document.getElementById("modal");
-  m.className="modal"+(opts&&opts.center?" modal-center":""); m.innerHTML=h; s.classList.add("open"); return s; }
+  m.className="modal"+(opts&&opts.center?" modal-center":"")+(opts&&opts.wide?" modal-wide":""); m.innerHTML=h; s.classList.add("open"); return s; }
 function closeModal(){ document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(); }
 // Modals close only via Cancel / ✕ / Save — NOT by clicking outside, so a stray click never discards an edit.
 document.addEventListener("keydown",e=>{ if(e.key==="Escape"&&document.getElementById("scrim").classList.contains("open"))closeModal(); });
@@ -3516,6 +3788,124 @@ function createAndOpenTask(opts){
 function openNewTaskModal(prefillDeadline){
   createAndOpenTask({deadline:prefillDeadline});
 }
+// Clicking an empty Timeline slot used to always create a plain task — the
+// only way to get an animal-linked procedure onto the calendar was the old
+// task "Procedure type" field (now removed; see migrate()'s DB._procTasksPruned
+// note). That meant the Timeline offered a different, narrower set of options
+// than the per-animal diary. This modal offers the real choice: a plain task,
+// or a diary entry — same types/fields as the Animals tab diary, and always
+// tied to a specific animal — created directly from wherever was clicked.
+function openTimelineCreateModal(prefillDeadline){
+  const date=(prefillDeadline||todayDateStr()).slice(0,10);
+  const time=prefillDeadline&&hasTime(prefillDeadline)?prefillDeadline.slice(11,16):"";
+  const animals=[...DB.animals].sort((x,y)=>x.name.localeCompare(y.name));
+  modal(`<h3>New timeline item</h3>
+    <div class="fld"><label>Kind</label>
+      <div class="seg" id="tc_kind">
+        <button type="button" data-v="task" class="on">General task</button>
+        <button type="button" data-v="diary" ${animals.length?"":"disabled"}>Animal diary entry</button>
+      </div></div>
+    <div id="tc_body" class="dg-form"></div>`,{wide:true});
+  const body=document.getElementById("tc_body");
+
+  function paintTask(){
+    body.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:10px 0 16px">
+        Creates a plain task on this date. For a procedure or anything else tied to one animal, use "Animal diary entry" instead — it'll show here on the Timeline too.</div>
+      <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="tc_gotask">Continue</button></div>`;
+    document.getElementById("tc_gotask").onclick=()=>{ closeModal(); openNewTaskModal(prefillDeadline); };
+  }
+
+  function paintDiary(){
+    if(!animals.length){ body.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:10px 0">No animals yet — add one on the Animals tab first.</div>`; return; }
+    const types=diaryTypeDefs();
+    body.innerHTML=`
+      <div class="drow">
+        <div class="fld" style="flex:1"><label>Animal</label>
+          <select id="tc_animal">${animals.map(a=>`<option value="${a.id}">${esc(a.name)} (${esc(a.cohort)})</option>`).join("")}</select></div>
+        <div class="fld" style="flex:1"><label>Type</label>
+          <select id="tc_type">${types.map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}</select></div>
+      </div>
+      <div class="drow">
+        <div class="fld" style="flex:1"><label>Date &amp; start time</label>
+          <button type="button" id="tc_dt" class="datebtn"></button></div>
+        <div class="fld" style="flex:1;${time?"":"display:none"}" id="tc_endwrap"><label>End time</label>
+          <button type="button" id="tc_endtime" class="datebtn datebtn-empty"><span style="opacity:.55;margin-right:6px">🕐</span>set end time</button></div>
+      </div>
+      <div id="tc_fields"></div>
+      <label style="margin-top:6px;display:block">Note</label><textarea id="tc_note"></textarea>
+      <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="tc_save">Save</button></div>`;
+
+    let dtValue=date+(time?"T"+time:""), endTimeValue="";
+    const dtBtn=document.getElementById("tc_dt");
+    dtBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${fmtWhenFull(dtValue)}`;
+    const endWrap=document.getElementById("tc_endwrap");
+    bindDateButton(dtBtn, ()=>dtValue, v=>{
+      dtValue=v||date; endWrap.style.display=hasTime(dtValue)?"":"none";
+      if(!hasTime(dtValue)) endTimeValue="";
+    }, 15);
+    bindTimeButton(document.getElementById("tc_endtime"), ()=>endTimeValue, v=>{ endTimeValue=v||""; }, 15);
+
+    const typeSel=document.getElementById("tc_type"), fieldsHost=document.getElementById("tc_fields");
+    function paintFields(){
+      const type=typeSel.value;
+      if(type==="training"){
+        fieldsHost.innerHTML=`<label style="margin-top:6px;display:block">Task</label>
+          <input id="tc_task" list="tc_tasklist" autocomplete="off" placeholder="e.g. 2AFC lick">
+          <datalist id="tc_tasklist">${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t.name)}">`).join("")}</datalist>
+          <label style="margin-top:6px;display:block">Stage</label><input id="tc_stage" type="text">
+          <div id="tc_metrics" style="margin-top:6px">${renderMetricsFields("",{})}</div>`;
+        document.getElementById("tc_task").addEventListener("input",e=>{
+          document.getElementById("tc_metrics").innerHTML=renderMetricsFields(e.target.value.trim(),{});
+        });
+      } else {
+        fieldsHost.innerHTML=renderTypeFields(type,{});
+      }
+    }
+    typeSel.onchange=paintFields; paintFields();
+
+    document.getElementById("tc_save").onclick=()=>{
+      const a=DB.animals.find(x=>x.id===document.getElementById("tc_animal").value); if(!a)return;
+      const type=typeSel.value;
+      const entryDate=(dtValue||date).slice(0,10);
+      const entryTime=hasTime(dtValue)?dtValue.slice(11,16):null;
+      if(endTimeValue&&entryTime&&endTimeValue<=entryTime){ toast("End time must be after the start time — not saved"); return; }
+      const entryEndTime=(entryTime&&endTimeValue&&endTimeValue>entryTime)?endTimeValue:null;
+      let data={};
+      if(type==="training"){
+        const taskName=document.getElementById("tc_task").value.trim();
+        const metrics={};
+        fieldsHost.querySelectorAll(".dg-metric-field").forEach(el=>{
+          const raw=el.value.trim(); if(raw==="")return;
+          if(el.dataset.type==="number"){ const n=parseFloat(raw.replace(",",".")); if(!isNaN(n))metrics[el.dataset.key]=n; }
+          else metrics[el.dataset.key]=raw;
+        });
+        data={task:taskName, stage:document.getElementById("tc_stage").value.trim(), metrics};
+      } else {
+        const def=diaryTypeDef(type);
+        def.fields.forEach(f=>{
+          const el=[...fieldsHost.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
+          if(!el)return;
+          const raw=el.value;
+          if(f.type==="yesno"){ if(raw!=="")data[f.key]=raw==="1"; return; }
+          if(f.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))data[f.key]=n; return; }
+          if(raw.trim()!=="")data[f.key]=raw.trim();
+        });
+      }
+      data.note=document.getElementById("tc_note").value.trim();
+      a.diary.push({id:uid("d_"), type, date:entryDate, time:entryTime, endTime:entryEndTime, created:Date.now(), edited:null, data});
+      if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
+      persist(); closeModal(); render();
+      toast(`${diaryTypeDef(type).label} entry added for ${a.name}`);
+    };
+  }
+
+  document.getElementById("tc_kind").onclick=e=>{
+    const b=e.target.closest("button"); if(!b||b.disabled)return;
+    document.querySelectorAll("#tc_kind button").forEach(x=>x.classList.toggle("on",x===b));
+    if(b.dataset.v==="task")paintTask(); else paintDiary();
+  };
+  paintTask();
+}
 function paletteHTML(sel){ return DOMAIN_PALETTE.map(c=>`<span class="tag" data-c="${c}" style="cursor:pointer;border-color:${c};${c===sel?`box-shadow:0 0 0 2px ${c}`:""}"><span style="width:12px;height:12px;border-radius:3px;background:${c};display:inline-block"></span></span>`).join(""); }
 
 function editDomainModal(domId){
@@ -3567,8 +3957,16 @@ function editDomainModal(domId){
 }
 
 /* ---------- CALENDAR (.ics) ---------- */
+// Exports everything the Timeline itself shows: scheduled tasks, PLUS every
+// diary entry whose type is flagged "timeline:true" (procedures etc.) — this
+// used to only read DB.tasks, which went stale the moment procedures moved
+// into the diary, so the .ics export silently dropped every procedure.
 document.getElementById("expCal").addEventListener("click",()=>{
-  const due=DB.tasks.filter(t=>t.deadline&&t.status!=="done"); if(!due.length){toast("No scheduled tasks");return;}
+  const due=DB.tasks.filter(t=>t.deadline&&t.status!=="done");
+  const timelineTypeKeys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
+  const diaryEvents=[];
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{ if(timelineTypeKeys.has(e.type)) diaryEvents.push({a,e}); }));
+  if(!due.length && !diaryEvents.length){ toast("No scheduled tasks or timeline entries"); return; }
   const pad=n=>String(n).padStart(2,"0"), stamp=new Date().toISOString().replace(/[-:]/g,"").split(".")[0]+"Z";
   const esc2=s=>(s||"").replace(/[\\;,]/g,m=>"\\"+m).replace(/\n/g,"\\n");
   const local=dt=>`${dt.getFullYear()}${pad(dt.getMonth()+1)}${pad(dt.getDate())}T${pad(dt.getHours())}${pad(dt.getMinutes())}00`;
@@ -3585,13 +3983,29 @@ document.getElementById("expCal").addEventListener("click",()=>{
       se=`DTSTART;VALUE=DATE:${d}\r\nDTEND;VALUE=DATE:${t.endDate?mkEnd(t.endDate.slice(0,10)):mkEnd(t.deadline.slice(0,10))}`;
     }
     const overdueTag=dueClass(t.deadline,t.status,t.endDate)==="overdue"?" [OVERDUE]":"";
-    const animals=(t.linkedAnimals||[]).map(id=>{const a=DB.animals.find(x=>x.id===id);return a?a.name:"";}).filter(Boolean);
-    const desc=[t.procedureType?`${t.procedureType}${animals.length?" — "+animals.join(", "):""}`:"",(t.notes||"")].filter(Boolean).join("\n");
     ics+=`BEGIN:VEVENT\r\nUID:${t.id}@arbor\r\nDTSTAMP:${stamp}\r\n${se}\r\nSUMMARY:${esc2(t.title+overdueTag)}\r\n`;
-    if(desc) ics+=`DESCRIPTION:${esc2(desc)}\r\n`;
+    if(t.notes) ics+=`DESCRIPTION:${esc2(t.notes)}\r\n`;
     ics+="END:VEVENT\r\n";
   });
-  ics+="END:VCALENDAR\r\n"; download("arbor_schedule.ics",ics,"text/calendar"); toast(`Exported ${due.length} tasks`);
+  diaryEvents.forEach(({a,e})=>{
+    const def=diaryTypeDef(e.type);
+    let se;
+    if(e.time){
+      const s=whenDate(e.date+"T"+e.time);
+      const en=e.endTime?whenDate(e.date+"T"+e.endTime):new Date(s.getTime()+60*60000);
+      se=`DTSTART:${local(s)}\r\nDTEND:${local(en)}`;
+    } else {
+      const d=e.date.replace(/-/g,"");
+      const nd=new Date(e.date+"T00:00:00"); nd.setDate(nd.getDate()+1);
+      se=`DTSTART;VALUE=DATE:${d}\r\nDTEND;VALUE=DATE:${nd.getFullYear()}${pad(nd.getMonth()+1)}${pad(nd.getDate())}`;
+    }
+    const summary=`${def.icon} ${a.name} — ${def.label}${e.date>todayDateStr()?" (planned)":""}`;
+    ics+=`BEGIN:VEVENT\r\nUID:${e.id}@arbor\r\nDTSTAMP:${stamp}\r\n${se}\r\nSUMMARY:${esc2(summary)}\r\n`;
+    const note=diaryNoteOf(e.data||{}); if(note) ics+=`DESCRIPTION:${esc2(note)}\r\n`;
+    ics+="END:VEVENT\r\n";
+  });
+  ics+="END:VCALENDAR\r\n"; download("arbor_schedule.ics",ics,"text/calendar");
+  toast(`Exported ${due.length} task${due.length!==1?"s":""}, ${diaryEvents.length} diary entr${diaryEvents.length!==1?"ies":"y"}`);
 });
 
 /* ---------- BACKUP / RESTORE ---------- */
@@ -3600,10 +4014,12 @@ function renderMenuModal(){
   modal(`<h3>Backup &amp; restore</h3>
     <div class="actions" style="justify-content:flex-start;flex-wrap:wrap;margin-top:0">
       <button class="btn" id="m_export">↓ Export JSON</button>
+      <button class="btn" id="m_excel">↓ Export Excel (.xls)</button>
       <button class="btn" id="m_import">↑ Import JSON</button>
       <button class="btn danger" id="m_reset">↺ Reset to seed</button></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`, {center:true});
   document.getElementById("m_export").addEventListener("click",()=>{download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");toast("Exported JSON");});
+  document.getElementById("m_excel").addEventListener("click",()=>{exportFullDatabaseExcel();toast("Exported Excel workbook");});
   document.getElementById("m_import").addEventListener("click",async ()=>{
     const text=await window.arbor.openJSON(); if(text==null)return;
     try{
@@ -3618,7 +4034,7 @@ function renderMenuModal(){
 }
 // reached only via the "✎ edit library" shortcuts inside the injection editor —
 // not from the "..." menu, which is reserved for Export/Import/Reset
-function renderLibraryModal(focus){
+function renderLibraryModal(focus,onBack){
   const sl=DB.config.siteLib||[], vl=DB.config.virusLib||[];
   const IST2="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 8px;font-size:12px";
   const libRows=(arr,type)=>arr.map((e,i)=>`<div style="display:flex;gap:5px;align-items:center;margin-bottom:5px">
@@ -3631,14 +4047,19 @@ function renderLibraryModal(focus){
          <select class="le_vtype" data-i="${i}" style="${IST2}"><option value="retro" ${e.type==="retro"?"selected":""}>retro</option><option value="antero" ${e.type==="antero"?"selected":""}>antero</option><option value="other" ${e.type==="other"?"selected":""}>other</option></select>`}
     <button class="le_del" data-t="${type}" data-i="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:11px">✕</button>
   </div>`).join("");
-  modal(`<h3>Libraries</h3>
+  modal(`${onBack?`<button type="button" class="modal-back" id="lib_back">‹ Back to animal</button>`:""}<h3>Libraries</h3>
     <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px">Injection site library</div>
     <div id="lib_sites">${libRows(sl,"site")}</div>
     <button class="btn ghost" id="lib_siteadd" style="font-size:12px;margin-bottom:14px">＋ Add site</button>
     <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px">Virus library</div>
     <div id="lib_viruses">${libRows(vl,"virus")}</div>
     <button class="btn ghost" id="lib_virusadd" style="font-size:12px;margin-bottom:14px">＋ Add virus</button>
-    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`);
+    <div class="actions">${onBack?`<button class="btn ghost" id="lib_back2">‹ Back</button>`:""}<button class="btn ghost" onclick="closeModal()">Close</button></div>`);
+  if(onBack){
+    const back=()=>{ readFields(); onBack(); };
+    document.getElementById("lib_back").onclick=back;
+    document.getElementById("lib_back2").onclick=back;
+  }
 
   function readFields(){
     // flush current field values back into config
@@ -3675,16 +4096,87 @@ function renderLibraryModal(focus){
     const d=e.target.closest(".le_del"); if(!d)return;
     if(d.dataset.t==="site") DB.config.siteLib.splice(+d.dataset.i,1);
     else DB.config.virusLib.splice(+d.dataset.i,1);
-    persist(); renderLibraryModal(d.dataset.t);
+    persist(); renderLibraryModal(d.dataset.t,onBack);
   });
-  document.getElementById("lib_siteadd").onclick=()=>{ DB.config.siteLib.push({name:"New site",ap:0,ml:0,dv:0}); persist(); renderLibraryModal("site"); };
-  document.getElementById("lib_virusadd").onclick=()=>{ DB.config.virusLib.push({name:"New virus",type:"retro"}); persist(); renderLibraryModal("virus"); };
+  document.getElementById("lib_siteadd").onclick=()=>{ DB.config.siteLib.push({name:"New site",ap:0,ml:0,dv:0}); persist(); renderLibraryModal("site",onBack); };
+  document.getElementById("lib_virusadd").onclick=()=>{ DB.config.virusLib.push({name:"New virus",type:"retro"}); persist(); renderLibraryModal("virus",onBack); };
   // scroll to the focused section
   if(focus){ const el=document.getElementById(focus==="site"?"lib_sites":"lib_viruses"); if(el)setTimeout(()=>el.scrollIntoView({behavior:"smooth",block:"start"}),80); }
 }
 
 /* ---------- UTIL / BOOT ---------- */
 function download(name,content,mime){ window.arbor.saveFile(name,content,mime).catch(()=>{}); }
+/* ---------- EXCEL EXPORT (SpreadsheetML — plain XML, no zip/binary library needed) ----------
+   Excel has opened this "Excel 2003 XML" format natively for 20+ years (still does in
+   current Office/Excel for Windows). Genuine multi-sheet workbooks, hand-buildable as a
+   string like the .ics export already is — no vendored xlsx library required. */
+function xmlEsc(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function excelCellXML(v){
+  if(v==null||v==="") return "<Cell/>";
+  if(typeof v==="number"&&isFinite(v)) return `<Cell><Data ss:Type="Number">${v}</Data></Cell>`;
+  return `<Cell><Data ss:Type="String">${xmlEsc(v)}</Data></Cell>`;
+}
+function excelSheetXML(sheet){
+  const rows=sheet.rows.map(r=>`<Row>${r.map(excelCellXML).join("")}</Row>`).join("");
+  const safeName=xmlEsc(String(sheet.name).replace(/[\[\]:*?/\\]/g,"_").slice(0,31)); // Excel sheet-name rules
+  return `<Worksheet ss:Name="${safeName}"><Table>${rows}</Table></Worksheet>`;
+}
+function buildExcelXML(sheets){
+  return `<?xml version="1.0"?>\r\n<?mso-application progid="Excel.Sheet"?>\r\n`+
+    `<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\r\n`+
+    sheets.map(excelSheetXML).join("\r\n")+`\r\n</Workbook>`;
+}
+// sheets: [{name, rows:[[cell,...],...]}, ...] — first row of each is treated as the header by convention, not enforced
+function downloadExcel(filename,sheets){ download(filename,buildExcelXML(sheets),"application/vnd.ms-excel"); }
+// Whole-workspace dump — every entity gets its own sheet, mirroring the JSON
+// export's completeness but in a form that opens directly in Excel. Animal
+// id/domain/cohort id foreign keys are resolved to their names since those
+// are what's actually useful in a spreadsheet.
+function exportFullDatabaseExcel(){
+  const animalsRows=[["ID","Name","Cohort","Cage","Sex","Strain","Born","Sacrificed","Status","Head-post","Cranial window","Comments"]];
+  DB.animals.forEach(a=>animalsRows.push([a.id,a.name,a.cohort||"",a.cage||"",a.sex||"",a.strain||"",a.dob||"",a.sacrificed||"",
+    a.termination||"",a.surgeryDetail&&a.surgeryDetail.headpost?"Yes":"No",a.surgeryDetail&&a.surgeryDetail.window?"Yes":"No",a.comments||""]));
+
+  const diaryRows=[["Animal","Cohort","Date","Time","End time","Type","Summary","Logged"]];
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
+    diaryRows.push([a.name,a.cohort||"",e.date,e.time||"",e.endTime||"",diaryTypeDef(e.type).label,diaryEntrySummary(e),e.created?new Date(e.created).toLocaleString():""]);
+  }));
+
+  const injRows=[["Animal","#","Virus","Type","Site region","AP","ML","DV","Volume (nl)","Target region","Target AP","Target ML","Target DV"]];
+  DB.animals.forEach(a=>(a.surgeryDetail&&a.surgeryDetail.injections||[]).forEach((inj,i)=>{
+    injRows.push([a.name,i+1,inj.virus||"",inj.type||"",inj.siteRegion||"",inj.ap,inj.ml,inj.dv,inj.volume,inj.partnerRegion||"",inj.pAp,inj.pMl,inj.pDv]);
+  }));
+
+  const tasksRows=[["ID","Title","Domain","Status","Start","End","Notes"]];
+  DB.tasks.forEach(t=>tasksRows.push([t.id,t.title||"",(domById(t.domainId)||{}).name||"",t.status||"",t.deadline||"",t.endDate||"",t.notes||""]));
+
+  const cohortsRows=[["Name","Color"]];
+  (DB.cohorts||[]).forEach(c=>cohortsRows.push([c.name,c.color||""]));
+
+  const virusRows=[["Name","Type","Promoter","Titer","Source","Note"]];
+  (DB.config.virusLib||[]).forEach(v=>virusRows.push([v.name,v.type||"",v.promoter||"",v.titer||"",v.source||"",v.note||""]));
+
+  const siteRows=[["Name","AP","ML","DV"]];
+  (DB.config.siteLib||[]).forEach(s=>siteRows.push([s.name,s.ap,s.ml,s.dv]));
+
+  const taskLibRows=[["Task name","Parameters"]];
+  (DB.config.taskLib||[]).forEach(t=>taskLibRows.push([t.name,(t.params||[]).map(p=>p.label).join(", ")]));
+
+  const invRows=[["Material","Status","Note"]];
+  Object.keys(DB.inventory||{}).forEach(name=>invRows.push([name,(DB.inventory[name]||{}).status||"",(DB.inventory[name]||{}).note||""]));
+
+  downloadExcel("arbor_workspace.xls",[
+    {name:"Animals",rows:animalsRows},
+    {name:"Diary entries",rows:diaryRows},
+    {name:"Injections",rows:injRows},
+    {name:"Tasks",rows:tasksRows},
+    {name:"Cohorts",rows:cohortsRows},
+    {name:"Virus library",rows:virusRows},
+    {name:"Site library",rows:siteRows},
+    {name:"Behavioral tasks",rows:taskLibRows},
+    {name:"Inventory",rows:invRows},
+  ]);
+}
 window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); });
 (async function(){
   // top-level try/catch: an exception anywhere in boot (loadDB/seed/migrate/render)
