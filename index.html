@@ -865,6 +865,25 @@ function fmtDue(s){ const d=daysTo(s); if(d===null)return""; let base; if(d<0)ba
   if(hasTime(s))base+=" "+whenDate(s).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); return base; }
 function fmtWhenFull(s){ if(!s)return""; const d=whenDate(s); let x=d.toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"}); if(hasTime(s))x+=" · "+d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); return x; }
 
+// scroll-to-select: the drum snaps items to center on scroll (scroll-snap-type), so
+// treat the item resting at center as selected once scrolling settles — not just clicks.
+// Shared by the full date+time picker (openCalendar) and the time-only picker
+// (openTimePicker, for a diary entry's end time).
+function bindDrumScroll(col,apply){
+  let timer=null;
+  col.addEventListener("scroll",()=>{
+    clearTimeout(timer);
+    timer=setTimeout(()=>{
+      const mid=col.scrollTop+col.offsetHeight/2; let best=null,bestD=Infinity;
+      col.querySelectorAll(".drum-item").forEach(el=>{
+        const c=el.offsetTop+el.offsetHeight/2, d=Math.abs(c-mid);
+        if(d<bestD){bestD=d;best=el;}
+      });
+      if(best){ apply(+best.dataset.v);
+        col.querySelectorAll(".drum-item").forEach(el=>el.classList.toggle("sel",el===best)); }
+    },120);
+  },{passive:true});
+}
 /* ---- custom calendar popover: click a day, then type the time ---- */
 let _calEls=null;
 function closeCalendar(){ if(_calEls){ _calEls.pop.remove(); document.removeEventListener("mousedown",_calEls.out,true); _calEls=null; } }
@@ -936,21 +955,6 @@ function openCalendar(anchor, value, onPick, minuteStep){
     // treat the item resting at center as selected once scrolling settles — not just clicks.
     const wrap=pop.querySelector(".cal-drum-wrap");
     const hCol=wrap.querySelector(".drum-h"), mCol=wrap.querySelector(".drum-m");
-    function bindDrumScroll(col,apply){
-      let timer=null;
-      col.addEventListener("scroll",()=>{
-        clearTimeout(timer);
-        timer=setTimeout(()=>{
-          const mid=col.scrollTop+col.offsetHeight/2; let best=null,bestD=Infinity;
-          col.querySelectorAll(".drum-item").forEach(el=>{
-            const c=el.offsetTop+el.offsetHeight/2, d=Math.abs(c-mid);
-            if(d<bestD){bestD=d;best=el;}
-          });
-          if(best){ apply(+best.dataset.v);
-            col.querySelectorAll(".drum-item").forEach(el=>el.classList.toggle("sel",el===best)); }
-        },120);
-      },{passive:true});
-    }
     bindDrumScroll(hCol, v=>{selH=v;});
     bindDrumScroll(mCol, v=>{selM=v;});
   }
@@ -967,6 +971,68 @@ function openCalendar(anchor, value, onPick, minuteStep){
 function bindDateButton(btn, getVal, setVal, minuteStep){
   btn.onclick=()=>openCalendar(btn, getVal(), v=>{ setVal(v);
     btn.innerHTML = `<span style="opacity:.55;margin-right:6px">📅</span>${v? fmtWhenFull(v) : "set date"}`;
+    btn.classList.toggle("datebtn-empty",!v); }, minuteStep);
+}
+// time-only drum picker (hour + minute, no date grid) - for a diary entry's
+// end time, which is always the same day as its start time. Shares the same
+// visual drum styling as openCalendar's time picker, just without the date
+// grid half, since "which day" isn't a question here.
+function openTimePicker(anchor, value, onPick, minuteStep){
+  closeCalendar();
+  minuteStep=minuteStep||5;
+  let selH = value!=null ? +value.slice(0,2) : -1;
+  let selM = value!=null ? +value.slice(3,5) : 0;
+  const pop=document.createElement("div"); pop.className="cal-pop"; pop.style.width="200px";
+  function draw(){
+    const hours=Array.from({length:24},(_,h)=>`<div class="drum-item${h===selH?" sel":""}" data-v="${h}">${String(h).padStart(2,"0")}</div>`).join("");
+    const mins=Array.from({length:Math.ceil(60/minuteStep)},(_,i)=>i*minuteStep).map(m=>`<div class="drum-item${m===selM?" sel":""}" data-v="${m}">${String(m).padStart(2,"0")}</div>`).join("");
+    pop.innerHTML=`
+      <div class="cal-foot" style="display:flex;align-items:center;gap:8px;margin:0">
+        <div class="cal-drum-wrap" style="display:flex;gap:4px;flex:1;position:relative">
+          <div class="drum-h" style="flex:1;height:80px;overflow-y:scroll;scroll-snap-type:y mandatory">${hours}</div>
+          <span style="font-family:var(--mono);font-size:14px;font-weight:700;align-self:center;color:var(--ink)">:</span>
+          <div class="drum-m" style="flex:1;height:80px;overflow-y:scroll;scroll-snap-type:y mandatory">${mins}</div>
+        </div>
+      </div>
+      <div class="cal-btns"><button data-x="clear">No end time</button><button class="ok" data-x="done">Done</button></div>`;
+    function drawSel(){
+      pop.querySelector(".drum-h").querySelectorAll(".drum-item").forEach(el=>{
+        const h=+el.dataset.v; el.classList.toggle("sel",h===selH); el.onclick=()=>{ selH=h; drawSel(); };
+      });
+      pop.querySelector(".drum-m").querySelectorAll(".drum-item").forEach(el=>{
+        const m=+el.dataset.v; el.classList.toggle("sel",m===selM); el.onclick=()=>{ selM=m; drawSel(); };
+      });
+      requestAnimationFrame(()=>{
+        const hCol=pop.querySelector(".drum-h"), mCol=pop.querySelector(".drum-m");
+        const selHEl=hCol.querySelector(".drum-item.sel"), selMEl=mCol.querySelector(".drum-item.sel");
+        if(selHEl) hCol.scrollTop=selHEl.offsetTop-(hCol.offsetHeight/2)+(selHEl.offsetHeight/2);
+        if(selMEl) mCol.scrollTop=selMEl.offsetTop-(mCol.offsetHeight/2)+(selMEl.offsetHeight/2);
+      });
+    }
+    if(selH<0){ selH=9; selM=0; }
+    drawSel();
+    pop.querySelector('[data-x="clear"]').onclick=()=>{ onPick(null); closeCalendar(); };
+    pop.querySelector('[data-x="done"]').onclick=()=>{
+      const pad=n=>String(n).padStart(2,"0");
+      onPick(`${pad(selH)}:${pad(selM)}`); closeCalendar();
+    };
+    const hCol=pop.querySelector(".drum-h"), mCol=pop.querySelector(".drum-m");
+    bindDrumScroll(hCol, v=>{selH=v;});
+    bindDrumScroll(mCol, v=>{selM=v;});
+  }
+  draw();
+  document.body.appendChild(pop);
+  const r=anchor.getBoundingClientRect(); const pw=200, ph=pop.offsetHeight||140;
+  let left=Math.min(r.left, window.innerWidth-pw-10);
+  let top = (r.bottom+ph+8<window.innerHeight)? r.bottom+6 : Math.max(8,r.top-ph-6);
+  pop.style.left=left+"px"; pop.style.top=top+"px";
+  const out=(e)=>{ if(!pop.contains(e.target)&&e.target!==anchor) closeCalendar(); };
+  document.addEventListener("mousedown",out,true);
+  _calEls={pop,out};
+}
+function bindTimeButton(btn, getVal, setVal, minuteStep){
+  btn.onclick=()=>openTimePicker(btn, getVal(), v=>{ setVal(v);
+    btn.innerHTML = `<span style="opacity:.55;margin-right:6px">🕐</span>${v||"set end time"}`;
     btn.classList.toggle("datebtn-empty",!v); }, minuteStep);
 }
 function toast(m){ const e=document.getElementById("toast"); e.textContent=m; e.classList.add("show"); clearTimeout(e._t); e._t=setTimeout(()=>e.classList.remove("show"),1900); }
@@ -1388,15 +1454,17 @@ function renderTimeline(){
     });
     flush();
   }
-  // same column-packing, run separately for timed diary entries (fixed 60min
-  // slot - diary entries don't have a duration field) so a task and a diary
-  // entry at the same hour don't need to know about each other's layout.
+  // same column-packing, run separately for timed diary entries (a task and
+  // a diary entry at the same hour don't need to know about each other's
+  // layout - each source packs its own overlaps independently).
   const diaryTimedLayout=new Map(); // entry.id -> {col, totalCols}
   for(let d=0;d<7;d++){
     const dayEvents=diaryTimedEvents.filter(x=>x.dayIdx===d).map(x=>{
       const [hh,mm]=x.e.time.split(":").map(Number);
       const startMin=hh*60+(mm||0);
-      return {x,startMin,endMin:startMin+60};
+      let endMin=startMin+60;
+      if(x.e.endTime){ const [eh,em]=x.e.endTime.split(":").map(Number); endMin=Math.max(eh*60+em,startMin+15); }
+      return {x,startMin,endMin};
     }).sort((a,b)=>a.startMin-b.startMin||a.endMin-b.endMin);
     let cluster=[], clusterEnd=-Infinity;
     const flush=()=>{
@@ -1472,12 +1540,22 @@ function renderTimeline(){
       const [hh,mm]=e.time.split(":").map(Number);
       if(hh!==h) return;
       const topPct=((mm||0)/60)*100;
+      // duration: end time minus start time if one's set, else 60min default -
+      // same pattern as tasks (t.duration||60). Height can exceed 100% to
+      // visually span into the following hour cell(s), same as tasks do.
+      let durationMins=60;
+      if(e.endTime){
+        const [eh,em]=e.endTime.split(":").map(Number);
+        durationMins=Math.max((eh*60+em)-(hh*60+mm),15);
+      }
+      const heightPct=(durationMins/60)*100;
       const{col:colIdx,totalCols}=diaryTimedLayout.get(e.id)||{col:0,totalCols:1};
       const colPct=100/totalCols;
       const evt=document.createElement("div"); evt.className="cal-evt-timed";
-      evt.style.cssText=`top:${topPct}%;height:100%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${def.color}dd;color:#fff;border-left:3px solid ${def.color};z-index:2`;
-      evt.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div><div class="es">${e.time}</div>`;
-      evt.title=`${def.label} — ${an.name} — ${e.date} ${e.time}${isFuture?" (scheduled)":""}`;
+      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${def.color}dd;color:#fff;border-left:3px solid ${def.color};z-index:2`;
+      const timeLabel=e.endTime?`${e.time}–${e.endTime}`:e.time;
+      evt.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div><div class="es">${timeLabel}</div>`;
+      evt.title=`${def.label} — ${an.name} — ${e.date} ${timeLabel}${isFuture?" (scheduled)":""}`;
       evt.onclick=()=>{
         animalSearch=an.name; DB.config.animalFilters.search=animalSearch; persist();
         switchTo("animals");
@@ -2283,7 +2361,7 @@ function renderTypeFields(type,d){
 }
 function diaryEntrySummary(e){
   const d=e.data||{};
-  const timePrefix=e.time?`${e.time} · `:"";
+  const timePrefix=e.time?`${e.time}${e.endTime?"–"+e.endTime:""} · `:"";
   if(e.type==="training") return timePrefix+([d.task, d.stage, ...trainingMetricsDisplay(e).map(x=>`${x.label} ${x.val}`), d.note].filter(Boolean).join(" · ")||"—");
   const def=diaryTypeDef(e.type);
   const parts=def.fields.map(f=>{
@@ -2297,7 +2375,7 @@ function diaryEntrySummary(e){
 // form) — reuses the same labeled-row look as the surgery detail rows (arow).
 function diaryEntryDetailHTML(e){
   const d=e.data||{};
-  const rows=[arow("Time", e.time)];
+  const rows=[arow("Time", e.time?e.time+(e.endTime?" – "+e.endTime:""):null)];
   if(e.type==="training"){
     rows.push(arow("Task", d.task));
     rows.push(arow("Stage", d.stage));
@@ -2504,7 +2582,7 @@ function paintDiary(container,a){
       <button type="button" class="btn accent dg-save" style="font-size:11px;padding:4px 10px">Save</button>
     </div>`;
   }
-  function renderForm(type,d,entryDate,entryTime){
+  function renderForm(type,d,entryDate,entryTime,entryEndTime){
     d=d||{};
     const isTraining=type==="training";
     const fieldsHTML=isTraining ? `
@@ -2519,9 +2597,15 @@ function paintDiary(container,a){
       : renderTypeFields(type,d);
     const dtVal=(entryDate||selDate)+(entryTime?"T"+entryTime:"");
     return `<div class="dg-form">
-      <label>Date &amp; time</label>
-      <button type="button" class="datebtn dg-f-datetime ${dtVal?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${dtVal?fmtWhenFull(dtVal):"set date"}</button>
-      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin:4px 0 6px">no time set = shows as an all-day item on the Timeline; set one to place it in the hourly view, like a task</div>
+      <div class="dg-row">
+        <div><label>Date &amp; start time</label>
+          <button type="button" class="datebtn dg-f-datetime ${dtVal?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${dtVal?fmtWhenFull(dtVal):"set date"}</button>
+        </div>
+        <div class="dg-f-endwrap" style="${entryTime?"":"display:none"}"><label>End time</label>
+          <button type="button" class="datebtn dg-f-endtime ${entryEndTime?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">🕐</span>${entryEndTime||"set end time"}</button>
+        </div>
+      </div>
+      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin:4px 0 6px">no start time = shows as an all-day item on the Timeline; set one to place it in the hourly view, like a task (end time is optional - defaults to 1 hour)</div>
       ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
       ${formActions()}</div>`;
@@ -2530,7 +2614,16 @@ function paintDiary(container,a){
     host.querySelector(".dg-cancel").onclick=()=>{ formType=null; editingId=null; draw(); };
     // shared date+time picker (same drum-scroll UI tasks use), 15-minute steps
     let dtValue=(editing?editing.date:selDate)+(editing&&editing.time?"T"+editing.time:"");
-    bindDateButton(host.querySelector(".dg-f-datetime"), ()=>dtValue, v=>{ dtValue=v||selDate; }, 15);
+    let endTimeValue=editing?editing.endTime||"":"";
+    const endWrap=host.querySelector(".dg-f-endwrap");
+    bindDateButton(host.querySelector(".dg-f-datetime"), ()=>dtValue, v=>{
+      dtValue=v||selDate;
+      // end time only makes sense once there's a start time to be "after" -
+      // clearing the start time (back to all-day) drops any end time too.
+      endWrap.style.display=hasTime(dtValue)?"":"none";
+      if(!hasTime(dtValue)) endTimeValue="";
+    }, 15);
+    bindTimeButton(host.querySelector(".dg-f-endtime"), ()=>endTimeValue, v=>{ endTimeValue=v||""; }, 15);
     if(type==="training"){
       // swap in the selected task's own parameter fields as its name changes,
       // and drive a themed suggestion dropdown in place of a native <datalist>
@@ -2579,6 +2672,11 @@ function paintDiary(container,a){
     host.querySelector(".dg-save").onclick=()=>{
       const entryDate=(dtValue||selDate).slice(0,10);
       const entryTime=hasTime(dtValue)?dtValue.slice(11,16):null;
+      // end time only means anything alongside a start time, and must be
+      // after it (same-day span) - flag and drop it rather than save
+      // something nonsensical.
+      if(endTimeValue&&entryTime&&endTimeValue<=entryTime){ toast("End time must be after the start time — not saved"); }
+      const entryEndTime=(entryTime&&endTimeValue&&endTimeValue>entryTime)?endTimeValue:null;
       let data={};
       if(type==="training"){
         const taskName=host.querySelector(".dg-f-task").value.trim();
@@ -2615,8 +2713,8 @@ function paintDiary(container,a){
         if(!def.fields.length && !noteVal){ toast("Enter something in Note"); return; }
       }
       data.note=host.querySelector(".dg-f-note").value.trim();
-      if(editing){ editing.data=data; editing.date=entryDate; editing.time=entryTime; editing.edited=Date.now(); }
-      else { a.diary.push({id:uid("d_"), type, date:entryDate, time:entryTime, created:Date.now(), edited:null, data}); }
+      if(editing){ editing.data=data; editing.date=entryDate; editing.time=entryTime; editing.endTime=entryEndTime; editing.edited=Date.now(); }
+      else { a.diary.push({id:uid("d_"), type, date:entryDate, time:entryTime, endTime:entryEndTime, created:Date.now(), edited:null, data}); }
       // perfusion terminates the animal as part of the procedure, so it always
       // implies sacrifice (not the reverse) - only for a completed (today or
       // earlier), not a future-scheduled, entry.
@@ -2713,7 +2811,7 @@ function paintDiary(container,a){
     if(formType){
       const host=container.querySelector(".dg-formhost");
       const editing=editingId?a.diary.find(e=>e.id===editingId):null;
-      host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate, editing?editing.time:"");
+      host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate, editing?editing.time:"", editing?editing.endTime:"");
       wireForm(host,formType,editing);
     }
   }
