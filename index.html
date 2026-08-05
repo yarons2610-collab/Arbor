@@ -186,8 +186,6 @@
   .bv-body{min-height:60px}
   .bv-body canvas{border-radius:10px;background:#0b0f16;display:block}
   .bv-flag{font-family:var(--mono);font-size:9px;color:var(--ink-faint);margin-top:5px;line-height:1.5}
-  .bv-dvreadout{font-family:var(--mono);font-size:10px;color:var(--cyan);margin-top:6px;line-height:1.6}
-  .bv-dvreadout:empty{display:none}
   /* week calendar */
   #timeline{overflow:hidden}  /* display:none from .view.hidden must win; flex moved to inner wrapper */
   /* iOS Safari treats a touch-and-hold-then-move on text content as "select text"
@@ -561,24 +559,29 @@ const KEY="arbor_workspace_v3";   // v3: retire stale v2 storage that carried ol
 const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   animalFilters:{cohort:"all",status:"all",pipe:"all",search:""},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
-  // seeded diary entry types - fully user-editable/deletable afterward, not a
-  // locked-in schema. "timeline:true" means entries of that type surface on
-  // the global Timeline (procedures - the "big things happening" view).
+  // seeded diary entry types - fully user-editable afterward (label/icon/color/
+  // fields/timeline flag), not a locked-in schema. "timeline:true" means entries
+  // of that type surface on the global Timeline (procedures - the "big things
+  // happening" view). "core:true" marks the ones the rest of the app leans on by
+  // key (weight tracking, the pipeline filter bar's surgery/perfusion/histology/
+  // microscopy counts) - those can't be deleted, only edited, so that mechanism
+  // can't be silently broken by removing its type. Anything a user adds via
+  // "+ New type" has no core flag and stays freely deletable.
   diaryTypes:[
-    {key:"weight",   label:"Weight",    icon:"⚖",  color:"#54e08a", timeline:false, fields:[
+    {key:"weight",   label:"Weight",    icon:"⚖",  color:"#54e08a", timeline:false, core:true, fields:[
       {key:"grams",label:"Weight (g)",type:"number"}]},
-    {key:"postop",   label:"Post-op",   icon:"🩹", color:"#ff5f6d", timeline:false, fields:[
+    {key:"postop",   label:"Post-op",   icon:"🩹", color:"#ff5f6d", timeline:false, core:true, fields:[
       {key:"daysPost",label:"Days post-op",type:"number"},
       {key:"bodyCondition",label:"Body condition (1-5)",type:"select",options:["1","2","3","4","5"]},
       {key:"woundOk",label:"Wound OK?",type:"yesno"},
       {key:"severity",label:"Severity",type:"select",options:["none","mild","moderate","severe"]},
       {key:"analgesia",label:"Analgesia",type:"text"}]},
-    {key:"training", label:"Training",  icon:"🎓", color:"#a98cff", timeline:true,  fields:[]},
-    {key:"comment",  label:"Comment",   icon:"💬", color:"#3fd0d6", timeline:false, fields:[]},
-    {key:"surgery",  label:"Surgery",   icon:"🔪", color:"#f2b756", timeline:true,  fields:[]},
-    {key:"perfusion",label:"Perfusion", icon:"💉", color:"#ff8a6b", timeline:true,  fields:[]},
-    {key:"histology",label:"Histology", icon:"🧫", color:"#7db4ff", timeline:true,  fields:[]},
-    {key:"microscopy",label:"Microscopy",icon:"🔬",color:"#e0d454", timeline:true,  fields:[]}
+    {key:"training", label:"Training",  icon:"🎓", color:"#a98cff", timeline:true,  core:true, fields:[]},
+    {key:"comment",  label:"Comment",   icon:"💬", color:"#3fd0d6", timeline:false, core:true, fields:[]},
+    {key:"surgery",  label:"Surgery",   icon:"🔪", color:"#f2b756", timeline:true,  core:true, fields:[]},
+    {key:"perfusion",label:"Perfusion", icon:"💉", color:"#ff8a6b", timeline:true,  core:true, fields:[]},
+    {key:"histology",label:"Histology", icon:"🧫", color:"#7db4ff", timeline:true,  core:true, fields:[]},
+    {key:"microscopy",label:"Microscopy",icon:"🔬",color:"#e0d454", timeline:true,  core:true, fields:[]}
   ],
   keywords:[], // was hardcoded to a specific project's reading-list topics; the Reading view that used this was dropped from this fork, left empty for a clean shared build
   siteLib:[
@@ -732,6 +735,11 @@ function migrate(){                       // backfill fields added in later vers
     // have nothing in common). Convert any leftover strings in place.
     DB.config.taskLib=(DB.config.taskLib||[]).map(t=>typeof t==="string"?{name:t,params:[]}:t);
     if(!DB.config.diaryTypes) DB.config.diaryTypes=DEFAULT_CONFIG.diaryTypes.map(t=>({...t,fields:t.fields.map(f=>({...f}))}));
+    // backfill core:true onto any pre-existing diaryTypes saved before that flag
+    // existed, matched by key against the seeded set — a type a user added
+    // themselves (no key match) is untouched and stays deletable.
+    else{ const coreKeys=new Set(DEFAULT_CONFIG.diaryTypes.map(t=>t.key));
+      DB.config.diaryTypes.forEach(t=>{ if(coreKeys.has(t.key)&&!t.core)t.core=true; }); }
   }
   // pull the persisted animal filter selections into the live module-level state —
   // runs on boot and after every JSON import so filters travel with the workspace
@@ -740,7 +748,9 @@ function migrate(){                       // backfill fields added in later vers
   animalPipe=DB.config.animalFilters.pipe||"all";
   animalSearch=DB.config.animalFilters.search||"";
   // backfill new virus fields
-  (DB.config.virusLib||[]).forEach(v=>{ if(!v.promoter)v.promoter=""; if(!v.titer)v.titer=""; if(!v.source)v.source=""; if(!v.note)v.note=""; });
+  (DB.config.virusLib||[]).forEach(v=>{ if(!v.promoter)v.promoter=""; if(!v.titer)v.titer=""; if(!v.source)v.source=""; if(!v.note)v.note="";
+    if(v.backupTubes===undefined)v.backupTubes=null; if(v.aliquotTubes===undefined)v.aliquotTubes=null;
+    if(!v.boxNumber)v.boxNumber=""; if(!v.boxColor)v.boxColor=""; if(!v.boxLocation)v.boxLocation=""; if(!v.needOrder)v.needOrder=false; });
   if(!DB.inventory)DB.inventory={};
   if(!DB.animals)DB.animals=[];
   // backfill new task fields
@@ -1965,13 +1975,24 @@ function renderVirusLib(){
           <input class="lv_src"   data-vi="${i}" value="${escAttr(v.source||"")}"   placeholder="Source / Addgene # / lot"     style="${IST}">
           <input class="lv_note"  data-vi="${i}" value="${escAttr(v.note||"")}"     placeholder="Notes"                        style="${IST}">
         </div>
+        <div style="display:flex;gap:6px;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid var(--line2);overflow-x:auto">
+          <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto">storage</span>
+          <input class="lv_backup" data-vi="${i}" type="number" min="0" inputmode="numeric" value="${v.backupTubes!=null?v.backupTubes:""}" placeholder="backup tubes" style="flex:0 0 auto;width:92px;${IST}">
+          <input class="lv_aliquot" data-vi="${i}" type="number" min="0" inputmode="numeric" value="${v.aliquotTubes!=null?v.aliquotTubes:""}" placeholder="aliquoted tubes" style="flex:0 0 auto;width:104px;${IST}">
+          <input class="lv_boxnum" data-vi="${i}" value="${escAttr(v.boxNumber||"")}" placeholder="box #" style="flex:0 0 auto;width:64px;${IST}">
+          <input class="lv_boxcolor" data-vi="${i}" type="color" value="${v.boxColor&&v.boxColor.startsWith("#")?v.boxColor:"#54e08a"}" title="box color" style="width:28px;height:28px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
+          <input class="lv_boxloc" data-vi="${i}" value="${escAttr(v.boxLocation||"")}" placeholder="box location (e.g. -80 shelf 2)" style="flex:1;min-width:140px;${IST}">
+          <label class="lv_orderwrap" title="Flag this virus as needing a reorder — purely a note to self, nothing else in the app reacts to it" style="display:flex;align-items:center;gap:5px;flex:0 0 auto;border:1px solid ${v.needOrder?"#8a6a2f":"var(--line2)"};background:${v.needOrder?"linear-gradient(180deg,#3a2e14,#302410)":"var(--panel2)"};color:${v.needOrder?"#ffd166":"var(--ink-dim)"};border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;white-space:nowrap">
+            <input type="checkbox" class="lv_order" data-vi="${i}" ${v.needOrder?"checked":""} style="width:auto;margin:0">order more?</label>
+        </div>
       </div>`).join("")
     : `<div class="empty" style="padding:20px 0">No viruses yet — add one above.</div>`;
   }
   paintVRows();
 
   host.querySelector("#vlib_add").onclick = () => {
-    (DB.config.virusLib=DB.config.virusLib||[]).push({name:"",type:"antero",promoter:"",titer:"",source:"",note:""});
+    (DB.config.virusLib=DB.config.virusLib||[]).push({name:"",type:"antero",promoter:"",titer:"",source:"",note:"",
+      backupTubes:null,aliquotTubes:null,boxNumber:"",boxColor:"",boxLocation:"",needOrder:false});
     persist(); paintVRows();
     const rows = wrap.querySelectorAll(".lv_name"); if(rows.length) rows[rows.length-1].focus();
   };
@@ -1982,11 +2003,23 @@ function renderVirusLib(){
     if(e.target.classList.contains("lv_titer")) v.titer    = e.target.value;
     if(e.target.classList.contains("lv_src"))   v.source   = e.target.value;
     if(e.target.classList.contains("lv_note"))  v.note     = e.target.value;
+    if(e.target.classList.contains("lv_boxnum"))v.boxNumber= e.target.value;
+    if(e.target.classList.contains("lv_boxloc"))v.boxLocation=e.target.value;
+    if(e.target.classList.contains("lv_backup")) v.backupTubes = e.target.value===""?null:+e.target.value;
+    if(e.target.classList.contains("lv_aliquot"))v.aliquotTubes= e.target.value===""?null:+e.target.value;
     persist();
   });
   wrap.addEventListener("change", e => {
     const vi = +e.target.dataset.vi; const v = (DB.config.virusLib||[])[vi]; if(!v) return;
     if(e.target.classList.contains("lv_type")){ v.type = e.target.value; persist(); }
+    if(e.target.classList.contains("lv_boxcolor")){ v.boxColor = e.target.value; persist(); }
+    if(e.target.classList.contains("lv_order")){
+      v.needOrder = e.target.checked; persist();
+      const wrapEl = e.target.closest(".lv_orderwrap");
+      wrapEl.style.borderColor = v.needOrder?"#8a6a2f":"var(--line2)";
+      wrapEl.style.background = v.needOrder?"linear-gradient(180deg,#3a2e14,#302410)":"var(--panel2)";
+      wrapEl.style.color = v.needOrder?"#ffd166":"var(--ink-dim)";
+    }
   });
   wrap.addEventListener("click", e => {
     const d = e.target.closest(".lv_del"); if(!d) return;
@@ -2165,8 +2198,10 @@ function renderDiaryTypesLib(){
           </select>
           <input class="ldt_label" data-ti="${i}" value="${escAttr(t.label)}" placeholder="Type name (e.g. Cage change)" style="flex:1;min-width:140px;${IST}">
           <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto"><input type="checkbox" class="ldt_timeline" data-ti="${i}" style="width:auto" ${t.timeline?"checked":""}> shows on Timeline</label>
-          <button class="ldt_del" data-ti="${i}"
-            style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ type</button>
+          ${t.core
+            ?`<span title="Built-in type — the pipeline/weight tracking relies on it, so it can't be deleted (its label, icon, color and fields are still fully editable)" style="border:1px solid var(--line2);background:transparent;color:var(--ink-faint);border-radius:6px;padding:3px 9px;font-size:12px">🔒 core</span>`
+            :`<button class="ldt_del" data-ti="${i}"
+            style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ type</button>`}
         </div>
         <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:6px">Custom fields (every entry also always has a free-text Note, in addition to these)</div>
         ${t.key==="training" ? `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">Training's fields come from Materials → Behavioral Tasks instead (per-task parameters), not a fixed list here.</div>` : `
@@ -2220,6 +2255,8 @@ function renderDiaryTypesLib(){
   wrap.addEventListener("click", e => {
     const delT = e.target.closest(".ldt_del"), addF = e.target.closest(".ldt_addfield"), delF = e.target.closest(".ldf_del");
     if(delT){
+      const t=(DB.config.diaryTypes||[])[+delT.dataset.ti];
+      if(t&&t.core){ toast("Built-in type — can't be deleted"); return; }
       if(confirm("Delete this diary type? Already-logged entries keep their data, but it'll show without labels/colors without this definition.")){
         (DB.config.diaryTypes||[]).splice(+delT.dataset.ti,1); persist(); paintDTRows();
       }
@@ -2897,8 +2934,6 @@ function paintDiary(container,a){
           if(f.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))data[f.key]=n; return; }
           if(raw.trim()!=="")data[f.key]=raw.trim();
         });
-        const noteVal=host.querySelector(".dg-f-note").value.trim();
-        if(!def.fields.length && !noteVal){ toast("Enter something in Note"); return; }
       }
       data.note=host.querySelector(".dg-f-note").value.trim();
       if(editing){ editing.data=data; editing.date=entryDate; editing.time=entryTime; editing.endTime=entryEndTime; editing.edited=Date.now(); }
@@ -3375,42 +3410,13 @@ function mountBrainViewer(host,getSurgery,opts){
     +'<div class="seg bv-dvmode" title="What DV=0 means: bregma\'s own skull height everywhere, or the real brain surface at each AP/ML"><button data-v="bregma">DV: Bregma</button><button data-v="surface">DV: Surface</button></div>'
     +subButtons
     +'<button class="bv-expand" title="Enlarge">⛶ Enlarge</button></div>'
-    +'<div class="bv-body"></div><div class="bv-dvreadout"></div><div class="bv-flag"></div>';
-  const body=host.querySelector(".bv-body"),flag=host.querySelector(".bv-flag"),expand=host.querySelector(".bv-expand"),
-        dvreadout=host.querySelector(".bv-dvreadout");
-  // The bregma/surface shift often lands mostly along the camera's current
-  // viewing axis, which can foreshorten it to almost nothing on screen even
-  // though the marker really did move — this readout gives an unambiguous,
-  // camera-angle-independent number so the toggle's effect is never just
-  // "trust the picture." One line per injection with real AP/ML typed in.
-  function paintDVReadout(){
-    const surgery=getSurgery(); const injs=(surgery&&surgery.injections)||[];
-    const mesh=MESH3D||loadCCF();
-    const rows=injs.map((inj,i)=>{
-      if(inj.ap===""&&inj.ml===""&&inj.dv==="")return null;
-      const bregmaY=bregma2ccf(inj.ap,inj.ml,0)[1];
-      // query the raw raycast directly (not bregma2ccfSurface, which already
-      // silently falls back to bregmaY on a miss) so a genuine off-mesh miss
-      // reports as such instead of masquerading as a real zero-ish delta.
-      const [xFlat,,zFlat]=bregma2ccf(inj.ap,inj.ml,0);
-      const rawSurfY=mesh?surfaceYAt(mesh,xFlat,zFlat):null;
-      if(rawSurfY==null)return `#${i+1}: off the loaded mesh — surface mode falls back to bregma-flat here`;
-      const delta=Math.round(rawSurfY-bregmaY);
-      return `#${i+1} (AP ${inj.ap||0}, ML ${inj.ml||0}): surface is ${Math.abs(delta)}µm ${delta>=0?"deeper than":"shallower than"} bregma's flat height here${dvRefMode==="surface"?" — active":""}`;
-    }).filter(Boolean);
-    if(dvreadout) dvreadout.innerHTML=rows.length?rows.join("<br>"):"";
-  }
+    +'<div class="bv-body"></div><div class="bv-flag"></div>';
+  const body=host.querySelector(".bv-body"),flag=host.querySelector(".bv-flag"),expand=host.querySelector(".bv-expand");
   function render(){
     render3DBrain(body,getSurgery(), opts.big?Math.round(window.innerHeight*0.66):300);
     host.querySelectorAll(".bv-sub-toggle").forEach(b=>b.classList.toggle("on",activeSubstructures.has(b.dataset.sub)));
     host.querySelectorAll(".bv-dvmode button").forEach(b=>b.classList.toggle("on",b.dataset.v===dvRefMode));
-    paintDVReadout();
-    flag.innerHTML="Allen CCF root mesh — CCFv3 (Wang et al. 2020). "
-      +"Bregma→CCF: 5400/5700/332 µm + 5° pitch (Chon et al. 2019). "
-      +(dvRefMode==="surface"
-        ?"<b>DV is measured from the local brain surface</b> at each injection's AP/ML (raycast onto the mesh), not from bregma's own height. "
-        :"<b>DV is measured from bregma's own skull height</b>, flat everywhere — residual error grows with distance from bregma (±0.5 mm skull variation). ")
-      +"Small scattered dots = observed viral expression site(s) (dot count follows low/medium/high, set per injection).";
+    flag.innerHTML="Allen CCF root mesh — CCFv3 (Wang et al. 2020). Bregma→CCF: 5400/5700/332 µm + 5° pitch (Chon et al. 2019).";
   }
   host.querySelectorAll(".bv-sub-toggle").forEach(b=>{
     b.onclick=()=>{ const key=b.dataset.sub; activeSubstructures.has(key)?activeSubstructures.delete(key):activeSubstructures.add(key); render(); };
@@ -4186,8 +4192,9 @@ function exportFullDatabaseExcel(){
   const cohortsRows=[["Name","Color"]];
   (DB.cohorts||[]).forEach(c=>cohortsRows.push([c.name,c.color||""]));
 
-  const virusRows=[["Name","Type","Promoter","Titer","Source","Note"]];
-  (DB.config.virusLib||[]).forEach(v=>virusRows.push([v.name,v.type||"",v.promoter||"",v.titer||"",v.source||"",v.note||""]));
+  const virusRows=[["Name","Type","Promoter","Titer","Source","Note","Backup tubes","Aliquoted tubes","Box #","Box color","Box location","Need to order?"]];
+  (DB.config.virusLib||[]).forEach(v=>virusRows.push([v.name,v.type||"",v.promoter||"",v.titer||"",v.source||"",v.note||"",
+    v.backupTubes,v.aliquotTubes,v.boxNumber||"",v.boxColor||"",v.boxLocation||"",v.needOrder?"Yes":""]));
 
   const siteRows=[["Name","AP","ML","DV"]];
   (DB.config.siteLib||[]).forEach(s=>siteRows.push([s.name,s.ap,s.ml,s.dv]));
