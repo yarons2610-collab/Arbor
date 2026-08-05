@@ -186,6 +186,8 @@
   .bv-body{min-height:60px}
   .bv-body canvas{border-radius:10px;background:#0b0f16;display:block}
   .bv-flag{font-family:var(--mono);font-size:9px;color:var(--ink-faint);margin-top:5px;line-height:1.5}
+  .bv-dvreadout{font-family:var(--mono);font-size:10px;color:var(--cyan);margin-top:6px;line-height:1.6}
+  .bv-dvreadout:empty{display:none}
   /* week calendar */
   #timeline{overflow:hidden}  /* display:none from .view.hidden must win; flex moved to inner wrapper */
   /* iOS Safari treats a touch-and-hold-then-move on text content as "select text"
@@ -3373,12 +3375,36 @@ function mountBrainViewer(host,getSurgery,opts){
     +'<div class="seg bv-dvmode" title="What DV=0 means: bregma\'s own skull height everywhere, or the real brain surface at each AP/ML"><button data-v="bregma">DV: Bregma</button><button data-v="surface">DV: Surface</button></div>'
     +subButtons
     +'<button class="bv-expand" title="Enlarge">⛶ Enlarge</button></div>'
-    +'<div class="bv-body"></div><div class="bv-flag"></div>';
-  const body=host.querySelector(".bv-body"),flag=host.querySelector(".bv-flag"),expand=host.querySelector(".bv-expand");
+    +'<div class="bv-body"></div><div class="bv-dvreadout"></div><div class="bv-flag"></div>';
+  const body=host.querySelector(".bv-body"),flag=host.querySelector(".bv-flag"),expand=host.querySelector(".bv-expand"),
+        dvreadout=host.querySelector(".bv-dvreadout");
+  // The bregma/surface shift often lands mostly along the camera's current
+  // viewing axis, which can foreshorten it to almost nothing on screen even
+  // though the marker really did move — this readout gives an unambiguous,
+  // camera-angle-independent number so the toggle's effect is never just
+  // "trust the picture." One line per injection with real AP/ML typed in.
+  function paintDVReadout(){
+    const surgery=getSurgery(); const injs=(surgery&&surgery.injections)||[];
+    const mesh=MESH3D||loadCCF();
+    const rows=injs.map((inj,i)=>{
+      if(inj.ap===""&&inj.ml===""&&inj.dv==="")return null;
+      const bregmaY=bregma2ccf(inj.ap,inj.ml,0)[1];
+      // query the raw raycast directly (not bregma2ccfSurface, which already
+      // silently falls back to bregmaY on a miss) so a genuine off-mesh miss
+      // reports as such instead of masquerading as a real zero-ish delta.
+      const [xFlat,,zFlat]=bregma2ccf(inj.ap,inj.ml,0);
+      const rawSurfY=mesh?surfaceYAt(mesh,xFlat,zFlat):null;
+      if(rawSurfY==null)return `#${i+1}: off the loaded mesh — surface mode falls back to bregma-flat here`;
+      const delta=Math.round(rawSurfY-bregmaY);
+      return `#${i+1} (AP ${inj.ap||0}, ML ${inj.ml||0}): surface is ${Math.abs(delta)}µm ${delta>=0?"deeper than":"shallower than"} bregma's flat height here${dvRefMode==="surface"?" — active":""}`;
+    }).filter(Boolean);
+    if(dvreadout) dvreadout.innerHTML=rows.length?rows.join("<br>"):"";
+  }
   function render(){
     render3DBrain(body,getSurgery(), opts.big?Math.round(window.innerHeight*0.66):300);
     host.querySelectorAll(".bv-sub-toggle").forEach(b=>b.classList.toggle("on",activeSubstructures.has(b.dataset.sub)));
     host.querySelectorAll(".bv-dvmode button").forEach(b=>b.classList.toggle("on",b.dataset.v===dvRefMode));
+    paintDVReadout();
     flag.innerHTML="Allen CCF root mesh — CCFv3 (Wang et al. 2020). "
       +"Bregma→CCF: 5400/5700/332 µm + 5° pitch (Chon et al. 2019). "
       +(dvRefMode==="surface"
