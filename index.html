@@ -453,7 +453,7 @@
         <button class="mat-stab on" data-ms="viruses">Viruses</button>
         <button class="mat-stab" data-ms="sites">Injection Sites</button>
         <button class="mat-stab" data-ms="tasks">Behavioral Tasks</button>
-        <button class="mat-stab" data-ms="diarytypes">Diary Types</button>
+        <button class="mat-stab" data-ms="diarytypes">Entry Types</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview" id="ms-viruses"></div>
@@ -562,26 +562,24 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // seeded diary entry types - fully user-editable afterward (label/icon/color/
   // fields/timeline flag), not a locked-in schema. "timeline:true" means entries
   // of that type surface on the global Timeline (procedures - the "big things
-  // happening" view). "core:true" marks the ones the rest of the app leans on by
-  // key (weight tracking, the pipeline filter bar's surgery/perfusion/histology/
-  // microscopy counts) - those can't be deleted, only edited, so that mechanism
-  // can't be silently broken by removing its type. Anything a user adds via
-  // "+ New type" has no core flag and stays freely deletable.
+  // happening" view). "core:true" marks the ones that can't be deleted (weight/
+  // training/surgery specifically, by explicit request) — everything else
+  // seeded stays just as deletable as a type a user adds themselves.
   diaryTypes:[
     {key:"weight",   label:"Weight",    icon:"⚖",  color:"#54e08a", timeline:false, core:true, fields:[
       {key:"grams",label:"Weight (g)",type:"number"}]},
-    {key:"postop",   label:"Post-op",   icon:"🩹", color:"#ff5f6d", timeline:false, core:true, fields:[
+    {key:"postop",   label:"Post-op",   icon:"🩹", color:"#ff5f6d", timeline:false, fields:[
       {key:"daysPost",label:"Days post-op",type:"number"},
       {key:"bodyCondition",label:"Body condition (1-5)",type:"select",options:["1","2","3","4","5"]},
       {key:"woundOk",label:"Wound OK?",type:"yesno"},
       {key:"severity",label:"Severity",type:"select",options:["none","mild","moderate","severe"]},
       {key:"analgesia",label:"Analgesia",type:"text"}]},
     {key:"training", label:"Training",  icon:"🎓", color:"#a98cff", timeline:true,  core:true, fields:[]},
-    {key:"comment",  label:"Comment",   icon:"💬", color:"#3fd0d6", timeline:false, core:true, fields:[]},
+    {key:"comment",  label:"Comment",   icon:"💬", color:"#3fd0d6", timeline:false, fields:[]},
     {key:"surgery",  label:"Surgery",   icon:"🔪", color:"#f2b756", timeline:true,  core:true, fields:[]},
-    {key:"perfusion",label:"Perfusion", icon:"💉", color:"#ff8a6b", timeline:true,  core:true, fields:[]},
-    {key:"histology",label:"Histology", icon:"🧫", color:"#7db4ff", timeline:true,  core:true, fields:[]},
-    {key:"microscopy",label:"Microscopy",icon:"🔬",color:"#e0d454", timeline:true,  core:true, fields:[]}
+    {key:"perfusion",label:"Perfusion", icon:"💉", color:"#ff8a6b", timeline:true,  fields:[]},
+    {key:"histology",label:"Histology", icon:"🧫", color:"#7db4ff", timeline:true,  fields:[]},
+    {key:"microscopy",label:"Microscopy",icon:"🔬",color:"#e0d454", timeline:true,  fields:[]}
   ],
   keywords:[], // was hardcoded to a specific project's reading-list topics; the Reading view that used this was dropped from this fork, left empty for a clean shared build
   siteLib:[
@@ -735,11 +733,14 @@ function migrate(){                       // backfill fields added in later vers
     // have nothing in common). Convert any leftover strings in place.
     DB.config.taskLib=(DB.config.taskLib||[]).map(t=>typeof t==="string"?{name:t,params:[]}:t);
     if(!DB.config.diaryTypes) DB.config.diaryTypes=DEFAULT_CONFIG.diaryTypes.map(t=>({...t,fields:t.fields.map(f=>({...f}))}));
-    // backfill core:true onto any pre-existing diaryTypes saved before that flag
-    // existed, matched by key against the seeded set — a type a user added
-    // themselves (no key match) is untouched and stays deletable.
-    else{ const coreKeys=new Set(DEFAULT_CONFIG.diaryTypes.map(t=>t.key));
-      DB.config.diaryTypes.forEach(t=>{ if(coreKeys.has(t.key)&&!t.core)t.core=true; }); }
+    // sync the core flag on any pre-existing seeded type (matched by key) to
+    // whatever DEFAULT_CONFIG currently says — authoritative both ways, not
+    // just additive, so narrowing which types are core (as happened once
+    // already) actually un-cores the ones dropped from that list instead of
+    // leaving them stuck non-deletable from an earlier save. A type a user
+    // added themselves (no key match in the seeded set) is left untouched.
+    else{ const coreByKey=new Map(DEFAULT_CONFIG.diaryTypes.map(t=>[t.key,!!t.core]));
+      DB.config.diaryTypes.forEach(t=>{ if(coreByKey.has(t.key))t.core=coreByKey.get(t.key); }); }
   }
   // pull the persisted animal filter selections into the live module-level state —
   // runs on boot and after every JSON import so filters travel with the workspace
@@ -2039,24 +2040,46 @@ function renderSiteLib(){
     <button id="slib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New site</button>`;
   host.appendChild(hdr);
 
-  const wrap = document.createElement("div"); wrap.id = "slib_rows"; host.appendChild(wrap);
+  const wrap = document.createElement("div"); wrap.id = "slib_rows"; wrap.style.overflowX="auto"; host.appendChild(wrap);
+  // only one inline 3D viewer can be live at a time (render3DBrain tears down
+  // the previous WebGL context on mount), so expanding a site's brain preview
+  // is exclusive, same as the single-instance animal-card viewers.
+  let expandedSiteIdx=null, expandedBV=null;
+  const GRID="1fr 80px 80px 80px 24px 30px 30px";
+  // .main clips horizontal overflow rather than scrolling it, so on a narrow
+  // screen this many fixed-width columns need their own scroll affordance
+  // (min-width holds the columns to size; wrap's overflow-x:auto above makes
+  // that width scrollable instead of clipped/unreachable).
   function paintSRows(){
     const sl = DB.config.siteLib||[];
+    expandedBV=null;
     wrap.innerHTML = sl.length ? `
-      <div style="display:grid;grid-template-columns:1fr 80px 80px 80px 24px 30px;gap:6px;align-items:center;font-family:var(--mono);font-size:10px;color:var(--ink-faint);padding:4px 0;margin-bottom:4px">
-        <span>Structure name</span><span style="text-align:center">AP (mm)</span><span style="text-align:center">ML (mm)</span><span style="text-align:center">DV (mm)</span><span></span><span></span>
+      <div style="display:grid;grid-template-columns:${GRID};gap:6px;align-items:center;font-family:var(--mono);font-size:10px;color:var(--ink-faint);padding:4px 0;margin-bottom:4px;min-width:520px">
+        <span>Structure name</span><span style="text-align:center">AP (mm)</span><span style="text-align:center">ML (mm)</span><span style="text-align:center">DV (mm)</span><span></span><span></span><span></span>
       </div>`
       + sl.map((s,i) => `
-      <div style="display:grid;grid-template-columns:1fr 80px 80px 80px 24px 30px;gap:6px;align-items:center;padding:6px 0;border-top:1px solid var(--line)">
+      <div style="display:grid;grid-template-columns:${GRID};gap:6px;align-items:center;padding:6px 0;border-top:1px solid var(--line);min-width:520px">
         <input class="ls_name" data-si="${i}" value="${escAttr(s.name)}" placeholder="Structure name" style="${IST}">
         <input class="ls_ap"   data-si="${i}" type="number" step="0.05" value="${s.ap}" style="${IST};text-align:center">
         <input class="ls_ml"   data-si="${i}" type="number" step="0.05" value="${s.ml}" style="${IST};text-align:center">
         <input class="ls_dv"   data-si="${i}" type="number" step="0.05" value="${s.dv}" style="${IST};text-align:center">
         <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">mm</span>
+        <button class="ls_show" data-si="${i}" title="Show on brain"
+          style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:12px">${expandedSiteIdx===i?"▴":"▾"}</button>
         <button class="ls_del" data-si="${i}"
           style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕</button>
-      </div>`).join("")
+      </div>
+      ${expandedSiteIdx===i?`<div class="ls_bv" style="padding:10px 0 14px;border-top:1px solid var(--line)"></div>`:""}`).join("")
     : `<div class="empty" style="padding:20px 0">No sites yet — add one above.</div>`;
+    if(expandedSiteIdx!=null && sl[expandedSiteIdx]){
+      const bvHost=wrap.querySelector(".ls_bv");
+      if(bvHost){
+        const s=sl[expandedSiteIdx];
+        expandedBV=mountBrainViewer(bvHost, ()=>({headpost:false,window:false,injections:[
+          {ap:s.ap,ml:s.ml,dv:s.dv,type:"other",color:"#54e08a",virus:"",siteRegion:s.name,partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[]}
+        ]}));
+      }
+    }
   }
   paintSRows();
 
@@ -2072,10 +2095,12 @@ function renderSiteLib(){
     if(e.target.classList.contains("ls_ml"))   s.ml   = +e.target.value;
     if(e.target.classList.contains("ls_dv"))   s.dv   = +e.target.value;
     persist();
+    if(si===expandedSiteIdx && expandedBV) expandedBV.refresh();
   });
   wrap.addEventListener("click", e => {
-    const d = e.target.closest(".ls_del"); if(!d) return;
-    (DB.config.siteLib||[]).splice(+d.dataset.si,1); persist(); paintSRows();
+    const d = e.target.closest(".ls_del"), sh = e.target.closest(".ls_show");
+    if(d){ (DB.config.siteLib||[]).splice(+d.dataset.si,1); expandedSiteIdx=null; persist(); paintSRows(); return; }
+    if(sh){ const i=+sh.dataset.si; expandedSiteIdx = expandedSiteIdx===i?null:i; paintSRows(); return; }
   });
 }
 
@@ -2191,16 +2216,13 @@ function renderDiaryTypesLib(){
       <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:9px;flex-wrap:wrap">
           <input type="color" class="ldt_color" data-ti="${i}" value="${t.color&&t.color.startsWith("#")?t.color:"#54e08a"}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
-          <input class="ldt_icon" data-ti="${i}" value="${escAttr(t.icon||"")}" placeholder="🔖" style="width:44px;text-align:center;flex:0 0 auto;${IST}">
-          <select class="ldt_iconpick" data-ti="${i}" title="pick an icon" style="flex:0 0 auto;width:46px;${IST}">
-            <option value="">▾</option>
+          <select class="ldt_iconpick" data-ti="${i}" title="icon" style="flex:0 0 auto;width:52px;${IST}">
+            ${t.icon&&!DIARY_ICON_CHOICES.includes(t.icon)?`<option value="${escAttr(t.icon)}" selected>${esc(t.icon)}</option>`:""}
             ${DIARY_ICON_CHOICES.map(e=>`<option value="${e}" ${t.icon===e?"selected":""}>${e}</option>`).join("")}
           </select>
           <input class="ldt_label" data-ti="${i}" value="${escAttr(t.label)}" placeholder="Type name (e.g. Cage change)" style="flex:1;min-width:140px;${IST}">
           <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto"><input type="checkbox" class="ldt_timeline" data-ti="${i}" style="width:auto" ${t.timeline?"checked":""}> shows on Timeline</label>
-          ${t.core
-            ?`<span title="Built-in type — the pipeline/weight tracking relies on it, so it can't be deleted (its label, icon, color and fields are still fully editable)" style="border:1px solid var(--line2);background:transparent;color:var(--ink-faint);border-radius:6px;padding:3px 9px;font-size:12px">🔒 core</span>`
-            :`<button class="ldt_del" data-ti="${i}"
+          ${t.core?"":`<button class="ldt_del" data-ti="${i}"
             style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ type</button>`}
         </div>
         <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:6px">Custom fields (every entry also always has a free-text Note, in addition to these)</div>
@@ -2219,7 +2241,7 @@ function renderDiaryTypesLib(){
         <button class="ldt_addfield" data-ti="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add field</button>
         `}
       </div>`).join("")
-    : `<div class="empty" style="padding:20px 0">No diary types yet — add one above.</div>`;
+    : `<div class="empty" style="padding:20px 0">No entry types yet — add one above.</div>`;
   }
   paintDTRows();
 
@@ -2231,7 +2253,6 @@ function renderDiaryTypesLib(){
   wrap.addEventListener("input", e => {
     const ti = +e.target.dataset.ti; const t = (DB.config.diaryTypes||[])[ti]; if(!t) return;
     if(e.target.classList.contains("ldt_label")) { t.label = e.target.value; persist(); return; }
-    if(e.target.classList.contains("ldt_icon"))  { t.icon  = e.target.value; persist(); return; }
     if(e.target.classList.contains("ldf_label")) {
       const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.label = e.target.value; persist(); }
     }
@@ -2243,7 +2264,7 @@ function renderDiaryTypesLib(){
   wrap.addEventListener("change", e => {
     const ti = +e.target.dataset.ti; const t = (DB.config.diaryTypes||[])[ti]; if(!t) return;
     if(e.target.classList.contains("ldt_color"))    { t.color = e.target.value; persist(); return; }
-    if(e.target.classList.contains("ldt_iconpick")) { if(e.target.value){ t.icon = e.target.value; persist(); paintDTRows(); } return; }
+    if(e.target.classList.contains("ldt_iconpick")) { t.icon = e.target.value; persist(); paintDTRows(); return; }
     if(e.target.classList.contains("ldt_timeline")) { t.timeline = e.target.checked; persist(); return; }
     if(e.target.classList.contains("ldf_type")) {
       const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.type = e.target.value; persist(); paintDTRows(); }
@@ -2257,7 +2278,7 @@ function renderDiaryTypesLib(){
     if(delT){
       const t=(DB.config.diaryTypes||[])[+delT.dataset.ti];
       if(t&&t.core){ toast("Built-in type — can't be deleted"); return; }
-      if(confirm("Delete this diary type? Already-logged entries keep their data, but it'll show without labels/colors without this definition.")){
+      if(confirm("Delete this entry type? Already-logged entries keep their data, but it'll show without labels/colors without this definition.")){
         (DB.config.diaryTypes||[]).splice(+delT.dataset.ti,1); persist(); paintDTRows();
       }
     } else if(addF){
