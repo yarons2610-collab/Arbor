@@ -106,6 +106,12 @@
   .datebtn:hover{border-color:var(--gcamp)}
   .datebtn.datebtn-empty{color:var(--ink-faint)}
   .cal-pop{position:fixed;z-index:90;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:12px;box-shadow:0 24px 60px -22px #000;width:256px}
+  .emoji-btn{width:36px;height:32px;font-size:16px;text-align:center;background:var(--bg2);border:1px solid var(--line2);border-radius:6px;cursor:pointer}
+  .emoji-pop{position:fixed;z-index:90;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:8px;box-shadow:0 24px 60px -22px #000;width:220px}
+  .emoji-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;max-height:220px;overflow-y:auto}
+  .emoji-cell{width:100%;aspect-ratio:1;font-size:17px;background:var(--bg2);border:1px solid var(--line2);border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .emoji-cell:hover{border-color:var(--gold)}
+  .emoji-cell.on{border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
   .cal-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
   .cal-h b{font-family:var(--disp);font-size:13px;color:var(--ink)}
   .cal-nav{border:1px solid var(--line2);background:var(--panel);color:var(--ink);border-radius:6px;width:26px;height:26px;cursor:pointer;font-size:13px}
@@ -453,12 +459,14 @@
         <button class="mat-stab on" data-ms="viruses">Viruses</button>
         <button class="mat-stab" data-ms="sites">Injection Sites</button>
         <button class="mat-stab" data-ms="tasks">Behavioral Tasks</button>
+        <button class="mat-stab" data-ms="procedures">Procedures</button>
         <button class="mat-stab" data-ms="diarytypes">Entry Types</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-tasks"></div>
+      <div class="wrap mat-subview hidden" id="ms-procedures"></div>
       <div class="wrap mat-subview hidden" id="ms-diarytypes"></div>
     </div>
     <div class="view hidden wrap" id="reading"></div>
@@ -598,7 +606,11 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
     {name:"AAV2-retro-CAG-GFP",                     type:"retro",  promoter:"CAG",   titer:"", source:"", note:"Retrograde reporter for anatomy / validation."},
     {name:"AAV1-hSyn-GCaMP6s",                      type:"antero", promoter:"hSyn",  titer:"", source:"", note:"Calcium indicator, slow kinetics. For 2P imaging of PT activity."},
     {name:"AAV1-hSyn-mRuby2",                       type:"antero", promoter:"hSyn",  titer:"", source:"", note:"Red morphological reporter for dendritic imaging (Otor et al. 2022)."}
-  ]
+  ],
+  // saved procedure templates (Materials > Procedures) — a named bundle of
+  // head-post/window + a full injection list, built once and reapplied to
+  // future animals via the animal editor's "Apply saved procedure" dropdown.
+  procedureLib:[]
 };
 let DB={domains:[],tasks:[],readings:[],inventory:{},animals:[],cohorts:[],config:{...DEFAULT_CONFIG}};
 const DOMAIN_PALETTE=["#54e08a","#ff5f92","#f2b756","#3fd0d6","#a98cff","#ff8a6b","#7db4ff","#e0d454"];
@@ -725,6 +737,7 @@ function migrate(){                       // backfill fields added in later vers
   else{ DB.config={...DEFAULT_CONFIG,...DB.config};
     if(!DB.config.siteLib)  DB.config.siteLib=[...DEFAULT_CONFIG.siteLib];
     if(!DB.config.virusLib) DB.config.virusLib=[...DEFAULT_CONFIG.virusLib];
+    if(!DB.config.procedureLib) DB.config.procedureLib=[...DEFAULT_CONFIG.procedureLib];
     if(!DB.config.animalFilters) DB.config.animalFilters={...DEFAULT_CONFIG.animalFilters};
     if(!DB.config.taskLib)  DB.config.taskLib=[...DEFAULT_CONFIG.taskLib];
     // taskLib upgraded from plain task-name strings (autocomplete-only) to
@@ -1057,6 +1070,28 @@ function openTimePicker(anchor, value, onPick, minuteStep){
   const out=(e)=>{ if(!pop.contains(e.target)&&e.target!==anchor) closeCalendar(); };
   document.addEventListener("mousedown",out,true);
   _calEls={pop,out};
+}
+// Grid popover for picking an emoji — a native <select> only ever shows one
+// per row (tall, narrow, wastes most of the popup on whitespace); a grid
+// fits the whole curated set in a compact square instead.
+let _emojiEls=null;
+function closeEmojiPicker(){ if(_emojiEls){ _emojiEls.pop.remove(); document.removeEventListener("mousedown",_emojiEls.out,true); _emojiEls=null; } }
+function openEmojiPicker(anchor, choices, current, onPick){
+  closeEmojiPicker(); closeCalendar();
+  const pop=document.createElement("div"); pop.className="emoji-pop";
+  pop.innerHTML=`<div class="emoji-grid">${choices.map(e=>`<button type="button" class="emoji-cell${e===current?" on":""}" data-e="${escAttr(e)}">${esc(e)}</button>`).join("")}</div>`;
+  pop.querySelector(".emoji-grid").addEventListener("click",ev=>{
+    const b=ev.target.closest(".emoji-cell"); if(!b)return;
+    onPick(b.dataset.e); closeEmojiPicker();
+  });
+  document.body.appendChild(pop);
+  const r=anchor.getBoundingClientRect(); const pw=pop.offsetWidth||220, ph=pop.offsetHeight||140;
+  let left=Math.min(r.left, window.innerWidth-pw-10);
+  let top = (r.bottom+ph+8<window.innerHeight)? r.bottom+6 : Math.max(8,r.top-ph-6);
+  pop.style.left=left+"px"; pop.style.top=top+"px";
+  const out=(e)=>{ if(!pop.contains(e.target)&&e.target!==anchor) closeEmojiPicker(); };
+  document.addEventListener("mousedown",out,true);
+  _emojiEls={pop,out};
 }
 function bindTimeButton(btn, getVal, setVal, minuteStep){
   btn.onclick=()=>openTimePicker(btn, getVal(), v=>{ setVal(v);
@@ -1828,6 +1863,7 @@ function renderMatSubTab(){
   else if(matSubTab === "viruses")  renderVirusLib();
   else if(matSubTab === "sites")    renderSiteLib();
   else if(matSubTab === "tasks")    renderTaskLib();
+  else if(matSubTab === "procedures") renderProcedureLib();
   else if(matSubTab === "diarytypes") renderDiaryTypesLib();
 }
 
@@ -2185,6 +2221,96 @@ function renderTaskLib(){
   });
 }
 
+/* ── PROCEDURES (saved surgery templates — head-post/window + injection list) ──
+   Built primarily via "💾 Save as template" in the animal editor's Procedure
+   box; this tab is for reviewing/renaming/deleting what's been saved, and for
+   opening the full editor (same injection UI as the animal editor, via the
+   shared mountProcedureEditor) to build one from scratch or tweak an existing
+   one without needing an animal on hand. */
+function renderProcedureLib(){
+  const host = document.getElementById("ms-procedures"); host.innerHTML = "";
+  const hdr = document.createElement("div");
+  hdr.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap";
+  hdr.innerHTML = `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
+      Reusable procedure templates (head-post/window + injections) — apply one to an animal from its Procedure box, or build/save one here.</span>
+    <button id="proclib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New procedure</button>`;
+  host.appendChild(hdr);
+
+  const wrap = document.createElement("div"); wrap.id = "proclib_rows"; host.appendChild(wrap);
+  function summarize(pr){
+    const bits=[];
+    if(pr.headpost)bits.push("head-post");
+    if(pr.window)bits.push("cranial window");
+    const n=(pr.injections||[]).length;
+    if(n)bits.push(`${n} injection${n!==1?"s":""}${(pr.injections||[]).some(i=>i.virus)?" ("+pr.injections.filter(i=>i.virus).map(i=>i.virus).join(", ")+")":""}`);
+    return bits.join(" · ")||"empty — click edit to build it";
+  }
+  function paintPRows(){
+    const pl = DB.config.procedureLib||[];
+    wrap.innerHTML = pl.length ? pl.map((pr,i) => `
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <input class="pl_name" data-pi="${i}" value="${escAttr(pr.name)}" placeholder="Procedure name" style="flex:1;min-width:160px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:6px 9px;font-size:13px">
+        <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);flex:2;min-width:200px">${esc(summarize(pr))}</span>
+        <button class="pl_edit" data-pi="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px">✎ edit</button>
+        <button class="pl_del" data-pi="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:4px 9px;cursor:pointer;font-size:12px">✕</button>
+      </div>`).join("")
+    : `<div class="empty" style="padding:20px 0">No saved procedures yet — build one here, or save one from an animal's Procedure box.</div>`;
+  }
+  paintPRows();
+
+  host.querySelector("#proclib_add").onclick = () => {
+    const pr={id:uid("proc_"),name:"",headpost:false,window:false,injections:[]};
+    (DB.config.procedureLib=DB.config.procedureLib||[]).push(pr);
+    persist(); paintPRows();
+    procedureModal(pr.id);
+  };
+  wrap.addEventListener("input", e => {
+    const pi = +e.target.dataset.pi; const pr = (DB.config.procedureLib||[])[pi]; if(!pr) return;
+    if(e.target.classList.contains("pl_name")) { pr.name = e.target.value; persist(); }
+  });
+  wrap.addEventListener("click", e => {
+    const ed = e.target.closest(".pl_edit"), del = e.target.closest(".pl_del");
+    if(ed){ const pr=(DB.config.procedureLib||[])[+ed.dataset.pi]; if(pr) procedureModal(pr.id); }
+    else if(del){
+      if(confirm("Delete this procedure template? Animals it was already applied to keep their own copy of the data.")){
+        (DB.config.procedureLib||[]).splice(+del.dataset.pi,1); persist(); paintPRows();
+      }
+    }
+  });
+}
+// Full editor for one procedure template — same head-post/window + injection
+// UI as the animal editor's Procedure box (via the shared mountProcedureEditor),
+// just saving into DB.config.procedureLib by id instead of onto an animal.
+function procedureModal(id,draft){
+  const pr=(DB.config.procedureLib||[]).find(x=>x.id===id); if(!pr)return;
+  const view=draft||pr;
+  modal(`<h3>Edit procedure</h3>
+    <div class="fld"><label>Name</label><input id="pm_name" value="${escAttr(view.name)}" placeholder="Procedure name" autofocus></div>
+    ${procedureSectionHTML("pm")}
+    <div class="actions"><button class="btn danger" id="pm_del" style="margin-right:auto">Delete</button><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="pm_save">Save</button></div>`,{wide:true});
+
+  function goToLibrary(focus){
+    const d={ name:document.getElementById("pm_name").value, ...procEditor.getSnapshot() };
+    closeModal();
+    renderLibraryModal(focus,()=>procedureModal(id,d));
+  }
+  const procEditor=mountProcedureEditor("pm", {headpost:view.headpost,window:view.window,injections:view.injections}, goToLibrary);
+
+  document.getElementById("pm_save").onclick=()=>{
+    const name=document.getElementById("pm_name").value.trim(); if(!name){toast("Name needed");return;}
+    const snap=procEditor.getSnapshot();
+    Object.assign(pr,{name,headpost:snap.headpost,window:snap.window,
+      injections:snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion)});
+    persist(); closeModal(); if(matSubTab==="procedures")renderProcedureLib(); toast("Procedure saved");
+  };
+  document.getElementById("pm_del").onclick=()=>{
+    if(confirm("Delete this procedure template? Animals it was already applied to keep their own copy of the data.")){
+      DB.config.procedureLib=(DB.config.procedureLib||[]).filter(x=>x.id!==id);
+      persist(); closeModal(); if(matSubTab==="procedures")renderProcedureLib(); toast("Deleted");
+    }
+  };
+}
+
 /* ── DIARY TYPES ────────────────────────────────────────────────────────────
    Diary entry types themselves are fully user-editable - the seeded defaults
    (weight/postop/training/comment/surgery/perfusion/histology/microscopy) are
@@ -2211,15 +2337,12 @@ function renderDiaryTypesLib(){
 
   const wrap = document.createElement("div"); wrap.id = "dtlib_rows"; host.appendChild(wrap);
   function paintDTRows(){
-    const dt = DB.config.diaryTypes||[];
-    wrap.innerHTML = dt.length ? dt.map((t,i) => `
+    const dt = diaryTypeDefs(); // sorted for display; data-ti below still points at the real DB.config.diaryTypes index
+    wrap.innerHTML = dt.length ? dt.map(t => { const i=DB.config.diaryTypes.indexOf(t); return `
       <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:9px;flex-wrap:wrap">
           <input type="color" class="ldt_color" data-ti="${i}" value="${t.color&&t.color.startsWith("#")?t.color:"#54e08a"}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
-          <select class="ldt_iconpick" data-ti="${i}" title="icon" style="flex:0 0 auto;width:52px;${IST}">
-            ${t.icon&&!DIARY_ICON_CHOICES.includes(t.icon)?`<option value="${escAttr(t.icon)}" selected>${esc(t.icon)}</option>`:""}
-            ${DIARY_ICON_CHOICES.map(e=>`<option value="${e}" ${t.icon===e?"selected":""}>${e}</option>`).join("")}
-          </select>
+          <button type="button" class="emoji-btn ldt_iconbtn" data-ti="${i}" title="pick an icon">${esc(t.icon||"🔖")}</button>
           <input class="ldt_label" data-ti="${i}" value="${escAttr(t.label)}" placeholder="Type name (e.g. Cage change)" style="flex:1;min-width:140px;${IST}">
           <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto"><input type="checkbox" class="ldt_timeline" data-ti="${i}" style="width:auto" ${t.timeline?"checked":""}> shows on Timeline</label>
           ${t.core?"":`<button class="ldt_del" data-ti="${i}"
@@ -2240,7 +2363,7 @@ function renderDiaryTypesLib(){
           </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">no custom fields — just the free-text Note will show</div>`}
         <button class="ldt_addfield" data-ti="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add field</button>
         `}
-      </div>`).join("")
+      </div>`; }).join("")
     : `<div class="empty" style="padding:20px 0">No entry types yet — add one above.</div>`;
   }
   paintDTRows();
@@ -2264,7 +2387,6 @@ function renderDiaryTypesLib(){
   wrap.addEventListener("change", e => {
     const ti = +e.target.dataset.ti; const t = (DB.config.diaryTypes||[])[ti]; if(!t) return;
     if(e.target.classList.contains("ldt_color"))    { t.color = e.target.value; persist(); return; }
-    if(e.target.classList.contains("ldt_iconpick")) { t.icon = e.target.value; persist(); paintDTRows(); return; }
     if(e.target.classList.contains("ldt_timeline")) { t.timeline = e.target.checked; persist(); return; }
     if(e.target.classList.contains("ldf_type")) {
       const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.type = e.target.value; persist(); paintDTRows(); }
@@ -2274,7 +2396,13 @@ function renderDiaryTypesLib(){
     }
   });
   wrap.addEventListener("click", e => {
-    const delT = e.target.closest(".ldt_del"), addF = e.target.closest(".ldt_addfield"), delF = e.target.closest(".ldf_del");
+    const delT = e.target.closest(".ldt_del"), addF = e.target.closest(".ldt_addfield"), delF = e.target.closest(".ldf_del"),
+          iconBtn = e.target.closest(".ldt_iconbtn");
+    if(iconBtn){
+      const t=(DB.config.diaryTypes||[])[+iconBtn.dataset.ti]; if(!t)return;
+      openEmojiPicker(iconBtn, DIARY_ICON_CHOICES, t.icon, emoji => { t.icon=emoji; persist(); paintDTRows(); });
+      return;
+    }
     if(delT){
       const t=(DB.config.diaryTypes||[])[+delT.dataset.ti];
       if(t&&t.core){ toast("Built-in type — can't be deleted"); return; }
@@ -2422,7 +2550,11 @@ function daysSurg(a){ const sd=surgeryDate(a); if(!sd)return null; const end=a.s
 // yesno/select) and a "timeline" flag controlling whether its entries surface
 // on the global Timeline. "training" is the one special case: its fields come
 // from DB.config.taskLib per selected task instead of a fixed field list.
-function diaryTypeDefs(){ return DB.config.diaryTypes||[]; }
+// Alphabetical by label everywhere it's listed (type filter bar, "+ add
+// entry" dropdown, the Entry Types materials tab) — a sorted copy, not an
+// in-place sort, so nothing that stores an index into the raw
+// DB.config.diaryTypes array (see paintDTRows) gets its indices scrambled.
+function diaryTypeDefs(){ return [...(DB.config.diaryTypes||[])].sort((a,b)=>(a.label||"").localeCompare(b.label||"")); }
 function diaryTypeDef(key){ return diaryTypeDefs().find(t=>t.key===key) || {key,label:key||"—",icon:"❔",color:"var(--ink-faint)",timeline:false,fields:[]}; }
 function diaryWeightEntries(a){ return (a.diary||[]).filter(e=>e.type==="weight").sort((x,y)=>x.date.localeCompare(y.date)||x.created-y.created); }
 function latestWeight(a){ const w=diaryWeightEntries(a); return w.length?w[w.length-1].data.grams:null; }
@@ -3450,60 +3582,30 @@ function mountBrainViewer(host,getSurgery,opts){
   return {refresh:render};
 }
 
-function animalModal(id,draft){
-  const a=id?DB.animals.find(x=>x.id===id):{cohort:((DB.cohorts||[])[0]||{}).name||"Type 2",alive:true,tasks:[]};
-  if(!Array.isArray(a.tasks))a.tasks=[];
-  // `view` supplies initial field values: normally the stored record, but when
-  // returning from the virus/site library (opened mid-edit via "✎ edit library")
-  // it's the in-progress draft instead, so unsaved edits survive the round-trip.
-  // `a` itself stays the real DB.animals reference so Save's Object.assign(a,rec)
-  // still mutates the actual stored record in place.
-  const view=draft||a;
-  const cohorts=(DB.cohorts||[]).map(c=>c.name);
-  const F=(fid,lab,val,type="text")=>`<div class="fld" style="flex:1"><label>${lab}</label><input id="${fid}" type="${type}" value="${escAttr(val||"")}"></div>`;
-  const dbtn=(fid,val)=>`<button type="button" id="${fid}" class="datebtn ${val?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${val?fmtWhenFull(val):"set date"}</button>`;
-  const seg=(fid,on)=>`<div class="seg" id="${fid}"><button data-v="1" class="${on?"on":""}">Yes</button><button data-v="0" class="${!on?"on":""}">No</button></div>`;
-  let hp=!!(view.surgeryDetail&&view.surgeryDetail.headpost), win=!!(view.surgeryDetail&&view.surgeryDetail.window);
-  const injs=(view.surgeryDetail&&view.surgeryDetail.injections?view.surgeryDetail.injections:[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],...x}));
-  modal(`<h3>${id?"Edit":"New"} animal</h3>
-    <div class="drow">${F("am_name","Name",view.name)}<div class="fld" style="width:120px"><label>Cohort</label><select id="am_cohort">${cohorts.map(c=>`<option ${view.cohort===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></div>
-    <div class="drow">${F("am_cage","Cage",view.cage)}${F("am_sex","Sex",view.sex)}${F("am_strain","Strain",view.strain)}</div>
-    <div class="drow">
-      <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",view.dob)}</div>
-      <div class="fld" style="flex:1"><label>Sacrificed</label>${dbtn("am_sac",view.sacrificed)}</div></div>
-    <div class="fld"><label>Status</label>
-      <div class="seg" id="am_alive">
-        <button data-v="alive"       class="${(view.termination||"alive")==="alive"?"on":""}">Alive</button>
-        <button data-v="sacrificed"  class="${view.termination==="sacrificed"?"on":""}">Sacrificed</button>
-        <button data-v="early_death" class="${view.termination==="early_death"?"on":""}">Early death</button>
-        <button data-v="excluded"    class="${view.termination==="excluded"?"on":""}">Excluded</button>
-      </div></div>
-
-    <div style="border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:14px">
-      <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);margin-bottom:10px">Procedure</div>
-      <div class="drow">
-        <div class="fld" style="flex:1"><label>Head-post</label>${seg("am_hp",hp)}</div>
-        <div class="fld" style="flex:1"><label>Cranial window</label>${seg("am_win",win)}</div></div>
-      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:6px 0 6px">Injections (0+, any combination)</div>
-      <div id="am_injs"></div>
-      <button class="btn ghost" id="am_addinj" style="margin-top:6px;font-size:12px">＋ Add injection</button>
-      <div style="margin-top:12px"><div id="am_brainview"></div></div>
-    </div>
-
-    <div class="fld"><label>Surgical comments / notes</label><textarea id="am_com">${esc(view.comments||"")}</textarea></div>
-    <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
-
-  // dates
-  let vDob=view.dob||"", vSac=view.sacrificed||"";
-  bindDateButton(document.getElementById("am_dob"), ()=>vDob, v=>{vDob=v||"";});
-  bindDateButton(document.getElementById("am_sac"), ()=>vSac, v=>{vSac=v||"";});
-
-  // procedure toggles
-  function bindSeg(fid,setter){ document.getElementById(fid).onclick=e=>{const b=e.target.closest("button");if(!b)return;
-    setter(b.dataset.v==="1"); document.querySelectorAll(`#${fid} button`).forEach(x=>x.classList.toggle("on",x===b)); updatePreview();}; }
-  bindSeg("am_hp",v=>hp=v); bindSeg("am_win",v=>win=v);
-
-  const REGOPTS=`<option value="">— target —</option>`+REGIONS.map(r=>`<option>${r}</option>`).join("")+`<option value="__custom">custom (coords)</option>`;
+/* ---------- shared procedure editor (head-post/window + injection rows + brain preview) ----------
+   Used by both the animal editor's "Procedure" box and the procedure-template
+   library editor (Materials > Procedures), so the two editing experiences
+   can't drift apart — a fix or field added to one automatically covers the
+   other. `p` is an id prefix (e.g. "am", "pm") so two instances never clash
+   if they ever coexist in the DOM. */
+const REGOPTS=`<option value="">— target —</option>`+REGIONS.map(r=>`<option>${r}</option>`).join("")+`<option value="__custom">custom (coords)</option>`;
+function procedureSectionHTML(p){
+  return `<div class="drow">
+      <div class="fld" style="flex:1"><label>Head-post</label><div class="seg" id="${p}_hp"><button data-v="1">Yes</button><button data-v="0">No</button></div></div>
+      <div class="fld" style="flex:1"><label>Cranial window</label><div class="seg" id="${p}_win"><button data-v="1">Yes</button><button data-v="0">No</button></div></div></div>
+    <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:6px 0 6px">Injections (0+, any combination)</div>
+    <div id="${p}_injs"></div>
+    <button class="btn ghost" id="${p}_addinj" style="margin-top:6px;font-size:12px">＋ Add injection</button>
+    <div style="margin-top:12px"><div id="${p}_brainview"></div></div>`;
+}
+// initial: {headpost, window, injections}. goToLibraryFn(focus): called instead
+// of handling library navigation internally, so the caller can snapshot its
+// OWN full draft (which may include fields beyond just the procedure, like an
+// animal's name/cage) before tearing down and rebuilding around the library.
+// Returns {getSnapshot(), refresh()}.
+function mountProcedureEditor(p, initial, goToLibraryFn){
+  let hp=!!initial.headpost, win=!!initial.window;
+  const injs=(initial.injections||[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],...x}));
   const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px";
   function siteLibOpts(){ return (DB.config.siteLib||[]).map(s=>`<option value="__s:${escAttr(s.name)}">${esc(s.name)} (${s.ap>=0?"+":""}${s.ap}, ${s.ml>=0?"+":""}${s.ml}, ${s.dv})</option>`).join(""); }
   function virusLibOpts(){ return (DB.config.virusLib||[]).map(v=>`<option value="__v:${escAttr(v.name)}">${esc(v.name)}</option>`).join(""); }
@@ -3581,13 +3683,13 @@ function animalModal(id,draft){
       </div>
     </div>`;
   }
-  function paintInjs(){ document.getElementById("am_injs").innerHTML=injs.map((inj,i)=>injRow(inj,i)).join("")||`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">no injections — add one below</div>`; }
+  function paintInjs(){ document.getElementById(`${p}_injs`).innerHTML=injs.map((inj,i)=>injRow(inj,i)).join("")||`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">no injections — add one below</div>`; }
   function curSurgery(){ return {headpost:hp,window:win,injections:injs}; }
-  const _bv=mountBrainViewer(document.getElementById("am_brainview"), curSurgery);
+  const _bv=mountBrainViewer(document.getElementById(`${p}_brainview`), curSurgery);
   function updatePreview(){ _bv.refresh(); }
   function readInjFields(){
     // flush every visible input/select value back into the injs array before any repaint
-    document.querySelectorAll("#am_injs [data-i][data-f]").forEach(el=>{
+    document.querySelectorAll(`#${p}_injs [data-i][data-f]`).forEach(el=>{
       const i=+el.dataset.i; if(i<0||i>=injs.length)return; injs[i][el.dataset.f]=el.value; });
   }
   function esField(el){
@@ -3600,17 +3702,18 @@ function animalModal(id,draft){
     if(es&&el.dataset.ef){ es[el.dataset.ef]=el.value; updatePreview(); }
     return true;
   }
-  document.getElementById("am_injs").addEventListener("input",e=>{
+  const injsHost=document.getElementById(`${p}_injs`);
+  injsHost.addEventListener("input",e=>{
     const el=e.target; if(esField(el))return;
     if(el.dataset.i==null||!el.dataset.f)return;
     injs[+el.dataset.i][el.dataset.f]=el.value; updatePreview();
   });
-  document.getElementById("am_injs").addEventListener("change",e=>{
+  injsHost.addEventListener("change",e=>{
     const el=e.target; if(esField(el))return;
     if(el.dataset.i==null)return; const iv=+el.dataset.i;
     if(el.classList.contains("inj-sitelibpick")){
       const v=el.value;
-      if(v==="__edit_slib"){ el.value=""; goToLibrary("site"); return; }
+      if(v==="__edit_slib"){ el.value=""; readInjFields(); goToLibraryFn("site"); return; }
       if(!v.startsWith("__s:"))return; const nm=v.slice(4);
       const s=(DB.config.siteLib||[]).find(x=>x.name===nm); if(!s)return;
       injs[iv].siteRegion=s.name; injs[iv].ap=s.ap; injs[iv].ml=s.ml; injs[iv].dv=s.dv;
@@ -3618,7 +3721,7 @@ function animalModal(id,draft){
     }
     if(el.classList.contains("inj-viruslibpick")){
       const v=el.value;
-      if(v==="__edit_vlib"){ el.value=""; goToLibrary("virus"); return; }
+      if(v==="__edit_vlib"){ el.value=""; readInjFields(); goToLibraryFn("virus"); return; }
       if(!v.startsWith("__v:"))return; const nm=v.slice(4);
       const vr=(DB.config.virusLib||[]).find(x=>x.name===nm); if(!vr)return;
       injs[iv].virus=vr.name; injs[iv].type=vr.type||injs[iv].type;
@@ -3626,48 +3729,138 @@ function animalModal(id,draft){
     }
     injs[iv][el.dataset.f]=el.value; updatePreview();
   });
-  document.getElementById("am_injs").addEventListener("click",e=>{
+  injsHost.addEventListener("click",e=>{
     const del=e.target.closest(".inj-del"), up=e.target.closest(".inj-up"), dn=e.target.closest(".inj-dn");
     const oslib=e.target.closest(".inj-open-slib"), ovlib=e.target.closest(".inj-open-vlib");
     const esAdd=e.target.closest(".inj-es-add"), esDel=e.target.closest(".inj-es-del");
     if(del){ readInjFields(); injs.splice(+del.dataset.i,1); paintInjs(); updatePreview(); }
     else if(up){ const i=+up.dataset.i; if(i>0){ readInjFields(); [injs[i-1],injs[i]]=[injs[i],injs[i-1]]; paintInjs(); updatePreview(); } }
     else if(dn){ const i=+dn.dataset.i; if(i<injs.length-1){ readInjFields(); [injs[i+1],injs[i]]=[injs[i],injs[i+1]]; paintInjs(); updatePreview(); } }
-    else if(oslib){ goToLibrary("site"); }
-    else if(ovlib){ goToLibrary("virus"); }
+    else if(oslib){ readInjFields(); goToLibraryFn("site"); }
+    else if(ovlib){ readInjFields(); goToLibraryFn("virus"); }
     else if(esAdd){ const i=+esAdd.dataset.i; (injs[i].expressionSites=injs[i].expressionSites||[]).push({ap:"",ml:"",dv:"",level:"medium"}); paintInjs(); updatePreview(); }
     else if(esDel){ const i=+esDel.dataset.i, ei=+esDel.dataset.ei; injs[i].expressionSites.splice(ei,1); paintInjs(); updatePreview(); }
   });
-  document.getElementById("am_addinj").onclick=()=>{ injs.push({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[]}); paintInjs(); updatePreview(); };
+  document.getElementById(`${p}_addinj`).onclick=()=>{ injs.push({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[]}); paintInjs(); updatePreview(); };
+
+  function bindSeg(fid,setter){ document.getElementById(fid).onclick=e=>{const b=e.target.closest("button");if(!b)return;
+    setter(b.dataset.v==="1"); document.querySelectorAll(`#${fid} button`).forEach(x=>x.classList.toggle("on",x===b)); updatePreview();}; }
+  bindSeg(`${p}_hp`,v=>hp=v); bindSeg(`${p}_win`,v=>win=v);
+  document.querySelectorAll(`#${p}_hp button`).forEach(b=>b.classList.toggle("on",(b.dataset.v==="1")===hp));
+  document.querySelectorAll(`#${p}_win button`).forEach(b=>b.classList.toggle("on",(b.dataset.v==="1")===win));
+
   paintInjs(); updatePreview();
 
+  return {
+    getSnapshot(){ readInjFields(); return {headpost:hp, window:win, injections:injs.map(x=>({...x}))}; },
+    refresh: updatePreview
+  };
+}
+
+function animalModal(id,draft){
+  const a=id?DB.animals.find(x=>x.id===id):{cohort:((DB.cohorts||[])[0]||{}).name||"Type 2",alive:true,tasks:[]};
+  if(!Array.isArray(a.tasks))a.tasks=[];
+  // `view` supplies initial field values: normally the stored record, but when
+  // returning from the virus/site library (opened mid-edit via "✎ edit library")
+  // it's the in-progress draft instead, so unsaved edits survive the round-trip.
+  // `a` itself stays the real DB.animals reference so Save's Object.assign(a,rec)
+  // still mutates the actual stored record in place.
+  const view=draft||a;
+  const cohorts=(DB.cohorts||[]).map(c=>c.name);
+  const F=(fid,lab,val,type="text")=>`<div class="fld" style="flex:1"><label>${lab}</label><input id="${fid}" type="${type}" value="${escAttr(val||"")}"></div>`;
+  const dbtn=(fid,val)=>`<button type="button" id="${fid}" class="datebtn ${val?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${val?fmtWhenFull(val):"set date"}</button>`;
+  const seg=(fid,on)=>`<div class="seg" id="${fid}"><button data-v="1" class="${on?"on":""}">Yes</button><button data-v="0" class="${!on?"on":""}">No</button></div>`;
+  modal(`<h3>${id?"Edit":"New"} animal</h3>
+    <div class="drow">${F("am_name","Name",view.name)}<div class="fld" style="width:120px"><label>Cohort</label><select id="am_cohort">${cohorts.map(c=>`<option ${view.cohort===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></div>
+    <div class="drow">${F("am_cage","Cage",view.cage)}${F("am_sex","Sex",view.sex)}${F("am_strain","Strain",view.strain)}</div>
+    <div class="drow">
+      <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",view.dob)}</div>
+      <div class="fld" style="flex:1"><label>Sacrificed</label>${dbtn("am_sac",view.sacrificed)}</div></div>
+    <div class="fld"><label>Status</label>
+      <div class="seg" id="am_alive">
+        <button data-v="alive"       class="${(view.termination||"alive")==="alive"?"on":""}">Alive</button>
+        <button data-v="sacrificed"  class="${view.termination==="sacrificed"?"on":""}">Sacrificed</button>
+        <button data-v="early_death" class="${view.termination==="early_death"?"on":""}">Early death</button>
+        <button data-v="excluded"    class="${view.termination==="excluded"?"on":""}">Excluded</button>
+      </div></div>
+
+    <div style="border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint)">Procedure</div>
+        <select id="am_proctpl" style="margin-left:auto;flex:0 0 auto;background:var(--bg2);border:1px solid var(--line2);color:var(--ink-dim);border-radius:6px;padding:4px 7px;font-size:11px">
+          <option value="">Apply saved procedure…</option>
+          ${(DB.config.procedureLib||[]).map(pr=>`<option value="${pr.id}">${esc(pr.name)}</option>`).join("")}
+        </select>
+        <button type="button" id="am_procsave" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer">💾 Save as template</button>
+      </div>
+      ${procedureSectionHTML("am")}
+    </div>
+
+    <div class="fld"><label>Surgical comments / notes</label><textarea id="am_com">${esc(view.comments||"")}</textarea></div>
+    <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
+
+  // dates
+  let vDob=view.dob||"", vSac=view.sacrificed||"";
+  bindDateButton(document.getElementById("am_dob"), ()=>vDob, v=>{vDob=v||"";});
+  bindDateButton(document.getElementById("am_sac"), ()=>vSac, v=>{vSac=v||"";});
+
   let termination=view.termination||(view.alive===false?"sacrificed":"alive");
+  document.getElementById("am_alive").onclick=e=>{const b=e.target.closest("button");if(!b)return;termination=b.dataset.v;document.querySelectorAll("#am_alive button").forEach(x=>x.classList.toggle("on",x===b));};
+
   // Snapshot every field currently on screen into a plain draft object, so
   // navigating to the virus/site library and back (which tears down and
   // rebuilds this whole modal) doesn't lose an in-progress, unsaved edit.
-  function collectDraft(){
-    return {
+  function goToLibrary(focus){
+    const d={
       name:document.getElementById("am_name").value,
       cohort:document.getElementById("am_cohort").value,
       cage:document.getElementById("am_cage").value,
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
       dob:vDob, sacrificed:vSac, termination,
-      surgeryDetail:{headpost:hp,window:win,injections:injs.map(x=>({...x}))},
+      surgeryDetail:procEditor.getSnapshot(),
       comments:document.getElementById("am_com").value
     };
-  }
-  function goToLibrary(focus){
-    readInjFields();
-    const d=collectDraft(); closeModal();
+    closeModal();
     renderLibraryModal(focus,()=>animalModal(id,d));
   }
-  document.getElementById("am_alive").onclick=e=>{const b=e.target.closest("button");if(!b)return;termination=b.dataset.v;document.querySelectorAll("#am_alive button").forEach(x=>x.classList.toggle("on",x===b));};
+  const procEditor=mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary);
+
+  document.getElementById("am_proctpl").addEventListener("change",e=>{
+    const tpl=(DB.config.procedureLib||[]).find(pr=>pr.id===e.target.value); e.target.value="";
+    if(!tpl)return;
+    // same live-field snapshot as goToLibrary, so applying a template mid-edit
+    // doesn't clobber whatever's already been typed elsewhere on the form —
+    // only headpost/window/injections come from the template.
+    const d={
+      name:document.getElementById("am_name").value,
+      cohort:document.getElementById("am_cohort").value,
+      cage:document.getElementById("am_cage").value,
+      sex:document.getElementById("am_sex").value,
+      strain:document.getElementById("am_strain").value,
+      dob:vDob, sacrificed:vSac, termination,
+      surgeryDetail:{headpost:tpl.headpost,window:tpl.window,injections:tpl.injections.map(x=>({...x}))},
+      comments:document.getElementById("am_com").value
+    };
+    closeModal();
+    animalModal(id,d);
+    toast(`Applied "${tpl.name}"`);
+  });
+  document.getElementById("am_procsave").onclick=()=>{
+    const snap=procEditor.getSnapshot();
+    if(!snap.headpost && !snap.window && !snap.injections.length){ toast("Nothing to save yet"); return; }
+    const name=(prompt("Save this procedure as:")||"").trim();
+    if(!name)return;
+    (DB.config.procedureLib=DB.config.procedureLib||[]).push({id:uid("proc_"),name,headpost:snap.headpost,window:snap.window,injections:snap.injections});
+    persist();
+    toast(`Saved "${name}" to Procedures library`);
+  };
 
   document.getElementById("am_save").onclick=()=>{
     const name=document.getElementById("am_name").value.trim(); if(!name){toast("Name needed");return;}
-    const cleanInjs=injs.map(x=>({...x})).filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
-    const surgery=(hp||win||cleanInjs.length)?{headpost:hp,window:win,injections:cleanInjs}:null;
+    const snap=procEditor.getSnapshot();
+    const cleanInjs=snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
+    const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,injections:cleanInjs}:null;
     const rec={name,cohort:document.getElementById("am_cohort").value,cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
       dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
