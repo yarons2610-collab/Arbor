@@ -1,4 +1,50 @@
 {
-  "viruses": [],
+  "viruses": [
+    {
+      "id": "sv_1mfy7e",
+      "name": "AAV-SL1-Syn-Flex-Rev-hM4D(Gi)-mCherry",
+      "type": "retro",
+      "promoter": "hSyn",
+      "titer": "",
+      "source": "",
+      "note": "Cre-dependent inhibitory DREADD (hM4Di). Use with Cre virus. Titer ratio critical — see Fenno et al. 2020.",
+      "backupTubes": null,
+      "aliquotTubes": null,
+      "boxNumber": "",
+      "boxColor": "",
+      "boxLocation": "",
+      "needOrder": false
+    },
+    {
+      "id": "sv_pxuw46",
+      "name": "pENN.AAV.hSyn.Cre.WPRE.hGH (AAV Retrograde) #105553",
+      "type": "retro",
+      "promoter": "hSyn",
+      "titer": "",
+      "source": "Box 72",
+      "note": "Constitutive Cre expression. Addgene #105553.",
+      "backupTubes": null,
+      "aliquotTubes": null,
+      "boxNumber": "",
+      "boxColor": "",
+      "boxLocation": "",
+      "needOrder": false
+    },
+    {
+      "id": "sv_ccb92h",
+      "name": "pAAV-hSyn-DIO-hM4D(Gi)-mCherry in SL1 (Retrograde) (#320)",
+      "type": "retro",
+      "promoter": "",
+      "titer": "",
+      "source": "Box 128",
+      "note": "Retrograde hM4D made by ROnit",
+      "backupTubes": null,
+      "aliquotTubes": null,
+      "boxNumber": "",
+      "boxColor": "",
+      "boxLocation": "",
+      "needOrder": false
+    }
+  ],
   "deletedIds": []
 }
