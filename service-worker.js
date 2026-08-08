@@ -3,7 +3,7 @@
 // itself (HTML/JS/fonts) still loading when you're offline.
 // IMPORTANT: bump this version string on every deploy — cache-first means an
 // installed phone keeps serving the old app shell forever otherwise.
-const CACHE_NAME = "arbor-animals-v40";
+const CACHE_NAME = "arbor-animals-v41";
 const APP_SHELL = [
   "./",
   "index.html",
@@ -53,7 +53,13 @@ self.addEventListener("fetch", (event) => {
   // returns a random quote per request) all returned the identical first
   // response. API calls must always hit the network live — a Gist read failing
   // should surface as a real error, not silently serve stale data.
-  if (new URL(event.request.url).hostname === "api.github.com") return;
+  // Same reasoning for raw.githubusercontent.com: the shared virus library
+  // reads its live data from there, and it's a different hostname than
+  // api.github.com above so the same exclusion doesn't already cover it —
+  // without this it would hit the cache-first branch below and freeze on
+  // whatever the first fetch happened to return, same failure as the Gist one.
+  const _host = new URL(event.request.url).hostname;
+  if (_host === "api.github.com" || _host === "raw.githubusercontent.com") return;
   const isAppShell = event.request.mode === "navigate"
     || event.request.url.endsWith("/index.html")
     || event.request.url.endsWith("/Arbor/")

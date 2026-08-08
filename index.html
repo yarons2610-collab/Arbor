@@ -366,6 +366,13 @@
   .modal-back:hover{color:var(--ink)}
   .toast{position:absolute;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--panel2);border:1px solid var(--line2);color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;z-index:60;pointer-events:none}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  /* small, dismissible, non-blocking — a nudge, not an alert. Never covers the
+     modal's own action buttons (bottom-right, well clear of bottom-center). */
+  .tube-nudge{position:absolute;bottom:20px;right:16px;max-width:260px;background:var(--panel2);border:1px solid var(--line2);border-radius:10px;padding:10px 12px;box-shadow:0 20px 50px -18px #000;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-dim);z-index:70;opacity:0;transform:translateY(10px);transition:.2s}
+  .tube-nudge.show{opacity:1;transform:translateY(0)}
+  .tube-nudge span{flex:1;line-height:1.4}
+  .tube-nudge button{flex:0 0 auto;border:1px solid var(--line2);background:var(--panel);border-radius:6px;padding:4px 9px;cursor:pointer;font-size:11.5px;color:var(--ink-dim)}
+  .tube-nudge .tn-yes{border-color:var(--gcamp);color:var(--gcamp)}
   /* Materials sub-tabs */
   #materials{overflow:auto}
   .mat-subtabs{display:flex;gap:2px;padding:14px 26px 0;border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:4}
@@ -610,9 +617,17 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // saved procedure templates (Materials > Procedures) — a named bundle of
   // head-post/window + a full injection list, built once and reapplied to
   // future animals via the animal editor's "Apply saved procedure" dropdown.
-  procedureLib:[]
+  procedureLib:[],
+  // opt-in: when true, the virus library (Materials > Viruses, the injection
+  // editor's virus picker, and the Excel export) reads/writes the shared
+  // team-wide library (see activeViruses()) instead of this device's own
+  // private virusLib above. Off by default so nobody's existing local
+  // library silently switches source without them choosing to.
+  useSharedVirusLib:false
 };
-let DB={domains:[],tasks:[],readings:[],inventory:{},animals:[],cohorts:[],config:{...DEFAULT_CONFIG}};
+let DB={domains:[],tasks:[],readings:[],inventory:{},animals:[],cohorts:[],
+  sharedVirusCache:{viruses:[],deletedIds:[],fetchedAt:0}, // local read-through cache of the shared virus file
+  config:{...DEFAULT_CONFIG}};
 const DOMAIN_PALETTE=["#54e08a","#ff5f92","#f2b756","#3fd0d6","#a98cff","#ff8a6b","#7db4ff","#e0d454"];
 // which research domain each colony cohort feeds
 // default cohort→domain seed (used only to build DB.cohorts on first run) —
@@ -706,6 +721,106 @@ async function loadDB(){
   return "none";
 }
 
+/* ---------- SHARED VIRUS LIBRARY (opt-in, separate from personal Gist sync) ----------
+   Lives as one JSON file committed straight into this same public repo, not a
+   personal Gist — a Gist belongs to one GitHub account and can't be written by
+   several different people's own logins, but a repo file plus GitHub's
+   Contents API gives real compare-and-swap (every write must cite the sha it
+   read; a stale sha is rejected with 409) which a Gist's plain overwrite
+   doesn't. Reading needs no credential at all (the repo is public) — only
+   writing does, via a shared token every connected lab member pastes in once.
+   Conflict safety comes from re-fetching + re-applying just this one change on
+   retry (see applySharedVirusChange), not from a stored event log — for a
+   delta like "AP-1", or a specific-field edit, redoing it on top of whatever's
+   newest is enough for both concurrent changes to survive. Two people editing
+   the exact same field on the exact same virus in the same instant is the one
+   case that still just picks a winner — rare, and recoverable from the repo's
+   own commit history if it ever matters. */
+const SHARED_VIRUS_TOKEN_KEY="arbor_shared_virus_token";
+const SHARED_REPO_OWNER="yarons2610-collab", SHARED_REPO_NAME="Arbor", SHARED_VIRUS_PATH="shared/viruses.json";
+function sharedVirusToken(){ return localStorage.getItem(SHARED_VIRUS_TOKEN_KEY)||""; }
+// base64 helpers that survive non-ASCII (virus names, notes) — plain atob/btoa
+// mangle anything outside Latin1.
+function b64EncodeUtf8(s){ return btoa(encodeURIComponent(s).replace(/%([0-9A-F]{2})/g,(_,h)=>String.fromCharCode(parseInt(h,16)))); }
+function b64DecodeUtf8(s){ return decodeURIComponent(atob(s).split("").map(c=>"%"+c.charCodeAt(0).toString(16).padStart(2,"0")).join("")); }
+// Public, unauthenticated, CDN-served — fine for routine "just show me the
+// list" reads; never use this right before a write (see fetchSharedVirusesForWrite).
+async function fetchSharedVirusesReadOnly(){
+  try{
+    const r=await fetch(`https://raw.githubusercontent.com/${SHARED_REPO_OWNER}/${SHARED_REPO_NAME}/main/${SHARED_VIRUS_PATH}`,{cache:"no-store"});
+    if(!r.ok){ if(r.status===404) return {viruses:[],deletedIds:[]}; throw new Error("HTTP "+r.status); }
+    return await r.json();
+  }catch(e){ console.warn("Shared virus read failed",e); return null; }
+}
+// Authenticated GET through the Contents API — needed right before a write
+// specifically for the current sha, since the raw/CDN path above can't give
+// us one to safely base a compare-and-swap write on.
+async function fetchSharedVirusesForWrite(){
+  const token=sharedVirusToken(); if(!token) throw new Error("No shared library token connected");
+  const r=await fetch(`https://api.github.com/repos/${SHARED_REPO_OWNER}/${SHARED_REPO_NAME}/contents/${SHARED_VIRUS_PATH}`,{
+    cache:"no-store",headers:{"Authorization":"token "+token,"Accept":"application/vnd.github+json"}});
+  if(r.status===404) return {data:{viruses:[],deletedIds:[]},sha:null}; // file doesn't exist yet — first write will create it
+  if(!r.ok){ const t=await r.text(); throw new Error("GitHub "+r.status+": "+t.slice(0,120)); }
+  const j=await r.json();
+  let data; try{ data=JSON.parse(b64DecodeUtf8(j.content.replace(/\n/g,""))); }catch(e){ data={viruses:[],deletedIds:[]}; }
+  if(!Array.isArray(data.viruses)) data.viruses=[];
+  if(!Array.isArray(data.deletedIds)) data.deletedIds=[];
+  return {data, sha:j.sha};
+}
+// Throws with `.conflict=true` on a 409 specifically, so callers can tell
+// "someone else wrote first, retry" apart from "this token is bad" etc.
+async function commitSharedViruses(data, sha){
+  const token=sharedVirusToken(); if(!token) throw new Error("No shared library token connected");
+  const body={message:"Update shared virus library",content:b64EncodeUtf8(JSON.stringify(data,null,2))};
+  if(sha) body.sha=sha;
+  const r=await fetch(`https://api.github.com/repos/${SHARED_REPO_OWNER}/${SHARED_REPO_NAME}/contents/${SHARED_VIRUS_PATH}`,{
+    method:"PUT",cache:"no-store",headers:{"Authorization":"token "+token,"Accept":"application/vnd.github+json","Content-Type":"application/json"},
+    body:JSON.stringify(body)});
+  if(!r.ok){
+    const t=await r.text();
+    const err=new Error("GitHub "+r.status+": "+t.slice(0,160));
+    if(r.status===409) err.conflict=true;
+    throw err;
+  }
+  const j=await r.json();
+  return j.content.sha;
+}
+// The one entry point every shared-virus edit should go through: re-fetches
+// the latest state, lets `mutate(data)` apply just this one change to that
+// fresh copy, and commits — retrying the whole read-modify-write if another
+// write landed in between (409), so two concurrent edits (even to the same
+// record's different fields) both end up applied instead of one clobbering
+// the other.
+async function applySharedVirusChange(mutate, attempts){
+  attempts=attempts||4;
+  let lastErr;
+  for(let i=0;i<attempts;i++){
+    try{
+      const {data,sha}=await fetchSharedVirusesForWrite();
+      mutate(data);
+      await commitSharedViruses(data,sha);
+      DB.sharedVirusCache={viruses:data.viruses,deletedIds:data.deletedIds,fetchedAt:Date.now()};
+      persist();
+      return data;
+    }catch(e){
+      lastErr=e;
+      if(!e.conflict) throw e; // not a conflict — retrying won't help (bad token, network, etc.)
+    }
+  }
+  throw lastErr;
+}
+// Refreshes the read-only cache (used for display everywhere) — safe to call
+// often; failures just leave the previous cache in place.
+async function refreshSharedViruses(){
+  const d=await fetchSharedVirusesReadOnly();
+  if(d){ DB.sharedVirusCache={viruses:d.viruses||[],deletedIds:d.deletedIds||[],fetchedAt:Date.now()}; persist(); }
+  return d;
+}
+// Every virus-list consumer in the app reads through here instead of
+// DB.config.virusLib directly, so flipping the opt-in flag is the only thing
+// that needs to change which source is "live".
+function activeViruses(){ return DB.config.useSharedVirusLib ? (DB.sharedVirusCache.viruses||[]) : (DB.config.virusLib||[]); }
+
 function setSaveState(s,detail){
   const el=document.getElementById("saveState"); if(!el)return;
   const states={
@@ -732,6 +847,7 @@ function persist(){ clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160); 
 async function flushSave(){ clearTimeout(saveTimer); try{ window.arbor.saveSync(DB); }catch(e){} }
 function migrate(){                       // backfill fields added in later versions
   if(!DB.readings)DB.readings=[];
+  if(!DB.sharedVirusCache)DB.sharedVirusCache={viruses:[],deletedIds:[],fetchedAt:0};
   DB.readings.forEach(r=>{ if(!r.track)r.track="core"; if(!r.added)r.added=Date.now(); });
   if(!DB.config)DB.config={...DEFAULT_CONFIG};
   else{ DB.config={...DEFAULT_CONFIG,...DB.config};
@@ -1099,6 +1215,42 @@ function bindTimeButton(btn, getVal, setVal, minuteStep){
     btn.classList.toggle("datebtn-empty",!v); }, minuteStep);
 }
 function toast(m){ const e=document.getElementById("toast"); e.textContent=m; e.classList.add("show"); clearTimeout(e._t); e._t=setTimeout(()=>e.classList.remove("show"),1900); }
+// Fires when a virus gets picked from the library for a real animal's
+// injection (not while just building/editing a procedure template — nothing's
+// actually been used yet at that point). Deliberately not a confirm() dialog:
+// it shouldn't block anything, and doing nothing is a completely normal,
+// silent outcome — just an easy one-click nudge that auto-dismisses.
+function offerTubeDecrement(virusName){
+  const shared=!!DB.config.useSharedVirusLib;
+  if(shared && !sharedVirusToken())return; // read-only shared view — nothing this device can write
+  const v=activeViruses().find(x=>x.name===virusName);
+  if(!v || v.aliquotTubes==null || v.aliquotTubes<=0)return;
+  document.querySelectorAll(".tube-nudge").forEach(x=>x.remove()); // only one at a time
+  const root=document.querySelector(".app")||document.body;
+  const el=document.createElement("div"); el.className="tube-nudge";
+  el.innerHTML=`<span>Used <b>${esc(v.name)}</b> — reduce aliquoted tubes by 1? (${v.aliquotTubes} left)</span>
+    <button type="button" class="tn-yes">−1</button>
+    <button type="button" class="tn-no" title="dismiss">✕</button>`;
+  root.appendChild(el);
+  requestAnimationFrame(()=>el.classList.add("show"));
+  const remove=()=>{ el.classList.remove("show"); setTimeout(()=>el.remove(),220); };
+  const autoTimer=setTimeout(remove,9000);
+  el.querySelector(".tn-no").onclick=()=>{ clearTimeout(autoTimer); remove(); };
+  el.querySelector(".tn-yes").onclick=async()=>{
+    clearTimeout(autoTimer); remove();
+    if(shared){
+      try{
+        await applySharedVirusChange(data=>{ const rec=data.viruses.find(x=>x.id===v.id); if(rec&&rec.aliquotTubes!=null)rec.aliquotTubes=Math.max(0,rec.aliquotTubes-1); });
+        toast(`${v.name}: ${Math.max(0,v.aliquotTubes-1)} tube${Math.max(0,v.aliquotTubes-1)!==1?"s":""} left`);
+      }catch(e){ toast("Couldn't update shared count: "+String(e.message||e).slice(0,80)); }
+    } else {
+      const rec=(DB.config.virusLib||[]).find(x=>x.name===v.name);
+      if(rec&&rec.aliquotTubes!=null){ rec.aliquotTubes=Math.max(0,rec.aliquotTubes-1); persist();
+        toast(`${v.name}: ${rec.aliquotTubes} tube${rec.aliquotTubes!==1?"s":""} left`); }
+    }
+    if(currentView==="materials"&&matSubTab==="viruses") renderMaterials();
+  };
+}
 function esc(s){return String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
 function escAttr(s){return String(s??"").replace(/"/g,"&quot;").replace(/</g,"&lt;");}
 function cssStat(s){return{todo:"#8a94a6",active:"#54e08a",blocked:"#ff5f6d",done:"#8a94a6"}[s];}
@@ -1980,18 +2132,98 @@ function renderInventory(){
 }
 
 /* ── VIRUS LIBRARY ─────────────────────────────────────────────────────────── */
+// Pending text-field edits to the SHARED library, debounced into one commit
+// per pause in typing rather than one GitHub write per keystroke — accumulated
+// across possibly several viruses/fields if the user moves quickly, then
+// flushed together through the same retry-safe applySharedVirusChange path.
+let pendingVirusPatches=new Map(); // virusId -> partial patch object
+let virusCommitTimer=null;
+function scheduleSharedVirusCommit(virusId,patch){
+  Object.assign(pendingVirusPatches.get(virusId)||(pendingVirusPatches.set(virusId,{}),pendingVirusPatches.get(virusId)),patch);
+  clearTimeout(virusCommitTimer);
+  virusCommitTimer=setTimeout(flushSharedVirusPatches,900);
+}
+async function flushSharedVirusPatches(){
+  if(!pendingVirusPatches.size)return;
+  const toApply=pendingVirusPatches; pendingVirusPatches=new Map();
+  try{
+    await applySharedVirusChange(data=>{
+      toApply.forEach((patch,id)=>{ const rec=data.viruses.find(v=>v.id===id); if(rec)Object.assign(rec,patch); });
+    });
+  }catch(e){ toast("Shared library sync failed: "+String(e.message||e).slice(0,90)); }
+}
+function showSharedVirusSetup(){
+  modal(`<h3>Shared virus library</h3>
+    <p style="color:var(--ink-dim);font-size:12.5px;line-height:1.5;margin-top:0">
+      Paste the shared write token your lab uses for the virus library. Anyone can already <i>see</i> the shared list with no token at all — this is only needed to add, edit, or delete entries. Ask whoever set it up if you don't have it.</p>
+    <div class="fld"><label>Shared token</label><input id="svt_tok" type="password" placeholder="ghp_…" autocomplete="off"></div>
+    <div id="svt_msg" style="font-size:12px;min-height:16px"></div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="svt_connect">Connect</button></div>`,{center:true});
+  document.getElementById("svt_tok").addEventListener("keydown",e=>{ if(e.key==="Enter")document.getElementById("svt_connect").click(); });
+  document.getElementById("svt_connect").onclick=async()=>{
+    const tok=document.getElementById("svt_tok").value.trim();
+    if(!tok){ toast("Paste a token first"); return; }
+    const msg=document.getElementById("svt_msg"); msg.textContent="Checking…"; msg.style.color="var(--ink-faint)";
+    localStorage.setItem(SHARED_VIRUS_TOKEN_KEY,tok);
+    try{
+      await fetchSharedVirusesForWrite(); // throws if the token can't actually read/write this file
+      DB.config.useSharedVirusLib=true; persist();
+      await refreshSharedViruses();
+      closeModal(); renderVirusLib(); toast("Connected to the shared virus library");
+    }catch(e){
+      localStorage.removeItem(SHARED_VIRUS_TOKEN_KEY);
+      msg.textContent="Couldn't connect: "+String(e.message||e).slice(0,120); msg.style.color="var(--overdue)";
+    }
+  };
+}
+async function importLocalVirusesToShared(){
+  const local=DB.config.virusLib||[];
+  if(!local.length){ toast("No local viruses to import"); return; }
+  let added=0;
+  try{
+    await applySharedVirusChange(data=>{
+      added=0;
+      const existingNames=new Set(data.viruses.map(v=>(v.name||"").toLowerCase()).filter(Boolean));
+      local.forEach(lv=>{
+        if(!lv.name||existingNames.has(lv.name.toLowerCase()))return;
+        data.viruses.push({id:uid("sv_"),name:lv.name,type:lv.type||"antero",promoter:lv.promoter||"",titer:lv.titer||"",
+          source:lv.source||"",note:lv.note||"",backupTubes:lv.backupTubes??null,aliquotTubes:lv.aliquotTubes??null,
+          boxNumber:lv.boxNumber||"",boxColor:lv.boxColor||"",boxLocation:lv.boxLocation||"",needOrder:!!lv.needOrder});
+        existingNames.add(lv.name.toLowerCase()); added++;
+      });
+    });
+    toast(added?`Imported ${added} virus${added!==1?"es":""} into the shared library`:"Nothing new to import — already there");
+    renderVirusLib();
+  }catch(e){ toast("Import failed: "+String(e.message||e).slice(0,100)); }
+}
 function renderVirusLib(){
   const host = document.getElementById("ms-viruses"); host.innerHTML = "";
   const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
+  const shared = !!DB.config.useSharedVirusLib;
 
   const hdr = document.createElement("div");
-  hdr.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:14px";
-  hdr.innerHTML = `<button id="vlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New virus</button>`;
+  hdr.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap";
+  hdr.innerHTML = shared
+    ? `<span style="font-family:var(--mono);font-size:10.5px;color:var(--gcamp)">✓ Shared team library${sharedVirusToken()?"":" (read-only — no write token)"}</span>
+       <button id="vlib_refresh" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">↻ refresh</button>
+       <button id="vlib_import" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">↑ import my local viruses</button>
+       <button id="vlib_offshare" style="border:1px solid var(--line2);background:transparent;color:var(--ink-faint);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">use local library instead</button>
+       <button id="vlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto" ${sharedVirusToken()?"":"disabled title=\"connect a write token first\""}>＋ New virus</button>`
+    : `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">Private to this device</span>
+       <button id="vlib_goshared" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">🔗 use shared team library</button>
+       <button id="vlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New virus</button>`;
   host.appendChild(hdr);
+  if(hdr.querySelector("#vlib_goshared")) hdr.querySelector("#vlib_goshared").onclick=()=>{
+    if(sharedVirusToken()){ DB.config.useSharedVirusLib=true; persist(); refreshSharedViruses().then(renderVirusLib); renderVirusLib(); }
+    else showSharedVirusSetup();
+  };
+  if(hdr.querySelector("#vlib_offshare")) hdr.querySelector("#vlib_offshare").onclick=()=>{ DB.config.useSharedVirusLib=false; persist(); renderVirusLib(); };
+  if(hdr.querySelector("#vlib_refresh")) hdr.querySelector("#vlib_refresh").onclick=async()=>{ await refreshSharedViruses(); renderVirusLib(); toast("Refreshed"); };
+  if(hdr.querySelector("#vlib_import")) hdr.querySelector("#vlib_import").onclick=importLocalVirusesToShared;
 
   const wrap = document.createElement("div"); wrap.id = "vlib_rows"; host.appendChild(wrap);
   function paintVRows(){
-    const vl = DB.config.virusLib||[];
+    const vl = activeViruses();
     wrap.innerHTML = vl.length ? vl.map((v,i) => `
       <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
@@ -2023,44 +2255,79 @@ function renderVirusLib(){
             <input type="checkbox" class="lv_order" data-vi="${i}" ${v.needOrder?"checked":""} style="width:auto;margin:0">order more?</label>
         </div>
       </div>`).join("")
-    : `<div class="empty" style="padding:20px 0">No viruses yet — add one above.</div>`;
+    : `<div class="empty" style="padding:20px 0">${shared?"No shared viruses yet — add one above, or import your local library.":"No viruses yet — add one above."}</div>`;
   }
   paintVRows();
 
+  const canWriteShared=shared?!!sharedVirusToken():true;
   host.querySelector("#vlib_add").onclick = () => {
-    (DB.config.virusLib=DB.config.virusLib||[]).push({name:"",type:"antero",promoter:"",titer:"",source:"",note:"",
-      backupTubes:null,aliquotTubes:null,boxNumber:"",boxColor:"",boxLocation:"",needOrder:false});
-    persist(); paintVRows();
-    const rows = wrap.querySelectorAll(".lv_name"); if(rows.length) rows[rows.length-1].focus();
+    if(shared){
+      if(!canWriteShared){ toast("Connect a write token first"); return; }
+      applySharedVirusChange(data=>{
+        data.viruses.push({id:uid("sv_"),name:"",type:"antero",promoter:"",titer:"",source:"",note:"",
+          backupTubes:null,aliquotTubes:null,boxNumber:"",boxColor:"",boxLocation:"",needOrder:false});
+      }).then(()=>{ paintVRows(); const rows=wrap.querySelectorAll(".lv_name"); if(rows.length)rows[rows.length-1].focus(); })
+        .catch(e=>toast("Couldn't add: "+String(e.message||e).slice(0,90)));
+    } else {
+      (DB.config.virusLib=DB.config.virusLib||[]).push({name:"",type:"antero",promoter:"",titer:"",source:"",note:"",
+        backupTubes:null,aliquotTubes:null,boxNumber:"",boxColor:"",boxLocation:"",needOrder:false});
+      persist(); paintVRows();
+      const rows = wrap.querySelectorAll(".lv_name"); if(rows.length) rows[rows.length-1].focus();
+    }
   };
   wrap.addEventListener("input", e => {
-    const vi = +e.target.dataset.vi; const v = (DB.config.virusLib||[])[vi]; if(!v) return;
-    if(e.target.classList.contains("lv_name"))  v.name     = e.target.value;
-    if(e.target.classList.contains("lv_prom"))  v.promoter = e.target.value;
-    if(e.target.classList.contains("lv_titer")) v.titer    = e.target.value;
-    if(e.target.classList.contains("lv_src"))   v.source   = e.target.value;
-    if(e.target.classList.contains("lv_note"))  v.note     = e.target.value;
-    if(e.target.classList.contains("lv_boxnum"))v.boxNumber= e.target.value;
-    if(e.target.classList.contains("lv_boxloc"))v.boxLocation=e.target.value;
-    if(e.target.classList.contains("lv_backup")) v.backupTubes = e.target.value===""?null:+e.target.value;
-    if(e.target.classList.contains("lv_aliquot"))v.aliquotTubes= e.target.value===""?null:+e.target.value;
-    persist();
+    if(!canWriteShared)return; // read-only shared view: no token, nothing to write
+    const vi = +e.target.dataset.vi; const v = activeViruses()[vi]; if(!v) return;
+    let patch=null;
+    if(e.target.classList.contains("lv_name"))  patch={name:v.name=e.target.value};
+    if(e.target.classList.contains("lv_prom"))  patch={promoter:v.promoter=e.target.value};
+    if(e.target.classList.contains("lv_titer")) patch={titer:v.titer=e.target.value};
+    if(e.target.classList.contains("lv_src"))   patch={source:v.source=e.target.value};
+    if(e.target.classList.contains("lv_note"))  patch={note:v.note=e.target.value};
+    if(e.target.classList.contains("lv_boxnum"))patch={boxNumber:v.boxNumber=e.target.value};
+    if(e.target.classList.contains("lv_boxloc"))patch={boxLocation:v.boxLocation=e.target.value};
+    if(e.target.classList.contains("lv_backup")) patch={backupTubes:v.backupTubes=(e.target.value===""?null:+e.target.value)};
+    if(e.target.classList.contains("lv_aliquot"))patch={aliquotTubes:v.aliquotTubes=(e.target.value===""?null:+e.target.value)};
+    if(!patch)return;
+    if(shared) scheduleSharedVirusCommit(v.id,patch);
+    else persist();
   });
   wrap.addEventListener("change", e => {
-    const vi = +e.target.dataset.vi; const v = (DB.config.virusLib||[])[vi]; if(!v) return;
-    if(e.target.classList.contains("lv_type")){ v.type = e.target.value; persist(); }
-    if(e.target.classList.contains("lv_boxcolor")){ v.boxColor = e.target.value; persist(); }
+    if(!canWriteShared)return;
+    const vi = +e.target.dataset.vi; const v = activeViruses()[vi]; if(!v) return;
+    if(e.target.classList.contains("lv_type")){
+      v.type=e.target.value;
+      if(shared) applySharedVirusChange(data=>{ const rec=data.viruses.find(x=>x.id===v.id); if(rec)rec.type=v.type; }).catch(e2=>toast("Sync failed: "+String(e2.message||e2).slice(0,80)));
+      else persist();
+    }
+    if(e.target.classList.contains("lv_boxcolor")){
+      v.boxColor=e.target.value;
+      if(shared) applySharedVirusChange(data=>{ const rec=data.viruses.find(x=>x.id===v.id); if(rec)rec.boxColor=v.boxColor; }).catch(e2=>toast("Sync failed: "+String(e2.message||e2).slice(0,80)));
+      else persist();
+    }
     if(e.target.classList.contains("lv_order")){
-      v.needOrder = e.target.checked; persist();
+      v.needOrder = e.target.checked;
       const wrapEl = e.target.closest(".lv_orderwrap");
       wrapEl.style.borderColor = v.needOrder?"#8a6a2f":"var(--line2)";
       wrapEl.style.background = v.needOrder?"linear-gradient(180deg,#3a2e14,#302410)":"var(--panel2)";
       wrapEl.style.color = v.needOrder?"#ffd166":"var(--ink-dim)";
+      if(shared) applySharedVirusChange(data=>{ const rec=data.viruses.find(x=>x.id===v.id); if(rec)rec.needOrder=v.needOrder; }).catch(e2=>toast("Sync failed: "+String(e2.message||e2).slice(0,80)));
+      else persist();
     }
   });
   wrap.addEventListener("click", e => {
     const d = e.target.closest(".lv_del"); if(!d) return;
-    (DB.config.virusLib||[]).splice(+d.dataset.vi,1); persist(); paintVRows();
+    if(shared){
+      if(!canWriteShared){ toast("Connect a write token first"); return; }
+      const v=activeViruses()[+d.dataset.vi]; if(!v)return;
+      if(!confirm(`Remove "${v.name||"this virus"}" from the shared library?`))return;
+      applySharedVirusChange(data=>{
+        data.viruses=data.viruses.filter(x=>x.id!==v.id);
+        if(!data.deletedIds.includes(v.id))data.deletedIds.push(v.id);
+      }).then(()=>paintVRows()).catch(e2=>toast("Couldn't delete: "+String(e2.message||e2).slice(0,90)));
+    } else {
+      (DB.config.virusLib||[]).splice(+d.dataset.vi,1); persist(); paintVRows();
+    }
   });
 }
 
@@ -3603,12 +3870,13 @@ function procedureSectionHTML(p){
 // OWN full draft (which may include fields beyond just the procedure, like an
 // animal's name/cage) before tearing down and rebuilding around the library.
 // Returns {getSnapshot(), refresh()}.
-function mountProcedureEditor(p, initial, goToLibraryFn){
+function mountProcedureEditor(p, initial, goToLibraryFn, opts){
+  opts=opts||{};
   let hp=!!initial.headpost, win=!!initial.window;
   const injs=(initial.injections||[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],...x}));
   const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px";
   function siteLibOpts(){ return (DB.config.siteLib||[]).map(s=>`<option value="__s:${escAttr(s.name)}">${esc(s.name)} (${s.ap>=0?"+":""}${s.ap}, ${s.ml>=0?"+":""}${s.ml}, ${s.dv})</option>`).join(""); }
-  function virusLibOpts(){ return (DB.config.virusLib||[]).map(v=>`<option value="__v:${escAttr(v.name)}">${esc(v.name)}</option>`).join(""); }
+  function virusLibOpts(){ return activeViruses().map(v=>`<option value="__v:${escAttr(v.name)}">${esc(v.name)}</option>`).join(""); }
   function injRow(inj,i){
     const sOpts=siteLibOpts(), vOpts=virusLibOpts();
     const BS="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:11px";
@@ -3723,9 +3991,11 @@ function mountProcedureEditor(p, initial, goToLibraryFn){
       const v=el.value;
       if(v==="__edit_vlib"){ el.value=""; readInjFields(); goToLibraryFn("virus"); return; }
       if(!v.startsWith("__v:"))return; const nm=v.slice(4);
-      const vr=(DB.config.virusLib||[]).find(x=>x.name===nm); if(!vr)return;
+      const vr=activeViruses().find(x=>x.name===nm); if(!vr)return;
       injs[iv].virus=vr.name; injs[iv].type=vr.type||injs[iv].type;
-      paintInjs(); updatePreview(); return;
+      paintInjs(); updatePreview();
+      if(opts.offerTubeUse) offerTubeDecrement(vr.name);
+      return;
     }
     injs[iv][el.dataset.f]=el.value; updatePreview();
   });
@@ -3824,7 +4094,7 @@ function animalModal(id,draft){
     closeModal();
     renderLibraryModal(focus,()=>animalModal(id,d));
   }
-  const procEditor=mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary);
+  const procEditor=mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary, {offerTubeUse:true});
 
   document.getElementById("am_proctpl").addEventListener("change",e=>{
     const tpl=(DB.config.procedureLib||[]).find(pr=>pr.id===e.target.value); e.target.value="";
@@ -4288,7 +4558,8 @@ function renderMenuModal(){
 // reached only via the "✎ edit library" shortcuts inside the injection editor —
 // not from the "..." menu, which is reserved for Export/Import/Reset
 function renderLibraryModal(focus,onBack){
-  const sl=DB.config.siteLib||[], vl=DB.config.virusLib||[];
+  const sl=DB.config.siteLib||[], vl=activeViruses();
+  const shared=!!DB.config.useSharedVirusLib, canWriteShared=shared?!!sharedVirusToken():true;
   const IST2="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 8px;font-size:12px";
   const libRows=(arr,type)=>arr.map((e,i)=>`<div style="display:flex;gap:5px;align-items:center;margin-bottom:5px">
     ${type==="site"
@@ -4296,17 +4567,17 @@ function renderLibraryModal(focus,onBack){
          <input class="le_ap" data-i="${i}" type="number" step="0.1" value="${e.ap}" placeholder="AP" style="width:56px;${IST2}">
          <input class="le_ml" data-i="${i}" type="number" step="0.1" value="${e.ml}" placeholder="ML" style="width:56px;${IST2}">
          <input class="le_dv" data-i="${i}" type="number" step="0.1" value="${e.dv}" placeholder="DV" style="width:56px;${IST2}">`
-      :`<input class="le_name" data-t="virus" data-i="${i}" value="${escAttr(e.name)}" placeholder="virus name" style="flex:3;${IST2}">
-         <select class="le_vtype" data-i="${i}" style="${IST2}"><option value="retro" ${e.type==="retro"?"selected":""}>retro</option><option value="antero" ${e.type==="antero"?"selected":""}>antero</option><option value="other" ${e.type==="other"?"selected":""}>other</option></select>`}
-    <button class="le_del" data-t="${type}" data-i="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:11px">✕</button>
+      :`<input class="le_name" data-t="virus" data-i="${i}" value="${escAttr(e.name)}" placeholder="virus name" style="flex:3;${IST2}" ${canWriteShared?"":"disabled"}>
+         <select class="le_vtype" data-i="${i}" style="${IST2}" ${canWriteShared?"":"disabled"}><option value="retro" ${e.type==="retro"?"selected":""}>retro</option><option value="antero" ${e.type==="antero"?"selected":""}>antero</option><option value="other" ${e.type==="other"?"selected":""}>other</option></select>`}
+    ${type==="virus"&&!canWriteShared?"":`<button class="le_del" data-t="${type}" data-i="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:11px">✕</button>`}
   </div>`).join("");
   modal(`${onBack?`<button type="button" class="modal-back" id="lib_back">‹ Back to animal</button>`:""}<h3>Libraries</h3>
     <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px">Injection site library</div>
     <div id="lib_sites">${libRows(sl,"site")}</div>
     <button class="btn ghost" id="lib_siteadd" style="font-size:12px;margin-bottom:14px">＋ Add site</button>
-    <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px">Virus library</div>
+    <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px">Virus library${shared?` <span style="color:var(--gcamp);text-transform:none">— shared${canWriteShared?"":" (read-only, no write token)"}</span>`:""}</div>
     <div id="lib_viruses">${libRows(vl,"virus")}</div>
-    <button class="btn ghost" id="lib_virusadd" style="font-size:12px;margin-bottom:14px">＋ Add virus</button>
+    ${canWriteShared?`<button class="btn ghost" id="lib_virusadd" style="font-size:12px;margin-bottom:14px">＋ Add virus</button>`:""}
     <div class="actions">${onBack?`<button class="btn ghost" id="lib_back2">‹ Back</button>`:""}<button class="btn ghost" onclick="closeModal()">Close</button></div>`);
   if(onBack){
     const back=()=>{ readFields(); onBack(); };
@@ -4315,14 +4586,18 @@ function renderLibraryModal(focus,onBack){
   }
 
   function readFields(){
-    // flush current field values back into config
+    // flush current field values back into config — sites only; shared-mode
+    // virus fields already write through on every keystroke below (optimistic
+    // local update + debounced shared commit), nothing left to flush here.
     document.querySelectorAll(".le_name[data-t='site']").forEach(el=>{
       const i=+el.dataset.i; if(!DB.config.siteLib[i])return; DB.config.siteLib[i].name=el.value;});
     document.querySelectorAll(".le_ap").forEach(el=>{const i=+el.dataset.i;if(DB.config.siteLib[i])DB.config.siteLib[i].ap=+el.value;});
     document.querySelectorAll(".le_ml").forEach(el=>{const i=+el.dataset.i;if(DB.config.siteLib[i])DB.config.siteLib[i].ml=+el.value;});
     document.querySelectorAll(".le_dv").forEach(el=>{const i=+el.dataset.i;if(DB.config.siteLib[i])DB.config.siteLib[i].dv=+el.value;});
-    document.querySelectorAll(".le_name[data-t='virus']").forEach(el=>{const i=+el.dataset.i;if(DB.config.virusLib[i])DB.config.virusLib[i].name=el.value;});
-    document.querySelectorAll(".le_vtype").forEach(el=>{const i=+el.dataset.i;if(DB.config.virusLib[i])DB.config.virusLib[i].type=el.value;});
+    if(!shared){
+      document.querySelectorAll(".le_name[data-t='virus']").forEach(el=>{const i=+el.dataset.i;if(DB.config.virusLib[i])DB.config.virusLib[i].name=el.value;});
+      document.querySelectorAll(".le_vtype").forEach(el=>{const i=+el.dataset.i;if(DB.config.virusLib[i])DB.config.virusLib[i].type=el.value;});
+    }
     persist();
   }
   // Library edits write directly to DB without re-rendering the modal (avoids focus loss)
@@ -4335,24 +4610,48 @@ function renderLibraryModal(focus,onBack){
     persist();
   });
   document.getElementById("lib_viruses").addEventListener("input",e=>{
-    const el=e.target; const i=+el.dataset.i; if(!DB.config.virusLib[i])return;
-    if(el.classList.contains("le_vtype"))DB.config.virusLib[i].type=el.value;
-    else DB.config.virusLib[i].name=el.value;
-    persist();
+    if(!canWriteShared)return;
+    const el=e.target; const i=+el.dataset.i; const v=vl[i]; if(!v)return;
+    if(el.classList.contains("le_vtype"))return; // handled on "change" below
+    v.name=el.value;
+    if(shared) scheduleSharedVirusCommit(v.id,{name:v.name});
+    else persist();
   });
   document.getElementById("lib_viruses").addEventListener("change",e=>{
+    if(!canWriteShared)return;
     const el=e.target; if(!el.classList.contains("le_vtype"))return;
-    const i=+el.dataset.i; if(!DB.config.virusLib[i])return;
-    DB.config.virusLib[i].type=el.value; persist();
+    const i=+el.dataset.i; const v=vl[i]; if(!v)return;
+    v.type=el.value;
+    if(shared) applySharedVirusChange(data=>{ const rec=data.viruses.find(x=>x.id===v.id); if(rec)rec.type=v.type; }).catch(e2=>toast("Sync failed: "+String(e2.message||e2).slice(0,80)));
+    else persist();
   });
   document.getElementById("modal").addEventListener("click",e=>{
     const d=e.target.closest(".le_del"); if(!d)return;
-    if(d.dataset.t==="site") DB.config.siteLib.splice(+d.dataset.i,1);
-    else DB.config.virusLib.splice(+d.dataset.i,1);
-    persist(); renderLibraryModal(d.dataset.t,onBack);
+    if(d.dataset.t==="site"){ DB.config.siteLib.splice(+d.dataset.i,1); persist(); renderLibraryModal(d.dataset.t,onBack); return; }
+    // virus
+    if(!canWriteShared)return;
+    if(shared){
+      const v=vl[+d.dataset.i]; if(!v)return;
+      applySharedVirusChange(data=>{
+        data.viruses=data.viruses.filter(x=>x.id!==v.id);
+        if(!data.deletedIds.includes(v.id))data.deletedIds.push(v.id);
+      }).then(()=>renderLibraryModal(d.dataset.t,onBack)).catch(e2=>toast("Couldn't delete: "+String(e2.message||e2).slice(0,90)));
+    } else {
+      DB.config.virusLib.splice(+d.dataset.i,1); persist(); renderLibraryModal(d.dataset.t,onBack);
+    }
   });
   document.getElementById("lib_siteadd").onclick=()=>{ DB.config.siteLib.push({name:"New site",ap:0,ml:0,dv:0}); persist(); renderLibraryModal("site",onBack); };
-  document.getElementById("lib_virusadd").onclick=()=>{ DB.config.virusLib.push({name:"New virus",type:"retro"}); persist(); renderLibraryModal("virus",onBack); };
+  const virusAddBtn=document.getElementById("lib_virusadd");
+  if(virusAddBtn) virusAddBtn.onclick=()=>{
+    if(shared){
+      applySharedVirusChange(data=>{
+        data.viruses.push({id:uid("sv_"),name:"New virus",type:"retro",promoter:"",titer:"",source:"",note:"",
+          backupTubes:null,aliquotTubes:null,boxNumber:"",boxColor:"",boxLocation:"",needOrder:false});
+      }).then(()=>renderLibraryModal("virus",onBack)).catch(e2=>toast("Couldn't add: "+String(e2.message||e2).slice(0,90)));
+    } else {
+      DB.config.virusLib.push({name:"New virus",type:"retro"}); persist(); renderLibraryModal("virus",onBack);
+    }
+  };
   // scroll to the focused section
   if(focus){ const el=document.getElementById(focus==="site"?"lib_sites":"lib_viruses"); if(el)setTimeout(()=>el.scrollIntoView({behavior:"smooth",block:"start"}),80); }
 }
@@ -4407,7 +4706,7 @@ function exportFullDatabaseExcel(){
   (DB.cohorts||[]).forEach(c=>cohortsRows.push([c.name,c.color||""]));
 
   const virusRows=[["Name","Type","Promoter","Titer","Source","Note","Backup tubes","Aliquoted tubes","Box #","Box color","Box location","Need to order?"]];
-  (DB.config.virusLib||[]).forEach(v=>virusRows.push([v.name,v.type||"",v.promoter||"",v.titer||"",v.source||"",v.note||"",
+  activeViruses().forEach(v=>virusRows.push([v.name,v.type||"",v.promoter||"",v.titer||"",v.source||"",v.note||"",
     v.backupTubes,v.aliquotTubes,v.boxNumber||"",v.boxColor||"",v.boxLocation||"",v.needOrder?"Yes":""]));
 
   const siteRows=[["Name","AP","ML","DV"]];
