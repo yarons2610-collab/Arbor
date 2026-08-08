@@ -739,6 +739,10 @@ async function loadDB(){
 const SHARED_VIRUS_TOKEN_KEY="arbor_shared_virus_token";
 const SHARED_REPO_OWNER="yarons2610-collab", SHARED_REPO_NAME="Arbor", SHARED_VIRUS_PATH="shared/viruses.json";
 function sharedVirusToken(){ return localStorage.getItem(SHARED_VIRUS_TOKEN_KEY)||""; }
+function disconnectSharedVirusLib(){
+  localStorage.removeItem(SHARED_VIRUS_TOKEN_KEY);
+  DB.config.useSharedVirusLib=false; persist();
+}
 // base64 helpers that survive non-ASCII (virus names, notes) — plain atob/btoa
 // mangle anything outside Latin1.
 function b64EncodeUtf8(s){ return btoa(encodeURIComponent(s).replace(/%([0-9A-F]{2})/g,(_,h)=>String.fromCharCode(parseInt(h,16)))); }
@@ -2219,6 +2223,7 @@ function renderVirusLib(){
        <button id="vlib_refresh" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">↻ refresh</button>
        <button id="vlib_import" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">↑ import my local viruses</button>
        <button id="vlib_offshare" style="border:1px solid var(--line2);background:transparent;color:var(--ink-faint);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">use local library instead</button>
+       ${sharedVirusToken()?`<button id="vlib_disconnect" title="Remove the write token stored on this device and go back to a private local library — use this if the wrong token got connected" style="border:1px solid var(--line2);background:transparent;color:var(--overdue);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">🔌 disconnect</button>`:""}
        <button id="vlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto" ${sharedVirusToken()?"":"disabled title=\"connect a write token first\""}>＋ New virus</button>`
     : `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">Private to this device</span>
        <button id="vlib_goshared" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">🔗 use shared team library</button>
@@ -2229,6 +2234,10 @@ function renderVirusLib(){
     else showSharedVirusSetup();
   };
   if(hdr.querySelector("#vlib_offshare")) hdr.querySelector("#vlib_offshare").onclick=()=>{ DB.config.useSharedVirusLib=false; persist(); renderVirusLib(); };
+  if(hdr.querySelector("#vlib_disconnect")) hdr.querySelector("#vlib_disconnect").onclick=()=>{
+    if(!confirm("Disconnect the shared library write token from this device?\n\nThis only removes the token stored here — it doesn't touch the shared data itself. You'll switch to your private local library and can reconnect with a different token any time."))return;
+    disconnectSharedVirusLib(); renderVirusLib(); toast("Disconnected — using your local library");
+  };
   if(hdr.querySelector("#vlib_refresh")) hdr.querySelector("#vlib_refresh").onclick=async()=>{ await refreshSharedViruses(); renderVirusLib(); toast("Refreshed"); };
   if(hdr.querySelector("#vlib_import")) hdr.querySelector("#vlib_import").onclick=importLocalVirusesToShared;
   if(hdr.querySelector("#vlib_copytoken")) hdr.querySelector("#vlib_copytoken").onclick=async()=>{
