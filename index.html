@@ -2215,6 +2215,7 @@ function renderVirusLib(){
   hdr.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap";
   hdr.innerHTML = shared
     ? `<span style="font-family:var(--mono);font-size:10.5px;color:var(--gcamp)">✓ Shared team library${sharedVirusToken()?"":" (read-only — no write token)"}</span>
+       ${sharedVirusToken()?`<button id="vlib_copytoken" title="Copy the write token this device is already using — to set up another device or share it, without going back to GitHub" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">📋 copy token</button>`:""}
        <button id="vlib_refresh" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">↻ refresh</button>
        <button id="vlib_import" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">↑ import my local viruses</button>
        <button id="vlib_offshare" style="border:1px solid var(--line2);background:transparent;color:var(--ink-faint);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">use local library instead</button>
@@ -2230,6 +2231,11 @@ function renderVirusLib(){
   if(hdr.querySelector("#vlib_offshare")) hdr.querySelector("#vlib_offshare").onclick=()=>{ DB.config.useSharedVirusLib=false; persist(); renderVirusLib(); };
   if(hdr.querySelector("#vlib_refresh")) hdr.querySelector("#vlib_refresh").onclick=async()=>{ await refreshSharedViruses(); renderVirusLib(); toast("Refreshed"); };
   if(hdr.querySelector("#vlib_import")) hdr.querySelector("#vlib_import").onclick=importLocalVirusesToShared;
+  if(hdr.querySelector("#vlib_copytoken")) hdr.querySelector("#vlib_copytoken").onclick=async()=>{
+    const tok=sharedVirusToken();
+    try{ await navigator.clipboard.writeText(tok); toast("Token copied — paste it on another device, or share it directly"); }
+    catch(e){ prompt("Copy this token:",tok); } // clipboard API unavailable (e.g. non-HTTPS) — fall back to a selectable prompt
+  };
 
   const wrap = document.createElement("div"); wrap.id = "vlib_rows"; host.appendChild(wrap);
   function paintVRows(){

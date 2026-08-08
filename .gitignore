@@ -1,0 +1,4 @@
+# Never commit credentials — this repo is public.
+tokens.txt
+*.token
+.env
