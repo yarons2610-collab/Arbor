@@ -3654,7 +3654,11 @@ function surgerySummary(a){
 /* ---------- 3D BRAIN (three.js) — accuracy requires an uploaded Allen CCF mesh ---------- */
 let MESH3D=null;   // optional uploaded override geometry {v,f,min,max} in CCF microns
 let CCF=null;      // embedded decimated Allen CCF root mesh
-let _b3=null;      // active 3D instance
+// keyed by container element rather than a single global instance — an inline
+// preview and its own "Enlarge" popup can be mounted at the same time (same
+// getSurgery, two different DOM homes), and each needs its own live WebGL
+// context so interacting with one doesn't blank out the other.
+let _b3s=new Map(); // container element -> {raf, renderer}
 
 // ── Addable/removable substructure meshes, layered onto the root mesh in the same CCF frame.
 // Source: Allen Mouse Brain CCFv3 official per-structure meshes (structure_meshes/<id>.obj),
@@ -3766,13 +3770,27 @@ function parseOBJ(text){ const V=[],F=[],L=text.split("\n");
   let mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];
   for(let i=0;i<V.length;i+=3)for(let k=0;k<3;k++){const c=V[i+k];if(c<mn[k])mn[k]=c;if(c>mx[k])mx[k]=c;}
   return {v:V,f:F,min:mn,max:mx}; }
-function teardown3D(){ if(_b3){ cancelAnimationFrame(_b3.raf); try{_b3.renderer.dispose();}catch(e){}
-  try{ if(_b3.renderer.domElement.parentNode)_b3.renderer.domElement.parentNode.removeChild(_b3.renderer.domElement); }catch(e){} _b3=null; } }
+function teardownContainer(container){
+  const inst=_b3s.get(container); if(!inst)return;
+  cancelAnimationFrame(inst.raf);
+  try{inst.renderer.dispose();}catch(e){}
+  try{ if(inst.renderer.domElement.parentNode) inst.renderer.domElement.parentNode.removeChild(inst.renderer.domElement); }catch(e){}
+  _b3s.delete(container);
+}
+// tears down every live instance inside scopeEl (e.g. a closing modal) — or,
+// with no argument, every instance whose container has fallen out of the DOM
+// without an explicit teardown (an animal card re-rendering elsewhere), so a
+// long session doesn't slowly leak WebGL contexts.
+function teardown3D(scopeEl){
+  [..._b3s.keys()].forEach(container=>{
+    if((scopeEl && scopeEl.contains(container)) || (!scopeEl && !container.isConnected)) teardownContainer(container);
+  });
+}
 function ccfGeometry(mesh){ const g=new THREE.BufferGeometry(); const pos=new Float32Array(mesh.v.length);
   for(let i=0;i<mesh.v.length;i+=3){ const p=ccf2three(mesh.v[i],mesh.v[i+1],mesh.v[i+2]); pos[i]=p.x;pos[i+1]=p.y;pos[i+2]=p.z; }
   g.setAttribute("position",new THREE.BufferAttribute(pos,3)); g.setIndex(mesh.f); g.computeVertexNormals(); return g; }
 function render3DBrain(container,surgery,height){
-  teardown3D(); container.innerHTML="";
+  teardownContainer(container); teardown3D(); container.innerHTML="";
   if(typeof THREE==="undefined"){ container.innerHTML='<div class="bv-flag">3D library did not load (needs internet). The 2D view still works.</div>'; return; }
   const mesh=MESH3D||loadCCF();
   if(!mesh){ container.innerHTML='<div class="bv-flag">CCF mesh unavailable.</div>'; return; }
@@ -3800,12 +3818,16 @@ function render3DBrain(container,surgery,height){
     // head-post / cranial window representations, sitting on the actual local
     // dorsal surface (bregma2ccfSurface) rather than a fixed height, same as
     // the DV:Surface injection mode above. The window uses its own AP/ML/⌀;
-    // the head-post has no coordinate of its own, so it's shown centered on
-    // bregma, which is standard placement.
+    // the head-post has no coordinate of its own, so it follows the window's
+    // AP placement (a real head-post is usually positioned relative to where
+    // the window/implant will sit) but stays centered on the midline (ML=0)
+    // regardless of the window's ML offset, since it has to sit symmetrically
+    // to hold the head level.
     const mm3=mm=>mm*1000*_cS;
+    const winAp=+((surgery&&surgery.winAp)||0);
     if(surgery && showFixture("window",surgery)){
-      const wAp=+surgery.winAp||0, wMl=+surgery.winMl||0, wDiam=Math.max(0.5,+surgery.winDiam||3);
-      const center=ccf2three(...bregma2ccfSurface(mesh,wAp,wMl,0));
+      const wMl=+surgery.winMl||0, wDiam=Math.max(0.5,+surgery.winDiam||3);
+      const center=ccf2three(...bregma2ccfSurface(mesh,winAp,wMl,0));
       const rad=mm3(wDiam/2);
       const disc=new THREE.Mesh(new THREE.CircleGeometry(rad,40),new THREE.MeshBasicMaterial({color:0x7db4ff,transparent:true,opacity:0.28,side:THREE.DoubleSide,depthWrite:false}));
       disc.position.copy(center).add(new THREE.Vector3(0,mm3(0.05),0)); disc.rotation.x=-Math.PI/2; group.add(disc);
@@ -3813,11 +3835,20 @@ function render3DBrain(container,surgery,height){
       rim.position.copy(center).add(new THREE.Vector3(0,mm3(0.06),0)); rim.rotation.x=-Math.PI/2; group.add(rim);
     }
     if(surgery && showFixture("headpost",surgery)){
-      const center=ccf2three(...bregma2ccfSurface(mesh,0,0,0));
-      const plate=new THREE.Mesh(new THREE.BoxGeometry(mm3(8),mm3(0.6),mm3(3)),new THREE.MeshPhongMaterial({color:0xe0d454,transparent:true,opacity:0.65}));
-      plate.position.copy(center).add(new THREE.Vector3(0,mm3(0.4),0)); group.add(plate);
-      const plateWire=new THREE.Mesh(plate.geometry,new THREE.MeshBasicMaterial({color:0xe0d454,wireframe:true,transparent:true,opacity:0.35}));
-      plateWire.position.copy(plate.position); group.add(plateWire);
+      const center=ccf2three(...bregma2ccfSurface(mesh,winAp,0,0));
+      const hpCol=0x9aa4b2; // muted steel gray, not a bright fill color — less visually imposing
+      // a slim cross-bar spanning ML (like a real head-fixation plate between
+      // the ears) with two small raised mounting tabs near the ends, standing
+      // in for the screw posts, instead of one flat imposing slab.
+      const bar=new THREE.Mesh(new THREE.BoxGeometry(mm3(7),mm3(0.35),mm3(1.6)),new THREE.MeshPhongMaterial({color:hpCol,transparent:true,opacity:0.4}));
+      bar.position.copy(center).add(new THREE.Vector3(0,mm3(0.25),0)); group.add(bar);
+      const barWire=new THREE.Mesh(bar.geometry,new THREE.MeshBasicMaterial({color:hpCol,wireframe:true,transparent:true,opacity:0.2}));
+      barWire.position.copy(bar.position); group.add(barWire);
+      [-1,1].forEach(side=>{
+        const tab=new THREE.Mesh(new THREE.CylinderGeometry(mm3(0.45),mm3(0.45),mm3(0.5),16),new THREE.MeshPhongMaterial({color:hpCol,transparent:true,opacity:0.55}));
+        tab.position.copy(center).add(new THREE.Vector3(side*mm3(2.8),mm3(0.5),0));
+        group.add(tab);
+      });
     }
     // resolve each injection's marker positions/colors once, then group markers that land on the
     // same spot (co-injected viruses at one site, or two tracers sharing a path) and blend their
@@ -3890,16 +3921,18 @@ function render3DBrain(container,surgery,height){
     dom.addEventListener("pointermove",e=>{ if(!drag)return; group.rotation.y+=(e.clientX-px)*0.01; group.rotation.x+=(e.clientY-py)*0.01; px=e.clientX; py=e.clientY; });
     dom.addEventListener("pointerup",()=>{drag=false;dom.style.cursor="grab";});
     dom.addEventListener("wheel",e=>{ e.preventDefault(); camera.position.z=Math.max(12,Math.min(44,camera.position.z+e.deltaY*0.02)); },{passive:false});
-    _b3={raf:0,renderer,container};
-    (function loop(){ _b3.raf=requestAnimationFrame(loop); renderer.render(scene,camera); })();
+    const inst={raf:0,renderer};
+    _b3s.set(container,inst);
+    (function loop(){ if(_b3s.get(container)!==inst)return; inst.raf=requestAnimationFrame(loop); renderer.render(scene,camera); })();
   }catch(err){ console.warn("3D failed",err); container.innerHTML='<div class="bv-flag">3D rendering unavailable in this browser. The 2D view still works.</div>'; try{renderer&&renderer.dispose();}catch(e){} }
 }
-function openBrainPopup(getSurgery,onClose){
+function openBrainPopup(getSurgery,onClose,editFixtures){
   const ov=document.createElement("div"); ov.className="brain-pop";
   ov.innerHTML='<div class="brain-pop-box"><button class="brain-pop-x">✕ close</button><div class="brain-pop-body"></div></div>';
   document.body.appendChild(ov);
-  mountBrainViewer(ov.querySelector(".brain-pop-body"), getSurgery, {big:true, mode:"3d"});
-  const close=()=>{ teardown3D(); ov.remove(); document.removeEventListener("keydown",esc); if(onClose)onClose(); };
+  const popBody=ov.querySelector(".brain-pop-body");
+  mountBrainViewer(popBody, getSurgery, {big:true, mode:"3d", editFixtures});
+  const close=()=>{ teardownContainer(popBody); ov.remove(); document.removeEventListener("keydown",esc); if(onClose)onClose(); };
   function esc(e){ if(e.key==="Escape")close(); }
   ov.querySelector(".brain-pop-x").onclick=close;
   ov.addEventListener("mousedown",e=>{ if(e.target===ov)close(); });
@@ -3915,26 +3948,40 @@ const FIXTURE_CHOICES=[
 ];
 function mountBrainViewer(host,getSurgery,opts){
   opts=opts||{}; host.classList.add("bv");
+  // editFixtures (only passed by an editable surgery form, not read-only
+  // previews) adds a "Has" menu for the underlying head-post/window data
+  // itself — this is also how the "Enlarge" popup, which otherwise covers the
+  // rest of the editing form, still lets you change Yes/No while enlarged.
+  const hasBtnHTML=opts.editFixtures?'<button type="button" class="bv-ddbtn" data-dd="has" title="Does this animal actually have a head-post / cranial window? Also resets whether its 3D representation is shown."></button>':"";
   host.innerHTML='<div class="bv-top">'
+    +hasBtnHTML
+    +'<button type="button" class="bv-ddbtn" data-dd="show" title="Show head-post / cranial window representations on mice that have them — applies to every mouse\'s view"></button>'
     +'<button type="button" class="bv-ddbtn" data-dd="dvmode" title="What DV=0 means for every injection/expression-site coordinate"></button>'
-    +'<button type="button" class="bv-ddbtn" data-dd="fixtures" title="Show head-post / cranial window on mice that have them in their surgery — applies to every mouse\'s view"></button>'
     +'<button type="button" class="bv-ddbtn" data-dd="structures" title="Layer additional Allen CCF structures onto the brain"></button>'
     +'<button class="bv-expand" title="Enlarge">⛶ Enlarge</button></div>'
     +'<div class="bv-body"></div><div class="bv-flag"></div>';
   const body=host.querySelector(".bv-body"),flag=host.querySelector(".bv-flag"),expand=host.querySelector(".bv-expand");
-  const dvBtn=host.querySelector('[data-dd="dvmode"]'), fxBtn=host.querySelector('[data-dd="fixtures"]'), subBtn=host.querySelector('[data-dd="structures"]');
+  const hasBtn=host.querySelector('[data-dd="has"]'), dvBtn=host.querySelector('[data-dd="dvmode"]'), fxBtn=host.querySelector('[data-dd="show"]'), subBtn=host.querySelector('[data-dd="structures"]');
   function render(){
     const surgery=getSurgery();
     render3DBrain(body,surgery, opts.big?Math.round(window.innerHeight*0.66):300);
+    if(hasBtn){
+      const has=FIXTURE_CHOICES.filter(c=>opts.editFixtures.get()[c.key]).length;
+      hasBtn.textContent="Has"+(has?` (${has})`:"")+" ▾";
+      hasBtn.classList.toggle("active",has>0);
+    }
     dvBtn.textContent=(DV_MODE_CHOICES.find(c=>c.key===dvRefMode)||DV_MODE_CHOICES[0]).label+" ▾";
     const fxOn=FIXTURE_CHOICES.filter(c=>showFixture(c.key,surgery)).length;
-    fxBtn.textContent="Fixtures"+(fxOn?` (${fxOn})`:"")+" ▾";
+    fxBtn.textContent="Show"+(fxOn?` (${fxOn})`:"")+" ▾";
     fxBtn.classList.toggle("active",fxOn>0);
     const subOn=activeSubstructures.size;
     subBtn.textContent="Structures"+(subOn?` (${subOn})`:"")+" ▾";
     subBtn.classList.toggle("active",subOn>0);
     flag.innerHTML="Allen CCF root mesh — CCFv3 (Wang et al. 2020). Bregma→CCF: 5400/5700/332 µm + 5° pitch (Chon et al. 2019).";
   }
+  if(hasBtn) hasBtn.onclick=()=>openCheckDropdown(hasBtn, FIXTURE_CHOICES,
+    key=>!!opts.editFixtures.get()[key],
+    key=>{ opts.editFixtures.set(key, !opts.editFixtures.get()[key]); render(); });
   dvBtn.onclick=()=>openRadioDropdown(dvBtn, DV_MODE_CHOICES, dvRefMode, key=>{ dvRefMode=key; render(); });
   fxBtn.onclick=()=>openCheckDropdown(fxBtn, FIXTURE_CHOICES, key=>showFixture(key,getSurgery()), key=>{
     fixtureOverride[key]=!showFixture(key,getSurgery()); render();
@@ -3943,7 +3990,7 @@ function mountBrainViewer(host,getSurgery,opts){
     Object.keys(SUBSTRUCTURES).map(key=>({key,label:SUBSTRUCTURES[key].label,title:SUBSTRUCTURES[key].fullName})),
     key=>activeSubstructures.has(key),
     key=>{ activeSubstructures.has(key)?activeSubstructures.delete(key):activeSubstructures.add(key); render(); });
-  expand.onclick=()=>openBrainPopup(getSurgery, render);
+  expand.onclick=()=>openBrainPopup(getSurgery, render, opts.editFixtures);
   render();
   return {refresh:render};
 }
@@ -4059,7 +4106,23 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   }
   function paintInjs(){ document.getElementById(`${p}_injs`).innerHTML=injs.map((inj,i)=>injRow(inj,i)).join("")||`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">no injections — add one below</div>`; }
   function curSurgery(){ return {headpost:hp,window:win,winAp,winMl,winDiam,injections:injs}; }
-  const _bv=mountBrainViewer(document.getElementById(`${p}_brainview`), curSurgery);
+  function updateWinCoordVisibility(){ document.getElementById(`${p}_wincoord`).style.display = win?"flex":"none"; }
+  // Head-post/window Yes-No resets the 3D fixture's display override to match
+  // (No hides it, Yes shows it) — but only as a one-time trigger, not a lock:
+  // the brain viewer's own "Show" dropdown can still be flipped independently
+  // afterward, same as any other mouse.
+  function setFixtureData(kind,val){
+    if(kind==="headpost")hp=val; else win=val;
+    document.querySelectorAll(`#${p}_${kind==="headpost"?"hp":"win"} button`).forEach(x=>x.classList.toggle("on",(x.dataset.v==="1")===val));
+    if(kind==="window")updateWinCoordVisibility();
+    fixtureOverride[kind]=val;
+  }
+  const _bv=mountBrainViewer(document.getElementById(`${p}_brainview`), curSurgery, {
+    // lets the brain viewer's own toolbar edit head-post/window directly —
+    // this is the only way to reach that control while the viewer is enlarged,
+    // since the popup covers the rest of this form.
+    editFixtures:{ get:()=>({headpost:hp,window:win}), set:(kind,val)=>{ setFixtureData(kind,val); updatePreview(); } }
+  });
   function updatePreview(){ _bv.refresh(); }
   function readInjFields(){
     // flush every visible input/select value back into the injs array before any repaint
@@ -4121,8 +4184,7 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
 
   function bindSeg(fid,setter){ document.getElementById(fid).onclick=e=>{const b=e.target.closest("button");if(!b)return;
     setter(b.dataset.v==="1"); document.querySelectorAll(`#${fid} button`).forEach(x=>x.classList.toggle("on",x===b)); updatePreview();}; }
-  function updateWinCoordVisibility(){ document.getElementById(`${p}_wincoord`).style.display = win?"flex":"none"; }
-  bindSeg(`${p}_hp`,v=>hp=v); bindSeg(`${p}_win`,v=>{win=v; updateWinCoordVisibility();});
+  bindSeg(`${p}_hp`,v=>setFixtureData("headpost",v)); bindSeg(`${p}_win`,v=>setFixtureData("window",v));
   document.querySelectorAll(`#${p}_hp button`).forEach(b=>b.classList.toggle("on",(b.dataset.v==="1")===hp));
   document.querySelectorAll(`#${p}_win button`).forEach(b=>b.classList.toggle("on",(b.dataset.v==="1")===win));
   updateWinCoordVisibility();
@@ -4326,7 +4388,7 @@ function cycleStatus(id){
 /* ---------- ADD TASK / DOMAIN ---------- */
 function modal(h,opts){ const s=document.getElementById("scrim"); const m=document.getElementById("modal");
   m.className="modal"+(opts&&opts.center?" modal-center":"")+(opts&&opts.wide?" modal-wide":""); m.innerHTML=h; s.classList.add("open"); return s; }
-function closeModal(){ document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(); }
+function closeModal(){ document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(document.getElementById("modal")); }
 // Modals close only via Cancel / ✕ / Save — NOT by clicking outside, so a stray click never discards an edit.
 document.addEventListener("keydown",e=>{ if(e.key==="Escape"&&document.getElementById("scrim").classList.contains("open"))closeModal(); });
 // mobile: swipe down on detail panel header to close (when scrolled to top)
