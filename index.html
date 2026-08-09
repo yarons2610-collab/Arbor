@@ -112,6 +112,12 @@
   .emoji-cell{width:100%;aspect-ratio:1;font-size:17px;background:var(--bg2);border:1px solid var(--line2);border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center}
   .emoji-cell:hover{border-color:var(--gold)}
   .emoji-cell.on{border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
+  .dd-pop{position:fixed;z-index:90;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:6px;box-shadow:0 24px 60px -22px #000;width:240px;max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+  .dd-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--ink-dim);border-radius:8px;padding:7px 9px;font-size:12.5px;cursor:pointer}
+  .dd-row:hover{background:var(--panel)}
+  .dd-row.on{color:var(--ink);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
+  .dd-check{cursor:pointer}
+  .dd-check input{width:auto;margin:0}
   .cal-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
   .cal-h b{font-family:var(--disp);font-size:13px;color:var(--ink)}
   .cal-nav{border:1px solid var(--line2);background:var(--panel);color:var(--ink);border-radius:6px;width:26px;height:26px;cursor:pointer;font-size:13px}
@@ -245,15 +251,9 @@
   .cal-now-line{position:absolute;left:0;right:0;height:2px;background:var(--mruby);pointer-events:none;z-index:4}
   .cal-now-dot{position:absolute;left:-4px;top:-4px;width:10px;height:10px;border-radius:50%;background:var(--mruby)}
   .bv-expand{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);border-radius:8px;padding:5px 10px;font-size:11.5px;cursor:pointer}
-  .bv-sub-toggle{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);border-radius:8px;padding:5px 10px;font-size:11.5px;cursor:pointer}
-  .bv-sub-toggle:hover{border-color:var(--gold)}
-  .bv-sub-toggle.on{background:linear-gradient(180deg,#3a2e14,#302410);border-color:#8a6a2f;color:#ffd166}
-  .bv-dvmode{flex:0 0 auto;padding-right:8px;border-right:1px solid var(--line2)}
-  .bv-dvmode button{flex:0 0 auto;padding:5px 10px;font-size:11.5px;border-radius:8px}
-  .bv-dvmode button.on{color:var(--cyan);border-color:var(--cyan)}
-  .bv-fixtures{flex:0 0 auto;padding-right:8px;border-right:1px solid var(--line2)}
-  .bv-fixtures button{flex:0 0 auto;padding:5px 10px;font-size:11.5px;border-radius:8px}
-  .bv-fixtures button.on{color:#ffd166;border-color:#8a6a2f}
+  .bv-ddbtn{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);border-radius:8px;padding:5px 10px;font-size:11.5px;cursor:pointer;flex:0 0 auto}
+  .bv-ddbtn:hover{border-color:var(--gold)}
+  .bv-ddbtn.active{border-color:#8a6a2f;color:#ffd166;background:linear-gradient(180deg,#3a2e14,#302410)}
   .bv-expand:hover{border-color:var(--gcamp);color:var(--ink)}
   .perf-suggest{animation:pulse 2s ease-in-out infinite}
   .adc-btn{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:20px;padding:2px 9px;font-family:var(--mono);font-size:10.5px;cursor:pointer;transition:.12s}
@@ -1220,6 +1220,51 @@ function openEmojiPicker(anchor, choices, current, onPick){
   const out=(e)=>{ if(!pop.contains(e.target)&&e.target!==anchor) closeEmojiPicker(); };
   document.addEventListener("mousedown",out,true);
   _emojiEls={pop,out};
+}
+// Small list popovers for the 3D brain viewer's toolbar menus (DV reference,
+// fixtures, structures) — same anchored/click-outside-closes mechanics as the
+// calendar and emoji popovers above, just list-shaped instead of a grid.
+// Radio: one active choice, picking an item applies it and closes immediately.
+let _ddEls=null;
+function closeListDropdown(){ if(_ddEls){ _ddEls.pop.remove(); document.removeEventListener("mousedown",_ddEls.out,true); _ddEls=null; } }
+function openRadioDropdown(anchor, items, current, onPick){
+  closeListDropdown(); closeCalendar(); closeEmojiPicker();
+  const pop=document.createElement("div"); pop.className="dd-pop";
+  pop.innerHTML=items.map(it=>`<button type="button" class="dd-row${it.key===current?" on":""}" data-k="${escAttr(it.key)}" title="${escAttr(it.title||it.label)}">${esc(it.label)}</button>`).join("");
+  pop.addEventListener("click",ev=>{
+    const b=ev.target.closest(".dd-row"); if(!b)return;
+    onPick(b.dataset.k); closeListDropdown();
+  });
+  document.body.appendChild(pop);
+  const r=anchor.getBoundingClientRect(); const pw=pop.offsetWidth||200, ph=pop.offsetHeight||120;
+  let left=Math.min(r.left, window.innerWidth-pw-10);
+  let top = (r.bottom+ph+8<window.innerHeight)? r.bottom+6 : Math.max(8,r.top-ph-6);
+  pop.style.left=left+"px"; pop.style.top=top+"px";
+  const out=(e)=>{ if(!pop.contains(e.target)&&e.target!==anchor) closeListDropdown(); };
+  document.addEventListener("mousedown",out,true);
+  _ddEls={pop,out};
+}
+// Checkbox: any number of independently-toggleable items — stays open across
+// clicks so several can be flipped in one visit instead of reopening per pick.
+function openCheckDropdown(anchor, items, isChecked, onToggle){
+  closeListDropdown(); closeCalendar(); closeEmojiPicker();
+  const pop=document.createElement("div"); pop.className="dd-pop";
+  function draw(){
+    pop.innerHTML=items.map(it=>`<label class="dd-row dd-check" title="${escAttr(it.title||it.label)}"><input type="checkbox" data-k="${escAttr(it.key)}" ${isChecked(it.key)?"checked":""}><span>${esc(it.label)}</span></label>`).join("");
+  }
+  draw();
+  pop.addEventListener("change",ev=>{
+    const cb=ev.target.closest('input[type="checkbox"]'); if(!cb)return;
+    onToggle(cb.dataset.k); draw();
+  });
+  document.body.appendChild(pop);
+  const r=anchor.getBoundingClientRect(); const pw=pop.offsetWidth||220, ph=pop.offsetHeight||260;
+  let left=Math.min(r.left, window.innerWidth-pw-10);
+  let top = (r.bottom+ph+8<window.innerHeight)? r.bottom+6 : Math.max(8,r.top-ph-6);
+  pop.style.left=left+"px"; pop.style.top=top+"px";
+  const out=(e)=>{ if(!pop.contains(e.target)&&e.target!==anchor) closeListDropdown(); };
+  document.addEventListener("mousedown",out,true);
+  _ddEls={pop,out};
 }
 function bindTimeButton(btn, getVal, setVal, minuteStep){
   btn.onclick=()=>openTimePicker(btn, getVal(), v=>{ setVal(v);
@@ -3860,37 +3905,44 @@ function openBrainPopup(getSurgery,onClose){
   ov.addEventListener("mousedown",e=>{ if(e.target===ov)close(); });
   document.addEventListener("keydown",esc);
 }
+const DV_MODE_CHOICES=[
+  {key:"bregma",  label:"DV ref: Bregma",  title:"DV=0 is bregma's own skull height, the same everywhere"},
+  {key:"surface", label:"DV ref: Surface", title:"DV=0 is the real brain surface at each AP/ML (raycast onto the mesh)"}
+];
+const FIXTURE_CHOICES=[
+  {key:"headpost", label:"🔧 Head-post"},
+  {key:"window",   label:"◯ Cranial window"}
+];
 function mountBrainViewer(host,getSurgery,opts){
   opts=opts||{}; host.classList.add("bv");
-  const subButtons=Object.keys(SUBSTRUCTURES).map(key=>{
-    const s=SUBSTRUCTURES[key];
-    return `<button class="bv-sub-toggle" data-sub="${key}" title="${esc(s.label)}: ${esc(s.fullName)}">${s.label}</button>`;
-  }).join("");
   host.innerHTML='<div class="bv-top">'
-    +'<div class="seg bv-dvmode" title="What DV=0 means: bregma\'s own skull height everywhere, or the real brain surface at each AP/ML"><button data-v="bregma">DV: Bregma</button><button data-v="surface">DV: Surface</button></div>'
-    +'<div class="seg bv-fixtures" title="Show head-post / cranial window on mice that have them in their surgery — click to override for every mouse\'s view"><button data-fx="headpost">🔧 Head-post</button><button data-fx="window">◯ Window</button></div>'
-    +subButtons
+    +'<button type="button" class="bv-ddbtn" data-dd="dvmode" title="What DV=0 means for every injection/expression-site coordinate"></button>'
+    +'<button type="button" class="bv-ddbtn" data-dd="fixtures" title="Show head-post / cranial window on mice that have them in their surgery — applies to every mouse\'s view"></button>'
+    +'<button type="button" class="bv-ddbtn" data-dd="structures" title="Layer additional Allen CCF structures onto the brain"></button>'
     +'<button class="bv-expand" title="Enlarge">⛶ Enlarge</button></div>'
     +'<div class="bv-body"></div><div class="bv-flag"></div>';
   const body=host.querySelector(".bv-body"),flag=host.querySelector(".bv-flag"),expand=host.querySelector(".bv-expand");
+  const dvBtn=host.querySelector('[data-dd="dvmode"]'), fxBtn=host.querySelector('[data-dd="fixtures"]'), subBtn=host.querySelector('[data-dd="structures"]');
   function render(){
     const surgery=getSurgery();
     render3DBrain(body,surgery, opts.big?Math.round(window.innerHeight*0.66):300);
-    host.querySelectorAll(".bv-sub-toggle").forEach(b=>b.classList.toggle("on",activeSubstructures.has(b.dataset.sub)));
-    host.querySelectorAll(".bv-dvmode button").forEach(b=>b.classList.toggle("on",b.dataset.v===dvRefMode));
-    host.querySelectorAll(".bv-fixtures button").forEach(b=>b.classList.toggle("on",showFixture(b.dataset.fx,surgery)));
+    dvBtn.textContent=(DV_MODE_CHOICES.find(c=>c.key===dvRefMode)||DV_MODE_CHOICES[0]).label+" ▾";
+    const fxOn=FIXTURE_CHOICES.filter(c=>showFixture(c.key,surgery)).length;
+    fxBtn.textContent="Fixtures"+(fxOn?` (${fxOn})`:"")+" ▾";
+    fxBtn.classList.toggle("active",fxOn>0);
+    const subOn=activeSubstructures.size;
+    subBtn.textContent="Structures"+(subOn?` (${subOn})`:"")+" ▾";
+    subBtn.classList.toggle("active",subOn>0);
     flag.innerHTML="Allen CCF root mesh — CCFv3 (Wang et al. 2020). Bregma→CCF: 5400/5700/332 µm + 5° pitch (Chon et al. 2019).";
   }
-  host.querySelectorAll(".bv-sub-toggle").forEach(b=>{
-    b.onclick=()=>{ const key=b.dataset.sub; activeSubstructures.has(key)?activeSubstructures.delete(key):activeSubstructures.add(key); render(); };
+  dvBtn.onclick=()=>openRadioDropdown(dvBtn, DV_MODE_CHOICES, dvRefMode, key=>{ dvRefMode=key; render(); });
+  fxBtn.onclick=()=>openCheckDropdown(fxBtn, FIXTURE_CHOICES, key=>showFixture(key,getSurgery()), key=>{
+    fixtureOverride[key]=!showFixture(key,getSurgery()); render();
   });
-  host.querySelector(".bv-dvmode").addEventListener("click",e=>{
-    const b=e.target.closest("button"); if(!b)return; dvRefMode=b.dataset.v; render();
-  });
-  host.querySelector(".bv-fixtures").addEventListener("click",e=>{
-    const b=e.target.closest("button"); if(!b)return;
-    fixtureOverride[b.dataset.fx]=!showFixture(b.dataset.fx,getSurgery()); render();
-  });
+  subBtn.onclick=()=>openCheckDropdown(subBtn,
+    Object.keys(SUBSTRUCTURES).map(key=>({key,label:SUBSTRUCTURES[key].label,title:SUBSTRUCTURES[key].fullName})),
+    key=>activeSubstructures.has(key),
+    key=>{ activeSubstructures.has(key)?activeSubstructures.delete(key):activeSubstructures.add(key); render(); });
   expand.onclick=()=>openBrainPopup(getSurgery, render);
   render();
   return {refresh:render};
