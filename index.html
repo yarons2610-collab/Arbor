@@ -3856,16 +3856,20 @@ function render3DBrain(container,surgery,height){
       const wDiamForHead=surgery.window?Math.max(0.5,+surgery.winDiam||3):3;
       // a chamfered-rectangle well built around the access opening (like a real
       // dental-cement headcap), not a plain bar — outer footprint scales with
-      // the window it surrounds, with a hole roughly matching the window's own
-      // size in the middle.
+      // the window it surrounds. The cap's own footprint is fixed on bregma,
+      // but the hole cut into it has to sit exactly where the window actually
+      // is (offset from bregma by the window's own AP/ML) — everywhere else
+      // is covered by cement, so an off-center hole would expose skull instead
+      // of the window whenever the window itself isn't dead-center.
       const outerW=mm3(Math.max(wDiamForHead+6,9)), outerD=mm3(Math.max(wDiamForHead+5,8)), thick=mm3(0.5), holeR=mm3(wDiamForHead/2+0.3);
+      const holeDx=surgery.window?mm3(+surgery.winMl||0):0, holeDy=surgery.window?mm3(winAp):0;
       // lifted clear of the surface (not just resting on it) — the cap is
       // sampled at one center point but spans several mm across a curved
       // skull, so a flush fit would dip its own edges into the mesh and look
       // like it's embedded rather than sitting on top from grazing angles.
       const lift=mm3(0.35);
       const capShape=chamferedRectShape(outerW,outerD,mm3(2));
-      const hole=new THREE.Path(); hole.absarc(0,0,holeR,0,Math.PI*2,false); capShape.holes.push(hole);
+      const hole=new THREE.Path(); hole.absarc(holeDx,holeDy,holeR,0,Math.PI*2,false); capShape.holes.push(hole);
       const cap=new THREE.Mesh(new THREE.ExtrudeGeometry(capShape,{depth:thick,bevelEnabled:false}),
         new THREE.MeshPhongMaterial({color:hpCol,transparent:true,opacity:0.5,side:THREE.DoubleSide}));
       cap.rotation.x=-Math.PI/2; cap.position.copy(center).add(new THREE.Vector3(0,lift,0)); cap.renderOrder=5; group.add(cap);
