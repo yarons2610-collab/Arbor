@@ -3814,7 +3814,11 @@ function render3DBrain(container,surgery,height){
     const group=new THREE.Group(); scene.add(group); group.rotation.set(-0.32,-1.15,0);
     ccfFrame(mesh); const geo=ccfGeometry(mesh);
     group.add(new THREE.Mesh(geo,new THREE.MeshPhongMaterial({color:0x9fb2cc,transparent:true,opacity:0.13,side:THREE.DoubleSide,depthWrite:false})));
-    group.add(new THREE.Mesh(geo,new THREE.MeshBasicMaterial({color:0x3a4658,wireframe:true,transparent:true,opacity:0.09})));
+    // depthWrite:false here too, matching the solid surface above — without
+    // it the wireframe's own depth values z-fight against anything sitting
+    // close to the surface (the head-post/window fixtures included) at
+    // grazing viewing angles, since the gap is a fraction of a millimeter.
+    group.add(new THREE.Mesh(geo,new THREE.MeshBasicMaterial({color:0x3a4658,wireframe:true,transparent:true,opacity:0.09,depthWrite:false})));
     // addable/removable substructure meshes (e.g. STN), layered in the same CCF frame as the root
     activeSubstructures.forEach(key=>{
       const sub=SUBSTRUCTURES[key], subMesh=sub&&loadSubstructureMesh(key);
@@ -3826,11 +3830,15 @@ function render3DBrain(container,surgery,height){
     // head-post / cranial window representations, sitting on the actual local
     // dorsal surface (bregma2ccfSurface) rather than a fixed height, same as
     // the DV:Surface injection mode above. The window uses its own AP/ML/⌀;
-    // the head-post has no coordinate of its own, so it follows the window's
-    // AP placement (a real head-post is usually positioned relative to where
-    // the window/implant will sit) but stays centered on the midline (ML=0)
-    // regardless of the window's ML offset, since it has to sit symmetrically
-    // to hold the head level.
+    // the head-post has no coordinate of its own and isn't tied to the
+    // window's placement either — it's shown at a single fixed spot, centered
+    // on the skull (bregma), same for every mouse. renderOrder is set explicitly on every fixture
+    // mesh below (higher than the brain surface/wireframe's default 0) so
+    // they always draw after — i.e. on top of — the brain regardless of
+    // viewing angle: three.js sorts transparent objects by a per-object
+    // distance estimate, not real per-pixel depth, and that estimate can
+    // pick the wrong order for a large curved surface vs. a small fixture
+    // sitting right on it, making the wireframe appear to poke through.
     const mm3=mm=>mm*1000*_cS;
     const winAp=+((surgery&&surgery.winAp)||0);
     if(surgery && showFixture("window",surgery)){
@@ -3838,12 +3846,12 @@ function render3DBrain(container,surgery,height){
       const center=ccf2three(...bregma2ccfSurface(mesh,winAp,wMl,0));
       const rad=mm3(wDiam/2);
       const disc=new THREE.Mesh(new THREE.CircleGeometry(rad,40),new THREE.MeshBasicMaterial({color:0x7db4ff,transparent:true,opacity:0.28,side:THREE.DoubleSide,depthWrite:false}));
-      disc.position.copy(center).add(new THREE.Vector3(0,mm3(0.05),0)); disc.rotation.x=-Math.PI/2; group.add(disc);
+      disc.position.copy(center).add(new THREE.Vector3(0,mm3(0.05),0)); disc.rotation.x=-Math.PI/2; disc.renderOrder=5; group.add(disc);
       const rim=new THREE.Mesh(new THREE.RingGeometry(rad*0.93,rad,40),new THREE.MeshBasicMaterial({color:0x7db4ff,side:THREE.DoubleSide}));
-      rim.position.copy(center).add(new THREE.Vector3(0,mm3(0.06),0)); rim.rotation.x=-Math.PI/2; group.add(rim);
+      rim.position.copy(center).add(new THREE.Vector3(0,mm3(0.06),0)); rim.rotation.x=-Math.PI/2; rim.renderOrder=5; group.add(rim);
     }
     if(surgery && showFixture("headpost",surgery)){
-      const center=ccf2three(...bregma2ccfSurface(mesh,winAp,0,0));
+      const center=ccf2three(...bregma2ccfSurface(mesh,0,0,0));
       const hpCol=0xe6d9b8; // pale cream dental-acrylic color, not a bright fill — a real headcap, not a highlighter
       const wDiamForHead=surgery.window?Math.max(0.5,+surgery.winDiam||3):3;
       // a chamfered-rectangle well built around the access opening (like a real
@@ -3860,13 +3868,13 @@ function render3DBrain(container,surgery,height){
       const hole=new THREE.Path(); hole.absarc(0,0,holeR,0,Math.PI*2,false); capShape.holes.push(hole);
       const cap=new THREE.Mesh(new THREE.ExtrudeGeometry(capShape,{depth:thick,bevelEnabled:false}),
         new THREE.MeshPhongMaterial({color:hpCol,transparent:true,opacity:0.5,side:THREE.DoubleSide}));
-      cap.rotation.x=-Math.PI/2; cap.position.copy(center).add(new THREE.Vector3(0,lift,0)); group.add(cap);
+      cap.rotation.x=-Math.PI/2; cap.position.copy(center).add(new THREE.Vector3(0,lift,0)); cap.renderOrder=5; group.add(cap);
       // four small dark notches at the chamfered corners — where a real
       // head-fixation clamp would reach in and grip the cap from outside.
       const nx=outerW/2-mm3(1.1), nz=outerD/2-mm3(1.1);
       [[-1,-1],[1,-1],[1,1],[-1,1]].forEach(([sx,sz])=>{
         const notch=new THREE.Mesh(new THREE.BoxGeometry(mm3(1.1),mm3(0.5),mm3(1.1)),new THREE.MeshBasicMaterial({color:0x2a2620,transparent:true,opacity:0.5}));
-        notch.position.copy(center).add(new THREE.Vector3(sx*nx,lift+thick*0.5,sz*nz)); group.add(notch);
+        notch.position.copy(center).add(new THREE.Vector3(sx*nx,lift+thick*0.5,sz*nz)); notch.renderOrder=6; group.add(notch);
       });
     }
     // resolve each injection's marker positions/colors once, then group markers that land on the
