@@ -251,6 +251,9 @@
   .bv-dvmode{flex:0 0 auto;padding-right:8px;border-right:1px solid var(--line2)}
   .bv-dvmode button{flex:0 0 auto;padding:5px 10px;font-size:11.5px;border-radius:8px}
   .bv-dvmode button.on{color:var(--cyan);border-color:var(--cyan)}
+  .bv-fixtures{flex:0 0 auto;padding-right:8px;border-right:1px solid var(--line2)}
+  .bv-fixtures button{flex:0 0 auto;padding:5px 10px;font-size:11.5px;border-radius:8px}
+  .bv-fixtures button.on{color:#ffd166;border-color:#8a6a2f}
   .bv-expand:hover{border-color:var(--gcamp);color:var(--ink)}
   .perf-suggest{animation:pulse 2s ease-in-out infinite}
   .adc-btn{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:20px;padding:2px 9px;font-family:var(--mono);font-size:10.5px;cursor:pointer;transition:.12s}
@@ -465,14 +468,12 @@
       <div class="mat-subtabs" id="matSubTabs">
         <button class="mat-stab on" data-ms="viruses">Viruses</button>
         <button class="mat-stab" data-ms="sites">Injection Sites</button>
-        <button class="mat-stab" data-ms="tasks">Behavioral Tasks</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
         <button class="mat-stab" data-ms="diarytypes">Entry Types</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-sites"></div>
-      <div class="wrap mat-subview hidden" id="ms-tasks"></div>
       <div class="wrap mat-subview hidden" id="ms-procedures"></div>
       <div class="wrap mat-subview hidden" id="ms-diarytypes"></div>
     </div>
@@ -1052,7 +1053,7 @@ function bindDrumScroll(col,apply){
 /* ---- custom calendar popover: click a day, then type the time ---- */
 let _calEls=null;
 function closeCalendar(){ if(_calEls){ _calEls.pop.remove(); document.removeEventListener("mousedown",_calEls.out,true); _calEls=null; } }
-function openCalendar(anchor, value, onPick, minuteStep){
+function openCalendar(anchor, value, onPick, minuteStep, dateOnly){
   closeCalendar();
   minuteStep=minuteStep||5;
   const WD=["Su","Mo","Tu","We","Th","Fr","Sa"];
@@ -1096,25 +1097,28 @@ function openCalendar(anchor, value, onPick, minuteStep){
         <b>${new Date(vy,vm,1).toLocaleDateString(undefined,{month:"long",year:"numeric"})}</b>
         <button class="cal-nav" data-nav="1">›</button></div>
       <div class="cal-grid">${WD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
-      <div class="cal-foot" style="display:flex;align-items:center;gap:8px">
+      ${dateOnly?"":`<div class="cal-foot" style="display:flex;align-items:center;gap:8px">
         <label style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 auto">time</label>
         <div class="cal-drum-wrap" style="display:flex;gap:4px;flex:1;position:relative">
           <div class="drum-h" style="flex:1;height:80px;overflow-y:scroll;scroll-snap-type:y mandatory">${hours}</div>
           <span style="font-family:var(--mono);font-size:14px;font-weight:700;align-self:center;color:var(--ink)">:</span>
           <div class="drum-m" style="flex:1;height:80px;overflow-y:scroll;scroll-snap-type:y mandatory">${mins}</div>
           <button data-x="cleartime" title="remove time" style="flex:0 0 auto;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 7px;font-size:11px;cursor:pointer">✕</button>
-        </div></div>
+        </div></div>`}
       <div class="cal-btns"><button data-x="clear">Clear</button><button class="ok" data-x="done">Done</button></div>`;
     pop.querySelectorAll(".cal-nav").forEach(b=>b.onclick=()=>{ vm+=+b.dataset.nav; if(vm<0){vm=11;vy--;} if(vm>11){vm=0;vy++;} draw(); });
-    pop.querySelectorAll(".cal-day:not(.blank)").forEach(c=>c.onclick=()=>{ sel=new Date(vy,vm,+c.dataset.d); if(selH===-1){selH=9;selM=0;} draw(); });
-    pop.querySelector('[data-x="cleartime"]').onclick=()=>{ selH=-1; selM=0; drawTimeDrum(); };
+    pop.querySelectorAll(".cal-day:not(.blank)").forEach(c=>c.onclick=()=>{ sel=new Date(vy,vm,+c.dataset.d); if(!dateOnly&&selH===-1){selH=9;selM=0;} draw(); });
+    if(!dateOnly){
+      pop.querySelector('[data-x="cleartime"]').onclick=()=>{ selH=-1; selM=0; drawTimeDrum(); };
+    }
     pop.querySelector('[data-x="clear"]').onclick=()=>{ onPick(null); closeCalendar(); };
     pop.querySelector('[data-x="done"]').onclick=()=>{
       if(!sel){ onPick(null); closeCalendar(); return; }
       const pad=n=>String(n).padStart(2,"0");
       const dstr=`${sel.getFullYear()}-${pad(sel.getMonth()+1)}-${pad(sel.getDate())}`;
-      onPick(selH>=0 ? `${dstr}T${pad(selH)}:${pad(selM)}` : dstr); closeCalendar();
+      onPick(!dateOnly&&selH>=0 ? `${dstr}T${pad(selH)}:${pad(selM)}` : dstr); closeCalendar();
     };
+    if(dateOnly)return;
     drawTimeDrum();
     // scroll-to-select: the drum snaps items to center on scroll (scroll-snap-type), so
     // treat the item resting at center as selected once scrolling settles — not just clicks.
@@ -1133,10 +1137,10 @@ function openCalendar(anchor, value, onPick, minuteStep){
   document.addEventListener("mousedown",out,true);
   _calEls={pop,out};
 }
-function bindDateButton(btn, getVal, setVal, minuteStep){
+function bindDateButton(btn, getVal, setVal, minuteStep, dateOnly){
   btn.onclick=()=>openCalendar(btn, getVal(), v=>{ setVal(v);
     btn.innerHTML = `<span style="opacity:.55;margin-right:6px">📅</span>${v? fmtWhenFull(v) : "set date"}`;
-    btn.classList.toggle("datebtn-empty",!v); }, minuteStep);
+    btn.classList.toggle("datebtn-empty",!v); }, minuteStep, dateOnly);
 }
 // time-only drum picker (hour + minute, no date grid) - for a diary entry's
 // end time, which is always the same day as its start time. Shares the same
@@ -1227,7 +1231,7 @@ function toast(m){ const e=document.getElementById("toast"); e.textContent=m; e.
 // injection (not while just building/editing a procedure template — nothing's
 // actually been used yet at that point). Deliberately not a confirm() dialog:
 // it shouldn't block anything, and doing nothing is a completely normal,
-// silent outcome — just an easy one-click nudge that auto-dismisses.
+// silent outcome — just an easy one-click nudge that stays until dismissed.
 function offerTubeDecrement(virusName){
   const shared=!!DB.config.useSharedVirusLib;
   if(shared && !sharedVirusToken())return; // read-only shared view — nothing this device can write
@@ -1242,10 +1246,9 @@ function offerTubeDecrement(virusName){
   root.appendChild(el);
   requestAnimationFrame(()=>el.classList.add("show"));
   const remove=()=>{ el.classList.remove("show"); setTimeout(()=>el.remove(),220); };
-  const autoTimer=setTimeout(remove,9000);
-  el.querySelector(".tn-no").onclick=()=>{ clearTimeout(autoTimer); remove(); };
+  el.querySelector(".tn-no").onclick=()=>{ remove(); };
   el.querySelector(".tn-yes").onclick=async()=>{
-    clearTimeout(autoTimer); remove();
+    remove();
     if(shared){
       try{
         await applySharedVirusChange(data=>{ const rec=data.viruses.find(x=>x.id===v.id); if(rec&&rec.aliquotTubes!=null)rec.aliquotTubes=Math.max(0,rec.aliquotTubes-1); });
@@ -2022,7 +2025,6 @@ function renderMatSubTab(){
   if(matSubTab === "inventory") renderInventory();
   else if(matSubTab === "viruses")  renderVirusLib();
   else if(matSubTab === "sites")    renderSiteLib();
-  else if(matSubTab === "tasks")    renderTaskLib();
   else if(matSubTab === "procedures") renderProcedureLib();
   else if(matSubTab === "diarytypes") renderDiaryTypesLib();
 }
@@ -2432,87 +2434,6 @@ function renderSiteLib(){
   });
 }
 
-/* ── BEHAVIORAL TASK LIBRARY ───────────────────────────────────────────────
-   Unlike viruses/sites (fixed fields), tasks are inherently varied — a 2AFC
-   session and an open-field session log nothing in common. Each task defines
-   its own list of parameters (label + number/text), and the diary's training
-   entry form renders exactly those fields for whichever task is selected.
-   Each parameter gets a stable random key at creation, independent of its
-   label, so renaming a label later doesn't orphan already-logged data. */
-function renderTaskLib(){
-  const host = document.getElementById("ms-tasks"); host.innerHTML = "";
-  const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
-
-  const hdr = document.createElement("div");
-  hdr.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap";
-  hdr.innerHTML = `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
-      Define the parameters each behavioral task logs — the diary's training entry form will show exactly these fields for a matching task name.</span>
-    <button id="tlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New task</button>`;
-  host.appendChild(hdr);
-
-  const wrap = document.createElement("div"); wrap.id = "tlib_rows"; host.appendChild(wrap);
-  function paintTRows(){
-    const tl = DB.config.taskLib||[];
-    wrap.innerHTML = tl.length ? tl.map((t,i) => `
-      <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:9px">
-          <input class="lt_name" data-ti="${i}" value="${escAttr(t.name)}" placeholder="Task / paradigm name (e.g. 2AFC lick)" style="flex:1;min-width:160px;${IST}">
-          <button class="lt_del" data-ti="${i}"
-            style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ task</button>
-        </div>
-        <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:6px">Parameters logged for this task</div>
-        ${(t.params||[]).map((p,pi)=>`
-          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-            <input class="lp_label" data-ti="${i}" data-pi="${pi}" value="${escAttr(p.label)}" placeholder="Parameter name (e.g. Trials)" style="flex:1;${IST}">
-            <select class="lp_type" data-ti="${i}" data-pi="${pi}" style="${IST};flex:0 0 auto">
-              <option value="number" ${p.type==="number"?"selected":""}>number</option>
-              <option value="text"   ${p.type==="text"  ?"selected":""}>text</option>
-            </select>
-            <button class="lp_del" data-ti="${i}" data-pi="${pi}"
-              style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
-          </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">no parameters yet — just Note will show for this task</div>`}
-        <button class="lt_addparam" data-ti="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add parameter</button>
-      </div>`).join("")
-    : `<div class="empty" style="padding:20px 0">No tasks yet — add one above.</div>`;
-  }
-  paintTRows();
-
-  host.querySelector("#tlib_add").onclick = () => {
-    (DB.config.taskLib=DB.config.taskLib||[]).push({name:"",params:[]});
-    persist(); paintTRows();
-    const rows = wrap.querySelectorAll(".lt_name"); if(rows.length) rows[rows.length-1].focus();
-  };
-  wrap.addEventListener("input", e => {
-    const ti = +e.target.dataset.ti; const t = (DB.config.taskLib||[])[ti]; if(!t) return;
-    if(e.target.classList.contains("lt_name")) { t.name = e.target.value; persist(); return; }
-    if(e.target.classList.contains("lp_label")) {
-      const p = (t.params||[])[+e.target.dataset.pi]; if(p){ p.label = e.target.value; persist(); }
-    }
-  });
-  wrap.addEventListener("change", e => {
-    const ti = +e.target.dataset.ti; const t = (DB.config.taskLib||[])[ti]; if(!t) return;
-    if(e.target.classList.contains("lp_type")) {
-      const p = (t.params||[])[+e.target.dataset.pi]; if(p){ p.type = e.target.value; persist(); }
-    }
-  });
-  wrap.addEventListener("click", e => {
-    const delT = e.target.closest(".lt_del"), addP = e.target.closest(".lt_addparam"), delP = e.target.closest(".lp_del");
-    if(delT){
-      if(confirm("Delete this task? Already-logged training entries keep their data, but it'll show unlabeled without this definition.")){
-        (DB.config.taskLib||[]).splice(+delT.dataset.ti,1); persist(); paintTRows();
-      }
-    } else if(addP){
-      const t = (DB.config.taskLib||[])[+addP.dataset.ti]; if(!t) return;
-      (t.params=t.params||[]).push({key:uid("p_"),label:"",type:"number"});
-      persist(); paintTRows();
-      const rows = wrap.querySelectorAll(`.lp_label[data-ti="${addP.dataset.ti}"]`); if(rows.length) rows[rows.length-1].focus();
-    } else if(delP){
-      const t = (DB.config.taskLib||[])[+delP.dataset.ti]; if(!t) return;
-      t.params.splice(+delP.dataset.pi,1); persist(); paintTRows();
-    }
-  });
-}
-
 /* ── PROCEDURES (saved surgery templates — head-post/window + injection list) ──
    Built primarily via "💾 Save as template" in the animal editor's Procedure
    box; this tab is for reviewing/renaming/deleting what's been saved, and for
@@ -2586,12 +2507,12 @@ function procedureModal(id,draft){
     closeModal();
     renderLibraryModal(focus,()=>procedureModal(id,d));
   }
-  const procEditor=mountProcedureEditor("pm", {headpost:view.headpost,window:view.window,injections:view.injections}, goToLibrary);
+  const procEditor=mountProcedureEditor("pm", {headpost:view.headpost,window:view.window,winAp:view.winAp,winMl:view.winMl,winDiam:view.winDiam,injections:view.injections}, goToLibrary);
 
   document.getElementById("pm_save").onclick=()=>{
     const name=document.getElementById("pm_name").value.trim(); if(!name){toast("Name needed");return;}
     const snap=procEditor.getSnapshot();
-    Object.assign(pr,{name,headpost:snap.headpost,window:snap.window,
+    Object.assign(pr,{name,headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,
       injections:snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion)});
     persist(); closeModal(); if(matSubTab==="procedures")renderProcedureLib(); toast("Procedure saved");
   };
@@ -2641,7 +2562,30 @@ function renderDiaryTypesLib(){
             style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ type</button>`}
         </div>
         <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:6px">Custom fields (every entry also always has a free-text Note, in addition to these)</div>
-        ${t.key==="training" ? `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">Training's fields come from Materials → Behavioral Tasks instead (per-task parameters), not a fixed list here.</div>` : `
+        ${t.key==="training" ? `
+        <div style="font-size:11px;color:var(--ink-faint);margin-bottom:8px">Training logs vary by task/paradigm — each behavioral task below defines its own fields, shown on the training entry form once that task is picked.</div>
+        <div class="dtlib-tasks">
+        ${(DB.config.taskLib||[]).map((tk,tki)=>`
+          <div style="background:var(--bg2);border:1px solid var(--line2);border-radius:9px;padding:10px 12px;margin-bottom:8px">
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+              <input class="lt2_name" data-tki="${tki}" value="${escAttr(tk.name)}" placeholder="Task / paradigm name (e.g. 2AFC lick)" style="flex:1;min-width:140px;${IST}">
+              <button class="lt2_del" data-tki="${tki}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ task</button>
+            </div>
+            ${(tk.params||[]).map((p,pi)=>`
+              <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+                <input class="lp2_label" data-tki="${tki}" data-pi="${pi}" value="${escAttr(p.label)}" placeholder="Field name (e.g. Trials)" style="flex:1;min-width:120px;${IST}">
+                <select class="lp2_type" data-tki="${tki}" data-pi="${pi}" style="${IST};flex:0 0 auto">
+                  ${DIARY_FIELD_TYPES.map(ft=>`<option value="${ft}" ${p.type===ft?"selected":""}>${ft}</option>`).join("")}
+                </select>
+                ${p.type==="text"?`<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)"><input type="checkbox" class="lp2_multiline" data-tki="${tki}" data-pi="${pi}" style="width:auto" ${p.multiline?"checked":""}> multi-line</label>`:""}
+                ${p.type==="select"?`<input class="lp2_options" data-tki="${tki}" data-pi="${pi}" value="${escAttr((p.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:160px;${IST}">`:""}
+                <button class="lp2_del" data-tki="${tki}" data-pi="${pi}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
+              </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">no fields yet — just Note will show for this task</div>`}
+            <button class="lt2_addparam" data-tki="${tki}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add field</button>
+          </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">No tasks yet — add one below.</div>`}
+        </div>
+        <button id="dtlib_addtask" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add task</button>
+        ` : `
         ${(t.fields||[]).map((f,fi)=>`
           <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
             <input class="ldf_label" data-ti="${i}" data-fi="${fi}" value="${escAttr(f.label)}" placeholder="Field name (e.g. Severity)" style="flex:1;min-width:120px;${IST}">
@@ -2666,6 +2610,17 @@ function renderDiaryTypesLib(){
     const rows = wrap.querySelectorAll(".ldt_label"); if(rows.length) rows[rows.length-1].focus();
   };
   wrap.addEventListener("input", e => {
+    if(e.target.classList.contains("lt2_name")) {
+      const tk=(DB.config.taskLib||[])[+e.target.dataset.tki]; if(tk){ tk.name=e.target.value; persist(); } return;
+    }
+    if(e.target.classList.contains("lp2_label")) {
+      const tk=(DB.config.taskLib||[])[+e.target.dataset.tki]; const p=tk&&(tk.params||[])[+e.target.dataset.pi];
+      if(p){ p.label=e.target.value; persist(); } return;
+    }
+    if(e.target.classList.contains("lp2_options")) {
+      const tk=(DB.config.taskLib||[])[+e.target.dataset.tki]; const p=tk&&(tk.params||[])[+e.target.dataset.pi];
+      if(p){ p.options=e.target.value.split(",").map(s=>s.trim()).filter(Boolean); persist(); } return;
+    }
     const ti = +e.target.dataset.ti; const t = (DB.config.diaryTypes||[])[ti]; if(!t) return;
     if(e.target.classList.contains("ldt_label")) { t.label = e.target.value; persist(); return; }
     if(e.target.classList.contains("ldf_label")) {
@@ -2677,6 +2632,14 @@ function renderDiaryTypesLib(){
     }
   });
   wrap.addEventListener("change", e => {
+    if(e.target.classList.contains("lp2_type")) {
+      const tk=(DB.config.taskLib||[])[+e.target.dataset.tki]; const p=tk&&(tk.params||[])[+e.target.dataset.pi];
+      if(p){ p.type=e.target.value; persist(); paintDTRows(); } return;
+    }
+    if(e.target.classList.contains("lp2_multiline")) {
+      const tk=(DB.config.taskLib||[])[+e.target.dataset.tki]; const p=tk&&(tk.params||[])[+e.target.dataset.pi];
+      if(p){ p.multiline=e.target.checked; persist(); } return;
+    }
     const ti = +e.target.dataset.ti; const t = (DB.config.diaryTypes||[])[ti]; if(!t) return;
     if(e.target.classList.contains("ldt_color"))    { t.color = e.target.value; persist(); return; }
     if(e.target.classList.contains("ldt_timeline")) { t.timeline = e.target.checked; persist(); return; }
@@ -2688,6 +2651,32 @@ function renderDiaryTypesLib(){
     }
   });
   wrap.addEventListener("click", e => {
+    const addTask = e.target.closest("#dtlib_addtask"), delTask = e.target.closest(".lt2_del"),
+          addTParam = e.target.closest(".lt2_addparam"), delTParam = e.target.closest(".lp2_del");
+    if(addTask){
+      (DB.config.taskLib=DB.config.taskLib||[]).push({name:"",params:[]});
+      persist(); paintDTRows();
+      const rows=wrap.querySelectorAll(".lt2_name"); if(rows.length) rows[rows.length-1].focus();
+      return;
+    }
+    if(delTask){
+      if(confirm("Delete this task? Already-logged training entries keep their data, but it'll show unlabeled without this definition.")){
+        (DB.config.taskLib||[]).splice(+delTask.dataset.tki,1); persist(); paintDTRows();
+      }
+      return;
+    }
+    if(addTParam){
+      const tk=(DB.config.taskLib||[])[+addTParam.dataset.tki]; if(!tk)return;
+      (tk.params=tk.params||[]).push({key:uid("p_"),label:"",type:"number"});
+      persist(); paintDTRows();
+      const rows=wrap.querySelectorAll(`.lp2_label[data-tki="${addTParam.dataset.tki}"]`); if(rows.length) rows[rows.length-1].focus();
+      return;
+    }
+    if(delTParam){
+      const tk=(DB.config.taskLib||[])[+delTParam.dataset.tki]; if(!tk)return;
+      tk.params.splice(+delTParam.dataset.pi,1); persist(); paintDTRows();
+      return;
+    }
     const delT = e.target.closest(".ldt_del"), addF = e.target.closest(".ldt_addfield"), delF = e.target.closest(".ldf_del"),
           iconBtn = e.target.closest(".ldt_iconbtn");
     if(iconBtn){
@@ -2874,11 +2863,11 @@ function renderMetricsFields(taskName,metrics){
   const defs=trainingParamDefs(taskName);
   if(!defs.length){
     return taskName
-      ? `<div style="font-size:11px;color:var(--ink-faint)">no parameters defined for "${esc(taskName)}" yet — add some in Materials → Behavioral Tasks, or just use Note below</div>`
+      ? `<div style="font-size:11px;color:var(--ink-faint)">no fields defined for "${esc(taskName)}" yet — add some in Entry Types → training, or just use Note below</div>`
       : "";
   }
   return `<div class="dg-metrics-grid">${defs.map(p=>`
-    <div><label>${esc(p.label||"(unnamed)")}</label><input class="dg-metric-field" data-key="${escAttr(p.key)}" data-type="${p.type}" type="text" inputmode="${p.type==="number"?"decimal":"text"}" value="${escAttr(metrics[p.key]!=null?metrics[p.key]:"")}"></div>`).join("")}</div>`;
+    <div><label>${esc(p.label||"(unnamed)")}</label>${renderTypeField(p,metrics[p.key],"dg-metric-field")}</div>`).join("")}</div>`;
 }
 // returns ["Label: value", ...] for display (summary/detail views), handling
 // both the current shape (metrics keyed by param.key, looked up via the task's
@@ -2888,7 +2877,7 @@ function renderMetricsFields(taskName,metrics){
 function trainingMetricsDisplay(e){
   const d=e.data||{}, m=d.metrics||{};
   const defs=trainingParamDefs(d.task);
-  const out=defs.filter(p=>m[p.key]!=null&&m[p.key]!=="").map(p=>({label:p.label,val:m[p.key]}));
+  const out=defs.filter(p=>m[p.key]!=null&&m[p.key]!=="").map(p=>({label:p.label,val:p.type==="yesno"?(m[p.key]?"Yes":"No"):m[p.key]}));
   const usedKeys=new Set(out.map(x=>x.label.trim().toLowerCase()));
   const trials=defs.find(p=>p.label.trim().toLowerCase()==="trials"), correct=defs.find(p=>p.label.trim().toLowerCase()==="correct");
   if(trials&&correct&&m[trials.key]&&m[correct.key]!=null){
@@ -2919,11 +2908,12 @@ function diaryNoteOf(d){
   if(d.label!=null) return [d.label,d.text].filter(Boolean).join(": ");
   return d.text||"";
 }
-function renderTypeField(f,val){
-  if(f.type==="yesno") return `<select class="dg-field" data-key="${escAttr(f.key)}" data-type="yesno"><option value="">—</option><option value="1" ${val===true?"selected":""}>Yes</option><option value="0" ${val===false?"selected":""}>No</option></select>`;
-  if(f.type==="select") return `<select class="dg-field" data-key="${escAttr(f.key)}" data-type="select"><option value="">—</option>${(f.options||[]).map(o=>`<option value="${escAttr(o)}" ${val===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
-  if(f.type==="text"&&f.multiline) return `<textarea class="dg-field" data-key="${escAttr(f.key)}" data-type="text">${esc(val!=null?val:"")}</textarea>`;
-  return `<input class="dg-field" data-key="${escAttr(f.key)}" data-type="${f.type==="number"?"number":"text"}" type="text" inputmode="${f.type==="number"?"decimal":"text"}" value="${escAttr(val!=null?val:"")}">`;
+function renderTypeField(f,val,cls){
+  cls=cls||"dg-field";
+  if(f.type==="yesno") return `<select class="${cls}" data-key="${escAttr(f.key)}" data-type="yesno"><option value="">—</option><option value="1" ${val===true?"selected":""}>Yes</option><option value="0" ${val===false?"selected":""}>No</option></select>`;
+  if(f.type==="select") return `<select class="${cls}" data-key="${escAttr(f.key)}" data-type="select"><option value="">—</option>${(f.options||[]).map(o=>`<option value="${escAttr(o)}" ${val===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+  if(f.type==="text"&&f.multiline) return `<textarea class="${cls}" data-key="${escAttr(f.key)}" data-type="text">${esc(val!=null?val:"")}</textarea>`;
+  return `<input class="${cls}" data-key="${escAttr(f.key)}" data-type="${f.type==="number"?"number":"text"}" type="text" inputmode="${f.type==="number"?"decimal":"text"}" value="${escAttr(val!=null?val:"")}">`;
 }
 function renderTypeFields(type,d){
   const def=diaryTypeDef(type);
@@ -3124,7 +3114,7 @@ function animalCard(a){
       btn.style.color = v ? "" : "var(--ink-faint)";
       if(currentView==="timeline") renderTimeline();
       if(currentView==="outline")  renderOutline();
-    });
+    }, undefined, field==="dob");
   });
   const bvc=card.querySelector(".am-bv-card");
   const bvInstance=bvc?mountBrainViewer(bvc, ()=>a.surgeryDetail||{}):null;
@@ -3357,14 +3347,10 @@ function paintDiary(container,a){
         // specifies (flexible per task) - read each by its stable param key
         const metrics={};
         host.querySelectorAll(".dg-metric-field").forEach(el=>{
-          const raw=el.value.trim();
-          if(raw==="")return;
-          if(el.dataset.type==="number"){
-            const n=parseFloat(raw.replace(",","."));
-            if(!isNaN(n)) metrics[el.dataset.key]=n;
-          } else {
-            metrics[el.dataset.key]=raw;
-          }
+          const raw=el.value;
+          if(el.dataset.type==="yesno"){ if(raw!=="")metrics[el.dataset.key]=raw==="1"; return; }
+          if(el.dataset.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))metrics[el.dataset.key]=n; return; }
+          if(raw.trim()!=="")metrics[el.dataset.key]=raw.trim();
         });
         data={task:taskName, stage:host.querySelector(".dg-f-stage").value.trim(), metrics};
       } else {
@@ -3645,6 +3631,13 @@ const SUBSTRUCTURES = {
   val:  { label:"VAL", fullName:"Ventral anterior-lateral complex of the thalamus (substructure of the thalamus)", structureId:629, elementId:"mesh_val",  color:0x3fd0d6 }
 };
 let activeSubstructures = new Set();
+// Head-post / cranial window 3D representations — a global toggle (applies to
+// every mouse's viewer, same as dvRefMode/activeSubstructures above), but
+// defaulting per-render to whether the animal currently shown actually has
+// that property in its surgery: null = auto (follow the surgery), true/false
+// = explicit override once a toggle button's been clicked.
+let fixtureOverride={headpost:null,window:null};
+function showFixture(kind,surgery){ const o=fixtureOverride[kind]; return o==null ? !!(surgery&&surgery[kind]) : o; }
 const SUB_CACHE = {};
 function loadSubstructureMesh(key){
   if(SUB_CACHE[key]!==undefined) return SUB_CACHE[key];
@@ -3759,6 +3752,28 @@ function render3DBrain(container,surgery,height){
       group.add(new THREE.Mesh(subGeo,new THREE.MeshPhongMaterial({color:sub.color,transparent:true,opacity:0.55,side:THREE.DoubleSide})));
       group.add(new THREE.Mesh(subGeo,new THREE.MeshBasicMaterial({color:sub.color,wireframe:true,transparent:true,opacity:0.25})));
     });
+    // head-post / cranial window representations, sitting on the actual local
+    // dorsal surface (bregma2ccfSurface) rather than a fixed height, same as
+    // the DV:Surface injection mode above. The window uses its own AP/ML/⌀;
+    // the head-post has no coordinate of its own, so it's shown centered on
+    // bregma, which is standard placement.
+    const mm3=mm=>mm*1000*_cS;
+    if(surgery && showFixture("window",surgery)){
+      const wAp=+surgery.winAp||0, wMl=+surgery.winMl||0, wDiam=Math.max(0.5,+surgery.winDiam||3);
+      const center=ccf2three(...bregma2ccfSurface(mesh,wAp,wMl,0));
+      const rad=mm3(wDiam/2);
+      const disc=new THREE.Mesh(new THREE.CircleGeometry(rad,40),new THREE.MeshBasicMaterial({color:0x7db4ff,transparent:true,opacity:0.28,side:THREE.DoubleSide,depthWrite:false}));
+      disc.position.copy(center).add(new THREE.Vector3(0,mm3(0.05),0)); disc.rotation.x=-Math.PI/2; group.add(disc);
+      const rim=new THREE.Mesh(new THREE.RingGeometry(rad*0.93,rad,40),new THREE.MeshBasicMaterial({color:0x7db4ff,side:THREE.DoubleSide}));
+      rim.position.copy(center).add(new THREE.Vector3(0,mm3(0.06),0)); rim.rotation.x=-Math.PI/2; group.add(rim);
+    }
+    if(surgery && showFixture("headpost",surgery)){
+      const center=ccf2three(...bregma2ccfSurface(mesh,0,0,0));
+      const plate=new THREE.Mesh(new THREE.BoxGeometry(mm3(8),mm3(0.6),mm3(3)),new THREE.MeshPhongMaterial({color:0xe0d454,transparent:true,opacity:0.65}));
+      plate.position.copy(center).add(new THREE.Vector3(0,mm3(0.4),0)); group.add(plate);
+      const plateWire=new THREE.Mesh(plate.geometry,new THREE.MeshBasicMaterial({color:0xe0d454,wireframe:true,transparent:true,opacity:0.35}));
+      plateWire.position.copy(plate.position); group.add(plateWire);
+    }
     // resolve each injection's marker positions/colors once, then group markers that land on the
     // same spot (co-injected viruses at one site, or two tracers sharing a path) and blend their
     // colors into a single marker — colabeling is a deliberate, common part of these experiments,
@@ -3853,14 +3868,17 @@ function mountBrainViewer(host,getSurgery,opts){
   }).join("");
   host.innerHTML='<div class="bv-top">'
     +'<div class="seg bv-dvmode" title="What DV=0 means: bregma\'s own skull height everywhere, or the real brain surface at each AP/ML"><button data-v="bregma">DV: Bregma</button><button data-v="surface">DV: Surface</button></div>'
+    +'<div class="seg bv-fixtures" title="Show head-post / cranial window on mice that have them in their surgery — click to override for every mouse\'s view"><button data-fx="headpost">🔧 Head-post</button><button data-fx="window">◯ Window</button></div>'
     +subButtons
     +'<button class="bv-expand" title="Enlarge">⛶ Enlarge</button></div>'
     +'<div class="bv-body"></div><div class="bv-flag"></div>';
   const body=host.querySelector(".bv-body"),flag=host.querySelector(".bv-flag"),expand=host.querySelector(".bv-expand");
   function render(){
-    render3DBrain(body,getSurgery(), opts.big?Math.round(window.innerHeight*0.66):300);
+    const surgery=getSurgery();
+    render3DBrain(body,surgery, opts.big?Math.round(window.innerHeight*0.66):300);
     host.querySelectorAll(".bv-sub-toggle").forEach(b=>b.classList.toggle("on",activeSubstructures.has(b.dataset.sub)));
     host.querySelectorAll(".bv-dvmode button").forEach(b=>b.classList.toggle("on",b.dataset.v===dvRefMode));
+    host.querySelectorAll(".bv-fixtures button").forEach(b=>b.classList.toggle("on",showFixture(b.dataset.fx,surgery)));
     flag.innerHTML="Allen CCF root mesh — CCFv3 (Wang et al. 2020). Bregma→CCF: 5400/5700/332 µm + 5° pitch (Chon et al. 2019).";
   }
   host.querySelectorAll(".bv-sub-toggle").forEach(b=>{
@@ -3868,6 +3886,10 @@ function mountBrainViewer(host,getSurgery,opts){
   });
   host.querySelector(".bv-dvmode").addEventListener("click",e=>{
     const b=e.target.closest("button"); if(!b)return; dvRefMode=b.dataset.v; render();
+  });
+  host.querySelector(".bv-fixtures").addEventListener("click",e=>{
+    const b=e.target.closest("button"); if(!b)return;
+    fixtureOverride[b.dataset.fx]=!showFixture(b.dataset.fx,getSurgery()); render();
   });
   expand.onclick=()=>openBrainPopup(getSurgery, render);
   render();
@@ -3885,19 +3907,26 @@ function procedureSectionHTML(p){
   return `<div class="drow">
       <div class="fld" style="flex:1"><label>Head-post</label><div class="seg" id="${p}_hp"><button data-v="1">Yes</button><button data-v="0">No</button></div></div>
       <div class="fld" style="flex:1"><label>Cranial window</label><div class="seg" id="${p}_win"><button data-v="1">Yes</button><button data-v="0">No</button></div></div></div>
+    <div id="${p}_wincoord" style="display:flex;gap:6px;align-items:center;margin:-2px 0 10px">
+      <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 auto">window center</span>
+      <input id="${p}_winap" placeholder="AP" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
+      <input id="${p}_winml" placeholder="ML" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
+      <input id="${p}_windiam" placeholder="⌀ mm" style="flex:0 0 auto;width:64px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
+    </div>
     <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:6px 0 6px">Injections (0+, any combination)</div>
     <div id="${p}_injs"></div>
     <button class="btn ghost" id="${p}_addinj" style="margin-top:6px;font-size:12px">＋ Add injection</button>
     <div style="margin-top:12px"><div id="${p}_brainview"></div></div>`;
 }
-// initial: {headpost, window, injections}. goToLibraryFn(focus): called instead
-// of handling library navigation internally, so the caller can snapshot its
+// initial: {headpost, window, winAp, winMl, winDiam, injections}. goToLibraryFn(focus):
+// called instead of handling library navigation internally, so the caller can snapshot its
 // OWN full draft (which may include fields beyond just the procedure, like an
 // animal's name/cage) before tearing down and rebuilding around the library.
 // Returns {getSnapshot(), refresh()}.
 function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   opts=opts||{};
   let hp=!!initial.headpost, win=!!initial.window;
+  let winAp=initial.winAp!=null?initial.winAp:"", winMl=initial.winMl!=null?initial.winMl:"", winDiam=initial.winDiam!=null?initial.winDiam:"3";
   const injs=(initial.injections||[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],...x}));
   const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px";
   function siteLibOpts(){ return (DB.config.siteLib||[]).map(s=>`<option value="__s:${escAttr(s.name)}">${esc(s.name)} (${s.ap>=0?"+":""}${s.ap}, ${s.ml>=0?"+":""}${s.ml}, ${s.dv})</option>`).join(""); }
@@ -3977,7 +4006,7 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
     </div>`;
   }
   function paintInjs(){ document.getElementById(`${p}_injs`).innerHTML=injs.map((inj,i)=>injRow(inj,i)).join("")||`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">no injections — add one below</div>`; }
-  function curSurgery(){ return {headpost:hp,window:win,injections:injs}; }
+  function curSurgery(){ return {headpost:hp,window:win,winAp,winMl,winDiam,injections:injs}; }
   const _bv=mountBrainViewer(document.getElementById(`${p}_brainview`), curSurgery);
   function updatePreview(){ _bv.refresh(); }
   function readInjFields(){
@@ -4040,14 +4069,22 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
 
   function bindSeg(fid,setter){ document.getElementById(fid).onclick=e=>{const b=e.target.closest("button");if(!b)return;
     setter(b.dataset.v==="1"); document.querySelectorAll(`#${fid} button`).forEach(x=>x.classList.toggle("on",x===b)); updatePreview();}; }
-  bindSeg(`${p}_hp`,v=>hp=v); bindSeg(`${p}_win`,v=>win=v);
+  function updateWinCoordVisibility(){ document.getElementById(`${p}_wincoord`).style.display = win?"flex":"none"; }
+  bindSeg(`${p}_hp`,v=>hp=v); bindSeg(`${p}_win`,v=>{win=v; updateWinCoordVisibility();});
   document.querySelectorAll(`#${p}_hp button`).forEach(b=>b.classList.toggle("on",(b.dataset.v==="1")===hp));
   document.querySelectorAll(`#${p}_win button`).forEach(b=>b.classList.toggle("on",(b.dataset.v==="1")===win));
+  updateWinCoordVisibility();
+
+  const winApEl=document.getElementById(`${p}_winap`), winMlEl=document.getElementById(`${p}_winml`), winDiamEl=document.getElementById(`${p}_windiam`);
+  winApEl.value=winAp; winMlEl.value=winMl; winDiamEl.value=winDiam;
+  winApEl.addEventListener("input",()=>{winAp=winApEl.value; updatePreview();});
+  winMlEl.addEventListener("input",()=>{winMl=winMlEl.value; updatePreview();});
+  winDiamEl.addEventListener("input",()=>{winDiam=winDiamEl.value; updatePreview();});
 
   paintInjs(); updatePreview();
 
   return {
-    getSnapshot(){ readInjFields(); return {headpost:hp, window:win, injections:injs.map(x=>({...x}))}; },
+    getSnapshot(){ readInjFields(); return {headpost:hp, window:win, winAp, winMl, winDiam, injections:injs.map(x=>({...x}))}; },
     refresh: updatePreview
   };
 }
@@ -4096,7 +4133,7 @@ function animalModal(id,draft){
 
   // dates
   let vDob=view.dob||"", vSac=view.sacrificed||"";
-  bindDateButton(document.getElementById("am_dob"), ()=>vDob, v=>{vDob=v||"";});
+  bindDateButton(document.getElementById("am_dob"), ()=>vDob, v=>{vDob=v||"";}, undefined, true);
   bindDateButton(document.getElementById("am_sac"), ()=>vSac, v=>{vSac=v||"";});
 
   let termination=view.termination||(view.alive===false?"sacrificed":"alive");
@@ -4134,7 +4171,7 @@ function animalModal(id,draft){
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
       dob:vDob, sacrificed:vSac, termination,
-      surgeryDetail:{headpost:tpl.headpost,window:tpl.window,injections:tpl.injections.map(x=>({...x}))},
+      surgeryDetail:{headpost:tpl.headpost,window:tpl.window,winAp:tpl.winAp,winMl:tpl.winMl,winDiam:tpl.winDiam,injections:tpl.injections.map(x=>({...x}))},
       comments:document.getElementById("am_com").value
     };
     closeModal();
@@ -4146,7 +4183,7 @@ function animalModal(id,draft){
     if(!snap.headpost && !snap.window && !snap.injections.length){ toast("Nothing to save yet"); return; }
     const name=(prompt("Save this procedure as:")||"").trim();
     if(!name)return;
-    (DB.config.procedureLib=DB.config.procedureLib||[]).push({id:uid("proc_"),name,headpost:snap.headpost,window:snap.window,injections:snap.injections});
+    (DB.config.procedureLib=DB.config.procedureLib||[]).push({id:uid("proc_"),name,headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:snap.injections});
     persist();
     toast(`Saved "${name}" to Procedures library`);
   };
@@ -4155,7 +4192,7 @@ function animalModal(id,draft){
     const name=document.getElementById("am_name").value.trim(); if(!name){toast("Name needed");return;}
     const snap=procEditor.getSnapshot();
     const cleanInjs=snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
-    const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,injections:cleanInjs}:null;
+    const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
     const rec={name,cohort:document.getElementById("am_cohort").value,cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
       dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
@@ -4423,9 +4460,10 @@ function openTimelineCreateModal(prefillDeadline){
         const taskName=document.getElementById("tc_task").value.trim();
         const metrics={};
         fieldsHost.querySelectorAll(".dg-metric-field").forEach(el=>{
-          const raw=el.value.trim(); if(raw==="")return;
-          if(el.dataset.type==="number"){ const n=parseFloat(raw.replace(",",".")); if(!isNaN(n))metrics[el.dataset.key]=n; }
-          else metrics[el.dataset.key]=raw;
+          const raw=el.value;
+          if(el.dataset.type==="yesno"){ if(raw!=="")metrics[el.dataset.key]=raw==="1"; return; }
+          if(el.dataset.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))metrics[el.dataset.key]=n; return; }
+          if(raw.trim()!=="")metrics[el.dataset.key]=raw.trim();
         });
         data={task:taskName, stage:document.getElementById("tc_stage").value.trim(), metrics};
       } else {
