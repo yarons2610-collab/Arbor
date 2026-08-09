@@ -3789,6 +3789,14 @@ function teardown3D(scopeEl){
 function ccfGeometry(mesh){ const g=new THREE.BufferGeometry(); const pos=new Float32Array(mesh.v.length);
   for(let i=0;i<mesh.v.length;i+=3){ const p=ccf2three(mesh.v[i],mesh.v[i+1],mesh.v[i+2]); pos[i]=p.x;pos[i+1]=p.y;pos[i+2]=p.z; }
   g.setAttribute("position",new THREE.BufferAttribute(pos,3)); g.setIndex(mesh.f); g.computeVertexNormals(); return g; }
+// a rectangle with its corners cut off (octagon) — the head-post cap's
+// footprint, matching a real dental-cement headcap's shape.
+function chamferedRectShape(w,h,chamfer){
+  const s=new THREE.Shape(); const hw=w/2, hh=h/2, c=Math.min(chamfer,hw*0.9,hh*0.9);
+  s.moveTo(-hw+c,-hh); s.lineTo(hw-c,-hh); s.lineTo(hw,-hh+c); s.lineTo(hw,hh-c);
+  s.lineTo(hw-c,hh); s.lineTo(-hw+c,hh); s.lineTo(-hw,hh-c); s.lineTo(-hw,-hh+c); s.closePath();
+  return s;
+}
 function render3DBrain(container,surgery,height){
   teardownContainer(container); teardown3D(); container.innerHTML="";
   if(typeof THREE==="undefined"){ container.innerHTML='<div class="bv-flag">3D library did not load (needs internet). The 2D view still works.</div>'; return; }
@@ -3836,18 +3844,24 @@ function render3DBrain(container,surgery,height){
     }
     if(surgery && showFixture("headpost",surgery)){
       const center=ccf2three(...bregma2ccfSurface(mesh,winAp,0,0));
-      const hpCol=0x9aa4b2; // muted steel gray, not a bright fill color — less visually imposing
-      // a slim cross-bar spanning ML (like a real head-fixation plate between
-      // the ears) with two small raised mounting tabs near the ends, standing
-      // in for the screw posts, instead of one flat imposing slab.
-      const bar=new THREE.Mesh(new THREE.BoxGeometry(mm3(7),mm3(0.35),mm3(1.6)),new THREE.MeshPhongMaterial({color:hpCol,transparent:true,opacity:0.4}));
-      bar.position.copy(center).add(new THREE.Vector3(0,mm3(0.25),0)); group.add(bar);
-      const barWire=new THREE.Mesh(bar.geometry,new THREE.MeshBasicMaterial({color:hpCol,wireframe:true,transparent:true,opacity:0.2}));
-      barWire.position.copy(bar.position); group.add(barWire);
-      [-1,1].forEach(side=>{
-        const tab=new THREE.Mesh(new THREE.CylinderGeometry(mm3(0.45),mm3(0.45),mm3(0.5),16),new THREE.MeshPhongMaterial({color:hpCol,transparent:true,opacity:0.55}));
-        tab.position.copy(center).add(new THREE.Vector3(side*mm3(2.8),mm3(0.5),0));
-        group.add(tab);
+      const hpCol=0xe6d9b8; // pale cream dental-acrylic color, not a bright fill — a real headcap, not a highlighter
+      const wDiamForHead=surgery.window?Math.max(0.5,+surgery.winDiam||3):3;
+      // a chamfered-rectangle well built around the access opening (like a real
+      // dental-cement headcap), not a plain bar — outer footprint scales with
+      // the window it surrounds, with a hole roughly matching the window's own
+      // size in the middle.
+      const outerW=mm3(Math.max(wDiamForHead+6,9)), outerD=mm3(Math.max(wDiamForHead+5,8)), thick=mm3(1.1), holeR=mm3(wDiamForHead/2+0.3);
+      const capShape=chamferedRectShape(outerW,outerD,mm3(2));
+      const hole=new THREE.Path(); hole.absarc(0,0,holeR,0,Math.PI*2,false); capShape.holes.push(hole);
+      const cap=new THREE.Mesh(new THREE.ExtrudeGeometry(capShape,{depth:thick,bevelEnabled:false}),
+        new THREE.MeshPhongMaterial({color:hpCol,transparent:true,opacity:0.55,side:THREE.DoubleSide}));
+      cap.rotation.x=-Math.PI/2; cap.position.copy(center).add(new THREE.Vector3(0,mm3(0.03),0)); group.add(cap);
+      // four small dark notches at the chamfered corners — where a real
+      // head-fixation clamp would reach in and grip the cap from outside.
+      const nx=outerW/2-mm3(1.1), nz=outerD/2-mm3(1.1);
+      [[-1,-1],[1,-1],[1,1],[-1,1]].forEach(([sx,sz])=>{
+        const notch=new THREE.Mesh(new THREE.BoxGeometry(mm3(1.1),mm3(0.5),mm3(1.1)),new THREE.MeshBasicMaterial({color:0x2a2620,transparent:true,opacity:0.5}));
+        notch.position.copy(center).add(new THREE.Vector3(sx*nx,mm3(0.55),sz*nz)); group.add(notch);
       });
     }
     // resolve each injection's marker positions/colors once, then group markers that land on the
