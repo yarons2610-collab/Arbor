@@ -104,6 +104,7 @@
   /* custom date+time picker */
   .datebtn{width:100%;text-align:left;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:13px;cursor:pointer}
   .datebtn:hover{border-color:var(--gcamp)}
+  .datebtn-sm{padding:5px 8px;font-size:11.5px}
   .datebtn.datebtn-empty{color:var(--ink-faint)}
   .cal-pop{position:fixed;z-index:90;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:12px;box-shadow:0 24px 60px -22px #000;width:256px}
   .emoji-btn{width:36px;height:32px;font-size:16px;text-align:center;background:var(--bg2);border:1px solid var(--line2);border-radius:6px;cursor:pointer}
@@ -112,7 +113,7 @@
   .emoji-cell{width:100%;aspect-ratio:1;font-size:17px;background:var(--bg2);border:1px solid var(--line2);border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center}
   .emoji-cell:hover{border-color:var(--gold)}
   .emoji-cell.on{border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
-  .dd-pop{position:fixed;z-index:90;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:6px;box-shadow:0 24px 60px -22px #000;width:240px;max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+  .dd-pop{position:fixed;z-index:110;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:6px;box-shadow:0 24px 60px -22px #000;width:240px;max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
   .dd-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--ink-dim);border-radius:8px;padding:7px 9px;font-size:12.5px;cursor:pointer}
   .dd-row:hover{background:var(--panel)}
   .dd-row.on{color:var(--ink);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
@@ -2884,6 +2885,21 @@ function diaryTypeDefs(){ return [...(DB.config.diaryTypes||[])].sort((a,b)=>(a.
 function diaryTypeDef(key){ return diaryTypeDefs().find(t=>t.key===key) || {key,label:key||"—",icon:"❔",color:"var(--ink-faint)",timeline:false,fields:[]}; }
 function diaryWeightEntries(a){ return (a.diary||[]).filter(e=>e.type==="weight").sort((x,y)=>x.date.localeCompare(y.date)||x.created-y.created); }
 function latestWeight(a){ const w=diaryWeightEntries(a); return w.length?w[w.length-1].data.grams:null; }
+// %/absolute change for one weight entry vs. the recording right before it
+// and vs. this animal's very first recording — null fields when there's
+// nothing to compare against (first-ever entry, or a previous weight of 0).
+function weightChangeInfo(a,e){
+  const w=diaryWeightEntries(a);
+  const idx=w.findIndex(x=>x.id===e.id); if(idx<0)return null;
+  const cur=w[idx].data.grams; if(cur==null)return null;
+  const mk=ref=>(!ref||ref.data.grams==null)?null:{date:ref.date,delta:cur-ref.data.grams,pct:ref.data.grams?(cur-ref.data.grams)/ref.data.grams*100:null};
+  return {prev: idx>0?mk(w[idx-1]):null, first: idx>0?mk(w[0]):null};
+}
+function fmtWeightChange(c){
+  if(!c)return null;
+  const sign=c.delta>=0?"+":""; const pct=c.pct!=null?` (${c.pct>=0?"+":""}${c.pct.toFixed(1)}%)`:"";
+  return `${sign}${c.delta.toFixed(1)}g${pct}`;
+}
 // pipeline status (surgery/perfusion/histology/microscopy done-vs-pending) is
 // now derived from diary entries instead of dedicated animal fields - "done"
 // means an entry of that type exists dated today or earlier (a future-dated
@@ -2965,7 +2981,7 @@ function renderTypeFields(type,d){
   if(!def.fields.length) return "";
   return `<div class="dg-metrics-grid">${def.fields.map(f=>`<div><label>${esc(f.label||"(unnamed)")}</label>${renderTypeField(f,d[f.key])}</div>`).join("")}</div>`;
 }
-function diaryEntrySummary(e){
+function diaryEntrySummary(e,a){
   const d=e.data||{};
   const timePrefix=e.time?`${e.time}${e.endTime?"–"+e.endTime:""} · `:"";
   if(e.type==="training") return timePrefix+([d.task, d.stage, ...trainingMetricsDisplay(e).map(x=>`${x.label} ${x.val}`), d.note].filter(Boolean).join(" · ")||"—");
@@ -2974,23 +2990,33 @@ function diaryEntrySummary(e){
     const v=d[f.key]; if(v==null||v==="")return null;
     return `${f.label} ${f.type==="yesno"?(v?"Yes":"No"):v}`;
   }).filter(Boolean);
+  if(e.type==="weight"&&a){
+    const wc=weightChangeInfo(a,e);
+    if(wc&&wc.prev) parts.push(`${fmtWeightChange(wc.prev)} vs prev`);
+    if(wc&&wc.first) parts.push(`${fmtWeightChange(wc.first)} vs first`);
+  }
   const note=diaryNoteOf(d); if(note)parts.push(note);
   return timePrefix+(parts.join(" · ")||"—");
 }
 // full read-only breakdown of an entry (view mode, as opposed to the edit
 // form) — reuses the same labeled-row look as the surgery detail rows (arow).
-function diaryEntryDetailHTML(e){
+function diaryEntryDetailHTML(e,a){
   const d=e.data||{};
   const rows=[arow("Time", e.time?e.time+(e.endTime?" – "+e.endTime:""):null)];
   if(e.type==="training"){
     rows.push(arow("Task", d.task));
-    rows.push(arow("Stage", d.stage));
+    if(d.stage)rows.push(arow("Stage", d.stage));
     trainingMetricsDisplay(e).forEach(x=>rows.push(arow(x.label, x.val)));
   } else {
     diaryTypeDef(e.type).fields.forEach(f=>{
       const v=d[f.key];
       rows.push(arow(f.label, v==null||v===""?null:(f.type==="yesno"?(v?"Yes":"No"):v)));
     });
+    if(e.type==="weight"&&a){
+      const wc=weightChangeInfo(a,e);
+      if(wc&&wc.prev) rows.push(arow("Change since previous", fmtWeightChange(wc.prev)));
+      if(wc&&wc.first) rows.push(arow("Change since first", fmtWeightChange(wc.first)));
+    }
   }
   rows.push(arow("Note", diaryNoteOf(d)));
   rows.push(arow("Logged", new Date(e.created).toLocaleString()+(e.edited?" · edited "+new Date(e.edited).toLocaleString():"")));
@@ -3184,15 +3210,15 @@ function openEventLogModal(presetIds){
   // diaryEntrySummary already prefixes "HH:MM–HH:MM · " when a time is set —
   // reused here rather than re-derived, minus that prefix since time gets its
   // own column/label wherever this is shown.
-  function summaryNoTime(e){
-    const s=diaryEntrySummary(e); if(!e.time) return s;
+  function summaryNoTime(e,a){
+    const s=diaryEntrySummary(e,a); if(!e.time) return s;
     const prefix=`${e.time}${e.endTime?"–"+e.endTime:""} · `;
     return s.startsWith(prefix)?s.slice(prefix.length):s;
   }
   function lineFor(a,e){
     const def=diaryTypeDef(e.type);
     const time=e.time?`${e.time}${e.endTime?"–"+e.endTime:""} · `:"";
-    return `${def.icon} ${time}${a.name} — ${def.label}: ${summaryNoTime(e)}`;
+    return `${def.icon} ${time}${a.name} — ${def.label}: ${summaryNoTime(e,a)}`;
   }
 
   modal(`<h3>Event log</h3>
@@ -3256,7 +3282,7 @@ function openEventLogModal(presetIds){
     const rows=[["Date","Time","Animal","Cohort","Type","Summary"]];
     evs.forEach(({a,e})=>{
       const def=diaryTypeDef(e.type);
-      rows.push([e.date, e.time?`${e.time}${e.endTime?"–"+e.endTime:""}`:"", a.name, a.cohort||"", def.label, summaryNoTime(e)]);
+      rows.push([e.date, e.time?`${e.time}${e.endTime?"–"+e.endTime:""}`:"", a.name, a.cohort||"", def.label, summaryNoTime(e,a)]);
     });
     downloadExcel("arbor_event_log.xls",[{name:"Events",rows}]);
     toast(`Exported ${evs.length} events`);
@@ -3296,7 +3322,6 @@ function paintDiary(container,a){
         <input class="dg-f-task" type="text" autocomplete="off" value="${escAttr(d.task||"")}" placeholder="e.g. 2AFC lick">
         <div class="dg-tasksuggest"></div>
       </div>
-      <label style="margin-top:6px">Stage</label><input class="dg-f-stage" type="text" value="${escAttr(d.stage||"")}">
       <div class="dg-metrics-host" style="margin-top:6px">${renderMetricsFields(d.task,d.metrics)}</div>
       <label style="margin-top:4px;display:flex;align-items:center;gap:5px"><input type="checkbox" class="dg-f-savelib" style="width:auto"> save task name to library</label>`
       : renderTypeFields(type,d);
@@ -3310,7 +3335,6 @@ function paintDiary(container,a){
           <button type="button" class="datebtn dg-f-endtime ${entryEndTime?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">🕐</span>${entryEndTime||"set end time"}</button>
         </div>
       </div>
-      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin:4px 0 6px">no start time = shows as an all-day item on the Timeline; set one to place it in the hourly view, like a task (end time is optional - defaults to 1 hour)</div>
       ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
       ${formActions()}</div>`;
@@ -3397,7 +3421,7 @@ function paintDiary(container,a){
           if(el.dataset.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))metrics[el.dataset.key]=n; return; }
           if(raw.trim()!=="")metrics[el.dataset.key]=raw.trim();
         });
-        data={task:taskName, stage:host.querySelector(".dg-f-stage").value.trim(), metrics};
+        data={task:taskName, metrics};
       } else {
         // generic field-driven types: read each of this type's defined
         // fields by its stable key, typed per the field's declared type
@@ -3442,10 +3466,11 @@ function paintDiary(container,a){
       if(wEntry&&visibleTypes.has("weight")){
         const idx=wSorted.findIndex(e=>e.id===wEntry.id);
         const prev=idx>0?wSorted[idx-1]:null;
-        if(prev){
-          const dv=wEntry.data.grams-prev.data.grams;
-          if(dv>0) trend=`<span class="wt-up" title="+${dv.toFixed(1)}g since ${prev.date}">▲</span>`;
-          else if(dv<0) trend=`<span class="wt-down" title="${dv.toFixed(1)}g since ${prev.date}">▼</span>`;
+        if(prev&&prev.data.grams){
+          const dv=wEntry.data.grams-prev.data.grams, pct=dv/prev.data.grams*100;
+          const pctStr=` (${pct>=0?"+":""}${pct.toFixed(1)}%)`;
+          if(dv>0) trend=`<span class="wt-up" title="+${dv.toFixed(1)}g${pctStr} since ${prev.date}">▲</span>`;
+          else if(dv<0) trend=`<span class="wt-down" title="${dv.toFixed(1)}g${pctStr} since ${prev.date}">▼</span>`;
         }
       }
       const otherTypes=[...new Set(dayEntries.filter(e=>e.type!=="weight"&&visibleTypes.has(e.type)).map(e=>e.type))];
@@ -3455,7 +3480,7 @@ function paintDiary(container,a){
         <span class="dn">${d}</span>${wv}${dots?`<span class="dg-dots">${dots}</span>`:""}</div>`;
     }
 
-    const typebar=diaryTypeDefs().map(t=>
+    const typebar=`<button type="button" class="dg-typebtn" data-all="1">✓ All</button>`+diaryTypeDefs().map(t=>
       `<button type="button" class="dg-typebtn ${visibleTypes.has(t.key)?"on":""}" data-t="${t.key}"><span style="width:6px;height:6px;border-radius:50%;background:${t.color};display:inline-block"></span>${t.icon} ${t.label}</button>`
     ).join("");
     const dayEntries=a.diary.filter(e=>e.date===selDate).sort((x,y)=>x.created-y.created);
@@ -3481,17 +3506,18 @@ function paintDiary(container,a){
           <div class="dg-entry" style="border-left:3px solid ${diaryTypeDef(e.type).color}">
             <div class="dg-erow">
               <span>${diaryTypeDef(e.type).icon}</span>
-              <span class="dg-esum" title="${escAttr(diaryEntrySummary(e))}">${esc(diaryEntrySummary(e))}</span>
+              <span class="dg-esum" title="${escAttr(diaryEntrySummary(e,a))}">${esc(diaryEntrySummary(e,a))}</span>
               <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
               <button class="dg-edit" data-id="${e.id}">✎</button>
               <button class="dg-del" data-id="${e.id}">✕</button>
             </div>
-            ${open?diaryEntryDetailHTML(e):""}
+            ${open?diaryEntryDetailHTML(e,a):""}
           </div>`;}).join("") : `<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">no entries this day</div>`)}
         <div class="dg-formhost"></div>
       </div>`;
 
     container.querySelectorAll(".dg-typebtn").forEach(b=>b.onclick=()=>{
+      if(b.dataset.all){ diaryTypeDefs().forEach(t=>visibleTypes.add(t.key)); draw(); return; }
       const t=b.dataset.t;
       if(visibleTypes.has(t))visibleTypes.delete(t); else visibleTypes.add(t);
       draw();
@@ -3679,14 +3705,14 @@ const SUBSTRUCTURES = {
   th:   { label:"Thal",     fullName:"Thalamus (whole structure)",                   structureId:549, elementId:"mesh_th",   color:0x748ffc },
   val:  { label:"VAL", fullName:"Ventral anterior-lateral complex of the thalamus (substructure of the thalamus)", structureId:629, elementId:"mesh_val",  color:0x3fd0d6 }
 };
-let activeSubstructures = new Set();
-// Head-post / cranial window 3D representations — a global toggle (applies to
-// every mouse's viewer, same as dvRefMode/activeSubstructures above), but
-// defaulting per-render to whether the animal currently shown actually has
-// that property in its surgery: null = auto (follow the surgery), true/false
-// = explicit override once a toggle button's been clicked.
-let fixtureOverride={headpost:null,window:null};
-function showFixture(kind,surgery){ const o=fixtureOverride[kind]; return o==null ? !!(surgery&&surgery[kind]) : o; }
+// Structure toggles and the head-post/window display override both live on a
+// per-viewer "viewState" object (see mountBrainViewer) instead of a shared
+// global — otherwise picking structures for one animal's brain view would
+// silently change what every other animal's view shows too.
+function newBrainViewState(){ return {activeSubstructures:new Set(), fixtureOverride:{headpost:null,window:null}}; }
+// fixtureOverride: null = auto (follow the surgery's own headpost/window
+// flags), true/false = explicit override once a toggle's been clicked.
+function showFixture(kind,surgery,fixtureOverride){ const o=fixtureOverride&&fixtureOverride[kind]; return o==null ? !!(surgery&&surgery[kind]) : o; }
 const SUB_CACHE = {};
 function loadSubstructureMesh(key){
   if(SUB_CACHE[key]!==undefined) return SUB_CACHE[key];
@@ -3797,7 +3823,8 @@ function chamferedRectShape(w,h,chamfer){
   s.lineTo(hw-c,hh); s.lineTo(-hw+c,hh); s.lineTo(-hw,hh-c); s.lineTo(-hw,-hh+c); s.closePath();
   return s;
 }
-function render3DBrain(container,surgery,height){
+function render3DBrain(container,surgery,height,viewState){
+  viewState=viewState||newBrainViewState();
   teardownContainer(container); teardown3D(); container.innerHTML="";
   if(typeof THREE==="undefined"){ container.innerHTML='<div class="bv-flag">3D library did not load (needs internet). The 2D view still works.</div>'; return; }
   const mesh=MESH3D||loadCCF();
@@ -3820,7 +3847,7 @@ function render3DBrain(container,surgery,height){
     // grazing viewing angles, since the gap is a fraction of a millimeter.
     group.add(new THREE.Mesh(geo,new THREE.MeshBasicMaterial({color:0x3a4658,wireframe:true,transparent:true,opacity:0.09,depthWrite:false})));
     // addable/removable substructure meshes (e.g. STN), layered in the same CCF frame as the root
-    activeSubstructures.forEach(key=>{
+    viewState.activeSubstructures.forEach(key=>{
       const sub=SUBSTRUCTURES[key], subMesh=sub&&loadSubstructureMesh(key);
       if(!subMesh)return;
       const subGeo=ccfGeometry(subMesh);
@@ -3841,7 +3868,7 @@ function render3DBrain(container,surgery,height){
     // sitting right on it, making the wireframe appear to poke through.
     const mm3=mm=>mm*1000*_cS;
     const winAp=+((surgery&&surgery.winAp)||0);
-    if(surgery && showFixture("window",surgery)){
+    if(surgery && showFixture("window",surgery,viewState.fixtureOverride)){
       const wMl=+surgery.winMl||0, wDiam=Math.max(0.5,+surgery.winDiam||3);
       const center=ccf2three(...bregma2ccfSurface(mesh,winAp,wMl,0));
       const rad=mm3(wDiam/2);
@@ -3850,7 +3877,7 @@ function render3DBrain(container,surgery,height){
       const rim=new THREE.Mesh(new THREE.RingGeometry(rad*0.93,rad,40),new THREE.MeshBasicMaterial({color:0x7db4ff,side:THREE.DoubleSide}));
       rim.position.copy(center).add(new THREE.Vector3(0,mm3(0.06),0)); rim.rotation.x=-Math.PI/2; rim.renderOrder=5; group.add(rim);
     }
-    if(surgery && showFixture("headpost",surgery)){
+    if(surgery && showFixture("headpost",surgery,viewState.fixtureOverride)){
       const center=ccf2three(...bregma2ccfSurface(mesh,0,0,0));
       const hpCol=0xe6d9b8; // pale cream dental-acrylic color, not a bright fill — a real headcap, not a highlighter
       const wDiamForHead=surgery.window?Math.max(0.5,+surgery.winDiam||3):3;
@@ -3860,16 +3887,17 @@ function render3DBrain(container,surgery,height){
       // but the hole cut into it has to sit exactly where the window actually
       // is (offset from bregma by the window's own AP/ML) — everywhere else
       // is covered by cement, so an off-center hole would expose skull instead
-      // of the window whenever the window itself isn't dead-center.
+      // of the window whenever the window itself isn't dead-center. No window
+      // at all means nothing to expose, so no hole — just a solid cap.
       const outerW=mm3(Math.max(wDiamForHead+6,9)), outerD=mm3(Math.max(wDiamForHead+5,8)), thick=mm3(0.5), holeR=mm3(wDiamForHead/2+0.3);
-      const holeDx=surgery.window?mm3(+surgery.winMl||0):0, holeDy=surgery.window?mm3(winAp):0;
+      const holeDx=mm3(+surgery.winMl||0), holeDy=mm3(winAp);
       // lifted clear of the surface (not just resting on it) — the cap is
       // sampled at one center point but spans several mm across a curved
       // skull, so a flush fit would dip its own edges into the mesh and look
       // like it's embedded rather than sitting on top from grazing angles.
       const lift=mm3(0.35);
       const capShape=chamferedRectShape(outerW,outerD,mm3(2));
-      const hole=new THREE.Path(); hole.absarc(holeDx,holeDy,holeR,0,Math.PI*2,false); capShape.holes.push(hole);
+      if(surgery.window){ const hole=new THREE.Path(); hole.absarc(holeDx,holeDy,holeR,0,Math.PI*2,false); capShape.holes.push(hole); }
       const cap=new THREE.Mesh(new THREE.ExtrudeGeometry(capShape,{depth:thick,bevelEnabled:false}),
         new THREE.MeshPhongMaterial({color:hpCol,transparent:true,opacity:0.5,side:THREE.DoubleSide}));
       cap.rotation.x=-Math.PI/2; cap.position.copy(center).add(new THREE.Vector3(0,lift,0)); cap.renderOrder=5; group.add(cap);
@@ -3957,12 +3985,16 @@ function render3DBrain(container,surgery,height){
     (function loop(){ if(_b3s.get(container)!==inst)return; inst.raf=requestAnimationFrame(loop); renderer.render(scene,camera); })();
   }catch(err){ console.warn("3D failed",err); container.innerHTML='<div class="bv-flag">3D rendering unavailable in this browser. The 2D view still works.</div>'; try{renderer&&renderer.dispose();}catch(e){} }
 }
-function openBrainPopup(getSurgery,onClose,editFixtures){
+function openBrainPopup(getSurgery,onClose,viewState){
   const ov=document.createElement("div"); ov.className="brain-pop";
   ov.innerHTML='<div class="brain-pop-box"><button class="brain-pop-x">✕ close</button><div class="brain-pop-body"></div></div>';
   document.body.appendChild(ov);
   const popBody=ov.querySelector(".brain-pop-body");
-  mountBrainViewer(popBody, getSurgery, {big:true, mode:"3d", editFixtures});
+  // shares the inline viewer's own viewState object (not a fresh one) so the
+  // enlarged popup shows exactly what the inline preview was already
+  // showing, and toggling a structure/fixture in either place is instantly
+  // reflected in the other since they're the same Set/object underneath.
+  mountBrainViewer(popBody, getSurgery, {big:true, mode:"3d", viewState});
   const close=()=>{ teardownContainer(popBody); ov.remove(); document.removeEventListener("keydown",esc); if(onClose)onClose(); };
   function esc(e){ if(e.key==="Escape")close(); }
   ov.querySelector(".brain-pop-x").onclick=close;
@@ -3979,51 +4011,41 @@ const FIXTURE_CHOICES=[
 ];
 function mountBrainViewer(host,getSurgery,opts){
   opts=opts||{}; host.classList.add("bv");
-  // editFixtures (only passed by an editable surgery form, not read-only
-  // previews) adds a "Has" menu for the underlying head-post/window data
-  // itself — this is also how the "Enlarge" popup, which otherwise covers the
-  // rest of the editing form, still lets you change Yes/No while enlarged.
-  const hasBtnHTML=opts.editFixtures?'<button type="button" class="bv-ddbtn" data-dd="has" title="Does this animal actually have a head-post / cranial window? Also resets whether its 3D representation is shown."></button>':"";
+  // own state unless the caller hands one in (the "Enlarge" popup shares its
+  // opener's, everyone else — including every other animal's viewer — gets
+  // an independent one, so structure/fixture choices never leak across mice).
+  const viewState=opts.viewState||newBrainViewState();
   host.innerHTML='<div class="bv-top">'
-    +hasBtnHTML
-    +'<button type="button" class="bv-ddbtn" data-dd="show" title="Show head-post / cranial window representations on mice that have them — applies to every mouse\'s view"></button>'
+    +'<button type="button" class="bv-ddbtn" data-dd="show" title="Show head-post / cranial window representations on mice that have them — this animal\'s viewer only"></button>'
     +'<button type="button" class="bv-ddbtn" data-dd="dvmode" title="What DV=0 means for every injection/expression-site coordinate"></button>'
-    +'<button type="button" class="bv-ddbtn" data-dd="structures" title="Layer additional Allen CCF structures onto the brain"></button>'
+    +'<button type="button" class="bv-ddbtn" data-dd="structures" title="Layer additional Allen CCF structures onto the brain — this animal\'s viewer only"></button>'
     +'<button class="bv-expand" title="Enlarge">⛶ Enlarge</button></div>'
     +'<div class="bv-body"></div><div class="bv-flag"></div>';
   const body=host.querySelector(".bv-body"),flag=host.querySelector(".bv-flag"),expand=host.querySelector(".bv-expand");
-  const hasBtn=host.querySelector('[data-dd="has"]'), dvBtn=host.querySelector('[data-dd="dvmode"]'), fxBtn=host.querySelector('[data-dd="show"]'), subBtn=host.querySelector('[data-dd="structures"]');
+  const dvBtn=host.querySelector('[data-dd="dvmode"]'), fxBtn=host.querySelector('[data-dd="show"]'), subBtn=host.querySelector('[data-dd="structures"]');
   function render(){
     const surgery=getSurgery();
-    render3DBrain(body,surgery, opts.big?Math.round(window.innerHeight*0.66):300);
-    if(hasBtn){
-      const has=FIXTURE_CHOICES.filter(c=>opts.editFixtures.get()[c.key]).length;
-      hasBtn.textContent="Has"+(has?` (${has})`:"")+" ▾";
-      hasBtn.classList.toggle("active",has>0);
-    }
+    render3DBrain(body,surgery, opts.big?Math.round(window.innerHeight*0.66):300, viewState);
     dvBtn.textContent=(DV_MODE_CHOICES.find(c=>c.key===dvRefMode)||DV_MODE_CHOICES[0]).label+" ▾";
-    const fxOn=FIXTURE_CHOICES.filter(c=>showFixture(c.key,surgery)).length;
+    const fxOn=FIXTURE_CHOICES.filter(c=>showFixture(c.key,surgery,viewState.fixtureOverride)).length;
     fxBtn.textContent="Show"+(fxOn?` (${fxOn})`:"")+" ▾";
     fxBtn.classList.toggle("active",fxOn>0);
-    const subOn=activeSubstructures.size;
+    const subOn=viewState.activeSubstructures.size;
     subBtn.textContent="Structures"+(subOn?` (${subOn})`:"")+" ▾";
     subBtn.classList.toggle("active",subOn>0);
     flag.innerHTML="Allen CCF root mesh — CCFv3 (Wang et al. 2020). Bregma→CCF: 5400/5700/332 µm + 5° pitch (Chon et al. 2019).";
   }
-  if(hasBtn) hasBtn.onclick=()=>openCheckDropdown(hasBtn, FIXTURE_CHOICES,
-    key=>!!opts.editFixtures.get()[key],
-    key=>{ opts.editFixtures.set(key, !opts.editFixtures.get()[key]); render(); });
   dvBtn.onclick=()=>openRadioDropdown(dvBtn, DV_MODE_CHOICES, dvRefMode, key=>{ dvRefMode=key; render(); });
-  fxBtn.onclick=()=>openCheckDropdown(fxBtn, FIXTURE_CHOICES, key=>showFixture(key,getSurgery()), key=>{
-    fixtureOverride[key]=!showFixture(key,getSurgery()); render();
+  fxBtn.onclick=()=>openCheckDropdown(fxBtn, FIXTURE_CHOICES, key=>showFixture(key,getSurgery(),viewState.fixtureOverride), key=>{
+    viewState.fixtureOverride[key]=!showFixture(key,getSurgery(),viewState.fixtureOverride); render();
   });
   subBtn.onclick=()=>openCheckDropdown(subBtn,
     Object.keys(SUBSTRUCTURES).map(key=>({key,label:SUBSTRUCTURES[key].label,title:SUBSTRUCTURES[key].fullName})),
-    key=>activeSubstructures.has(key),
-    key=>{ activeSubstructures.has(key)?activeSubstructures.delete(key):activeSubstructures.add(key); render(); });
-  expand.onclick=()=>openBrainPopup(getSurgery, render, opts.editFixtures);
+    key=>viewState.activeSubstructures.has(key),
+    key=>{ viewState.activeSubstructures.has(key)?viewState.activeSubstructures.delete(key):viewState.activeSubstructures.add(key); render(); });
+  expand.onclick=()=>openBrainPopup(getSurgery, render, viewState);
   render();
-  return {refresh:render};
+  return {refresh:render, viewState};
 }
 
 /* ---------- shared procedure editor (head-post/window + injection rows + brain preview) ----------
@@ -4115,11 +4137,12 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
            coordinate above. Each renders as a small cluster of soma dots in the
            3D view; dot count follows the chosen expression level. -->
       <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line2)">
-        <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:5px">Expression site(s) observed (shown as soma dots)</div>
+        <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:5px">Observed expression (shown as soma dots)</div>
         <div class="inj-es-list">
         ${(inj.expressionSites||[]).map((es,ei)=>`
           <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
             <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 34px">${ei+1}</span>
+            ${sOpts?`<select class="inj-es-sitepick" data-i="${i}" data-ei="${ei}" style="flex:0 0 auto;width:100px;${IST}"><option value="">library…</option>${sOpts}<option value="__edit_slib">✎ edit library</option></select>`:""}
             <input data-i="${i}" data-ei="${ei}" data-ef="ap" value="${escAttr(es.ap)}" placeholder="AP" style="flex:0 0 auto;width:48px;${IST}">
             <input data-i="${i}" data-ei="${ei}" data-ef="ml" value="${escAttr(es.ml)}" placeholder="ML" style="flex:0 0 auto;width:48px;${IST}">
             <input data-i="${i}" data-ei="${ei}" data-ef="dv" value="${escAttr(es.dv)}" placeholder="DV" style="flex:0 0 auto;width:48px;${IST}">
@@ -4128,10 +4151,10 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
               <option value="medium" ${(!es.level||es.level==="medium")?"selected":""}>medium</option>
               <option value="high"   ${es.level==="high"?"selected":""}>high</option>
             </select>
-            <button class="inj-es-del" data-i="${i}" data-ei="${ei}" title="remove expression site" style="${BS};color:var(--overdue)">✕</button>
+            <button class="inj-es-del" data-i="${i}" data-ei="${ei}" title="remove observed expression" style="${BS};color:var(--overdue)">✕</button>
           </div>`).join("")}
         </div>
-        <button class="inj-es-add" data-i="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:3px 8px;font-size:11px">＋ expression site</button>
+        <button class="inj-es-add" data-i="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:3px 8px;font-size:11px">＋ observed expression</button>
       </div>
     </div>`;
   }
@@ -4146,14 +4169,9 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
     if(kind==="headpost")hp=val; else win=val;
     document.querySelectorAll(`#${p}_${kind==="headpost"?"hp":"win"} button`).forEach(x=>x.classList.toggle("on",(x.dataset.v==="1")===val));
     if(kind==="window")updateWinCoordVisibility();
-    fixtureOverride[kind]=val;
+    _bv.viewState.fixtureOverride[kind]=val;
   }
-  const _bv=mountBrainViewer(document.getElementById(`${p}_brainview`), curSurgery, {
-    // lets the brain viewer's own toolbar edit head-post/window directly —
-    // this is the only way to reach that control while the viewer is enlarged,
-    // since the popup covers the rest of this form.
-    editFixtures:{ get:()=>({headpost:hp,window:win}), set:(kind,val)=>{ setFixtureData(kind,val); updatePreview(); } }
-  });
+  const _bv=mountBrainViewer(document.getElementById(`${p}_brainview`), curSurgery);
   function updatePreview(){ _bv.refresh(); }
   function readInjFields(){
     // flush every visible input/select value back into the injs array before any repaint
@@ -4177,7 +4195,20 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
     injs[+el.dataset.i][el.dataset.f]=el.value; updatePreview();
   });
   injsHost.addEventListener("change",e=>{
-    const el=e.target; if(esField(el))return;
+    const el=e.target;
+    if(el.classList.contains("inj-es-sitepick")){
+      // carries data-ei like the other expression-site sub-fields, so this has
+      // to run before esField(el) claims it (esField only knows single-field
+      // data-ef writes, not "fill ap/ml/dv from a library pick" like this).
+      const i=+el.dataset.i, ei=+el.dataset.ei, v=el.value;
+      if(v==="__edit_slib"){ el.value=""; readInjFields(); goToLibraryFn("site"); return; }
+      if(!v.startsWith("__s:"))return; const nm=v.slice(4);
+      const s=(DB.config.siteLib||[]).find(x=>x.name===nm); if(!s)return;
+      const es=injs[i]&&injs[i].expressionSites&&injs[i].expressionSites[ei]; if(!es)return;
+      es.ap=s.ap; es.ml=s.ml; es.dv=s.dv;
+      paintInjs(); updatePreview(); return;
+    }
+    if(esField(el))return;
     if(el.dataset.i==null)return; const iv=+el.dataset.i;
     if(el.classList.contains("inj-sitelibpick")){
       const v=el.value;
@@ -4245,7 +4276,7 @@ function animalModal(id,draft){
   const view=draft||a;
   const cohorts=(DB.cohorts||[]).map(c=>c.name);
   const F=(fid,lab,val,type="text")=>`<div class="fld" style="flex:1"><label>${lab}</label><input id="${fid}" type="${type}" value="${escAttr(val||"")}"></div>`;
-  const dbtn=(fid,val)=>`<button type="button" id="${fid}" class="datebtn ${val?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${val?fmtWhenFull(val):"set date"}</button>`;
+  const dbtn=(fid,val)=>`<button type="button" id="${fid}" class="datebtn datebtn-sm ${val?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${val?fmtWhenFull(val):"set date"}</button>`;
   const seg=(fid,on)=>`<div class="seg" id="${fid}"><button data-v="1" class="${on?"on":""}">Yes</button><button data-v="0" class="${!on?"on":""}">No</button></div>`;
   modal(`<h3>${id?"Edit":"New"} animal</h3>
     <div class="drow">${F("am_name","Name",view.name)}<div class="fld" style="width:120px"><label>Cohort</label><select id="am_cohort">${cohorts.map(c=>`<option ${view.cohort===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></div>
@@ -4276,10 +4307,22 @@ function animalModal(id,draft){
     <div class="fld"><label>Surgical comments / notes</label><textarea id="am_com">${esc(view.comments||"")}</textarea></div>
     <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
 
-  // dates
+  // dates — custom wiring instead of bindDateButton so the Born button can
+  // also show age in weeks (which depends on both dates, so either one
+  // changing needs to refresh it, not just the button that was clicked).
   let vDob=view.dob||"", vSac=view.sacrificed||"";
-  bindDateButton(document.getElementById("am_dob"), ()=>vDob, v=>{vDob=v||"";}, undefined, true);
-  bindDateButton(document.getElementById("am_sac"), ()=>vSac, v=>{vSac=v||"";});
+  const dobBtn=document.getElementById("am_dob"), sacBtn=document.getElementById("am_sac");
+  function renderDobBtn(){
+    const wk=vDob?ageWeeks({dob:vDob,sacrificed:vSac}):null;
+    dobBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${vDob?fmtWhenFull(vDob):"set date"}${wk!=null?` · ${wk} wk${wk===1?"":"s"}`:""}`;
+    dobBtn.classList.toggle("datebtn-empty",!vDob);
+  }
+  function renderSacBtn(){
+    sacBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${vSac?fmtWhenFull(vSac):"set date"}`;
+    sacBtn.classList.toggle("datebtn-empty",!vSac);
+  }
+  dobBtn.onclick=()=>openCalendar(dobBtn, vDob, v=>{ vDob=v||""; renderDobBtn(); }, undefined, true);
+  sacBtn.onclick=()=>openCalendar(sacBtn, vSac, v=>{ vSac=v||""; renderDobBtn(); renderSacBtn(); });
 
   let termination=view.termination||(view.alive===false?"sacrificed":"alive");
   document.getElementById("am_alive").onclick=e=>{const b=e.target.closest("button");if(!b)return;termination=b.dataset.v;document.querySelectorAll("#am_alive button").forEach(x=>x.classList.toggle("on",x===b));};
@@ -4582,7 +4625,6 @@ function openTimelineCreateModal(prefillDeadline){
         fieldsHost.innerHTML=`<label style="margin-top:6px;display:block">Task</label>
           <input id="tc_task" list="tc_tasklist" autocomplete="off" placeholder="e.g. 2AFC lick">
           <datalist id="tc_tasklist">${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t.name)}">`).join("")}</datalist>
-          <label style="margin-top:6px;display:block">Stage</label><input id="tc_stage" type="text">
           <div id="tc_metrics" style="margin-top:6px">${renderMetricsFields("",{})}</div>`;
         document.getElementById("tc_task").addEventListener("input",e=>{
           document.getElementById("tc_metrics").innerHTML=renderMetricsFields(e.target.value.trim(),{});
@@ -4610,7 +4652,7 @@ function openTimelineCreateModal(prefillDeadline){
           if(el.dataset.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))metrics[el.dataset.key]=n; return; }
           if(raw.trim()!=="")metrics[el.dataset.key]=raw.trim();
         });
-        data={task:taskName, stage:document.getElementById("tc_stage").value.trim(), metrics};
+        data={task:taskName, metrics};
       } else {
         const def=diaryTypeDef(type);
         def.fields.forEach(f=>{
@@ -4899,7 +4941,7 @@ function exportFullDatabaseExcel(){
 
   const diaryRows=[["Animal","Cohort","Date","Time","End time","Type","Summary","Logged"]];
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    diaryRows.push([a.name,a.cohort||"",e.date,e.time||"",e.endTime||"",diaryTypeDef(e.type).label,diaryEntrySummary(e),e.created?new Date(e.created).toLocaleString():""]);
+    diaryRows.push([a.name,a.cohort||"",e.date,e.time||"",e.endTime||"",diaryTypeDef(e.type).label,diaryEntrySummary(e,a),e.created?new Date(e.created).toLocaleString():""]);
   }));
 
   const injRows=[["Animal","#","Virus","Type","Site region","AP","ML","DV","Volume (nl)","Target region","Target AP","Target ML","Target DV"]];
