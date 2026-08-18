@@ -89,49 +89,67 @@
   .pj-readrow input{width:auto;margin:0}
   .pj-readrow .rd{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pj-readrow .rd.done{color:var(--ink-faint);text-decoration:line-through}
-  .pj-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
-  .pj-pill{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
-  .pj-pill .chip{width:8px;height:8px;border-radius:50%}
-  .pj-pill.on{color:var(--ink);border-color:currentColor}
-  /* ---- projects: the map ---- */
+  /* ---- projects: the network (somata + dendrites + axons) ---- */
   .pjm-bar{display:flex;align-items:center;gap:8px;margin:14px 0 8px;flex-wrap:wrap}
   .pjm-btn{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:8px;padding:5px 11px;font-size:11.5px;cursor:pointer}
   .pjm-btn:hover{border-color:var(--gcamp);color:var(--ink)}
   .pjm-btn.on{color:var(--gold);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
   .pjm-hint{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-left:auto}
-  .pjm-stage{position:relative;height:min(64vh,620px);overflow:hidden;border:1px solid var(--line);border-radius:12px;
-    background:radial-gradient(ellipse at 30% 20%,rgba(125,180,255,.05),transparent 60%),var(--bg2);cursor:grab;touch-action:none}
+  .pjm-stage{position:relative;height:min(70vh,680px);overflow:hidden;border:1px solid var(--line);border-radius:12px;
+    background:radial-gradient(ellipse at 25% 15%,rgba(125,180,255,.055),transparent 62%),
+               radial-gradient(ellipse at 80% 80%,rgba(169,140,255,.045),transparent 60%),var(--bg2);
+    cursor:grab;touch-action:none}
   .pjm-stage.grabbing{cursor:grabbing}
   .pjm-world{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
   .pjm-links{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
-  .pjm-link{fill:none;stroke:var(--line2);stroke-width:1.6;pointer-events:stroke;cursor:pointer}
-  .pjm-link:hover{stroke:var(--mruby);stroke-width:2.4}
-  .pjm-node{position:absolute;background:var(--panel);border:1px solid var(--line2);border-left:3px solid var(--c,#667);
-    border-radius:10px;padding:8px 10px;cursor:pointer;box-sizing:border-box;user-select:none;touch-action:none;
+  /* dendrites: fine, tapering, the colour of the neuron they belong to */
+  .pjm-dendlink{fill:none;stroke:var(--line2);pointer-events:stroke;cursor:pointer;stroke-linecap:round}
+  .pjm-dendlink:hover{stroke:var(--mruby)}
+  /* axons: long-range projections between neurons, ending in a bouton */
+  .pjm-axon{fill:none;stroke:var(--gold);stroke-opacity:.75;pointer-events:stroke;cursor:pointer;stroke-linecap:round}
+  .pjm-axon:hover{stroke:var(--mruby);stroke-opacity:1}
+  .pjm-bouton{fill:var(--gold);fill-opacity:.85;pointer-events:none}
+  /* the soma — a cell body, weightier than anything hanging off it */
+  .pjm-soma{position:absolute;box-sizing:border-box;cursor:pointer;user-select:none;touch-action:none;
+    padding:12px 14px;border-radius:26px;border:2px solid var(--c,#667);
+    background:var(--panel2);
+    box-shadow:0 0 34px -10px var(--c),0 10px 26px -16px #000;transition:box-shadow .12s,transform .12s}
+  @supports (background:color-mix(in srgb,red 20%,blue)){
+    .pjm-soma{background:radial-gradient(ellipse at 30% 25%,color-mix(in srgb,var(--c) 22%,var(--panel)),var(--panel) 72%)} }
+  .pjm-soma:hover{box-shadow:0 0 42px -8px var(--c),0 10px 26px -16px #000}
+  .pjm-soma.drag{z-index:6}
+  .pjm-soma.sel{box-shadow:0 0 0 3px rgba(84,224,138,.3),0 0 42px -8px var(--c)}
+  .pjm-soma.linking{border-color:var(--gold);box-shadow:0 0 0 3px rgba(240,200,90,.35)}
+  .pjm-soma .t{font-family:var(--disp);font-size:14.5px;font-weight:600;line-height:1.25;color:var(--ink);overflow-wrap:anywhere}
+  .pjm-soma .m{display:flex;align-items:center;gap:7px;margin-top:6px;font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
+  .pjm-soma .m .ps{text-transform:uppercase;letter-spacing:.05em}
+  .pjm-soma .pr{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px;font-family:var(--mono);font-size:9.5px;color:var(--ink-dim)}
+  .pjm-soma.st-planning{opacity:.82}
+  .pjm-soma.st-paused{opacity:.6;filter:saturate(.5)}
+  .pjm-soma.st-completed{opacity:.5;filter:saturate(.35)}
+  /* dendritic nodes — subtasks, tapering with distance from the soma */
+  .pjm-dend{position:absolute;background:var(--panel);border:1px solid var(--line2);border-left:3px solid var(--c,#667);
+    border-radius:10px;padding:7px 10px;cursor:pointer;box-sizing:border-box;user-select:none;touch-action:none;
     box-shadow:0 6px 18px -12px #000;transition:border-color .12s,box-shadow .12s}
-  .pjm-node:hover{border-color:var(--ink-faint)}
-  .pjm-node.drag{box-shadow:0 14px 30px -12px #000;z-index:5}
-  .pjm-node.sel{border-color:var(--gcamp);box-shadow:0 0 0 2px rgba(84,224,138,.25),0 6px 18px -12px #000}
-  .pjm-node.linking{border-color:var(--gold);box-shadow:0 0 0 2px rgba(240,200,90,.3)}
-  .pjm-node .t{font-size:12.5px;line-height:1.3;color:var(--ink);overflow-wrap:anywhere}
-  .pjm-node .m{display:flex;align-items:center;gap:5px;margin-top:5px;font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
-  .pjm-node .m .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;border:1px solid var(--ink-faint)}
-  .pjm-node .lrn{margin-left:auto;font-size:10px}
-  /* depth: the backbone reads heavier than the twigs */
-  .pjm-node.d0 .t{font-family:var(--disp);font-size:14px;font-weight:600}
-  .pjm-node.d1 .t{font-size:13px;font-weight:600}
-  .pjm-node.d3{opacity:.92}
-  .pjm-node.d3 .t{font-size:11.5px}
-  /* state: planned is an outline, running glows, done is filled and quiet */
-  .pjm-node.s-planned{border-style:dashed}
-  .pjm-node.s-planned .m .dot{background:transparent}
-  .pjm-node.s-running{box-shadow:0 0 0 1px rgba(84,224,138,.18),0 0 22px -6px var(--gcamp)}
-  .pjm-node.s-running .m .dot{background:var(--gcamp);border-color:var(--gcamp)}
-  .pjm-node.s-done{opacity:.62}
-  .pjm-node.s-done .m .dot{background:var(--ink-faint)}
-  .pjm-node.s-done .t{text-decoration:line-through;text-decoration-color:var(--ink-faint)}
-  .pjm-root{background:linear-gradient(180deg,var(--panel2),var(--panel));border-left-width:4px}
-  .pjm-root .t{font-family:var(--disp);font-size:15px;font-weight:600}
+  .pjm-dend:hover{border-color:var(--ink-faint)}
+  .pjm-dend.drag{box-shadow:0 14px 30px -12px #000;z-index:5}
+  .pjm-dend.sel{border-color:var(--gcamp);box-shadow:0 0 0 2px rgba(84,224,138,.25),0 6px 18px -12px #000}
+  .pjm-dend.linking{border-color:var(--gold);box-shadow:0 0 0 2px rgba(240,200,90,.3)}
+  .pjm-dend .t{font-size:12.5px;line-height:1.3;color:var(--ink);overflow-wrap:anywhere}
+  .pjm-dend .m{display:flex;align-items:center;gap:5px;margin-top:5px;font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
+  .pjm-dend .m .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;border:1px solid var(--ink-faint)}
+  .pjm-dend .lrn{margin-left:auto;font-size:10px}
+  .pjm-dend.d1 .t{font-size:13px;font-weight:600}
+  .pjm-dend.d3{opacity:.9}
+  .pjm-dend.d3 .t{font-size:11.5px}
+  /* state: planned is an outline, running glows, done goes quiet */
+  .pjm-dend.s-planned{border-style:dashed}
+  .pjm-dend.s-planned .m .dot{background:transparent}
+  .pjm-dend.s-running{box-shadow:0 0 0 1px rgba(84,224,138,.18),0 0 22px -6px var(--gcamp)}
+  .pjm-dend.s-running .m .dot{background:var(--gcamp);border-color:var(--gcamp)}
+  .pjm-dend.s-done{opacity:.6}
+  .pjm-dend.s-done .m .dot{background:var(--ink-faint)}
+  .pjm-dend.s-done .t{text-decoration:line-through;text-decoration-color:var(--ink-faint)}
   .pjm-plus{position:absolute;right:-11px;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;
     border:1px solid var(--gcamp);background:var(--panel2);color:var(--gcamp);font-size:12px;line-height:1;cursor:pointer;padding:0}
   .tgt-count,.pj-sub-count{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);background:var(--panel2);border:1px solid var(--line2);border-radius:20px;padding:1px 7px}
@@ -1027,8 +1045,9 @@ function migrate(){                       // backfill fields added in later vers
     if(d.description==null) d.description="";
     if(d.targetDate===undefined) d.targetDate=null;
     if(!Array.isArray(d.cohortIds)) d.cohortIds=[];
-    if(d.x===undefined) d.x=null;   // root node's own position on the project map
+    if(d.x===undefined) d.x=null;   // soma position on the shared network canvas
     if(d.y===undefined) d.y=null;
+    if(!Array.isArray(d.links)) d.links=[];  // axons: projections onto other projects
   });
   // Project nodes: a plan is a directed graph, not a tree — work converges as
   // well as branches. `links` (ids this node leads to) subsumes both the old
@@ -1498,7 +1517,6 @@ document.getElementById("notifyNudge").addEventListener("click",openNotification
    not a tree. A failed experiment keeps its place and its forward links:
    what it taught is a real input to whatever came next, recorded in its own
    "what we learned" note rather than encoded as a status.               */
-let pjBoardProject=null;  // which project the map is showing
 const PJ_PROC_TYPES=["surgery","perfusion","histology","microscopy"];
 const DAY_MS=864e5;
 const NODE_STATES=[["planned","Planned"],["running","Running"],["done","Done"]];
@@ -1581,148 +1599,187 @@ function wireProjectHeaders(host){
   });
 }
 
-/* ---- The map ------------------------------------------------------------
-   Nodes are absolutely-positioned HTML cards (crisp text, easy styling) over
-   a single SVG layer carrying the links (clean curves). Both live inside one
-   transformed container, so pan/zoom is a single CSS transform rather than
-   re-laying-out anything. Deliberately no force simulation: the whole point
-   is a stable arrangement the planner controls and recognises, and a physics
-   layout actively fights that by drifting every time it re-renders.      */
-const NODE_W=[176,160,146,134];    // card width by depth — the backbone reads heavier
-const NODE_GAP_Y=64, NODE_GAP_X=214;
-function nodeW(d){ return NODE_W[Math.min(d,NODE_W.length-1)]; }
-// Auto-placement: a new node sits to the right of whatever it came from, slid
-// down past that parent's existing children so nothing is ever born on top of
-// something else. Free dragging afterwards is what actually shapes the map.
-function placeNode(node,fromId){
+function newProjectNode(domainId){
+  return {id:uid("t_"),title:"",domainId,parentId:null,status:"todo",state:"planned",learned:"",
+    priority:2,deadline:null,endDate:null,duration:null,procedureType:null,linkedAnimals:[],
+    autoTitle:false,materials:[],notes:"",deps:[],links:[],target:null,x:null,y:null,created:Date.now()};
+}
+
+/* ---- The network --------------------------------------------------------
+   Every project in the workspace lives on ONE canvas, not a screen each.
+   Each project is a soma; its subtasks are the dendritic tree branching off
+   it and converging back on it; and the long-range links between projects
+   are axons, which is what makes the whole thing a network rather than a
+   set of separate diagrams. Seeing a thesis whole — including the places
+   where one project's output is another's input — is the entire point.
+
+   Rendering: absolutely-positioned HTML cards over one SVG layer, all inside
+   a single CSS-transformed container, so pan/zoom costs one transform and
+   nothing re-lays-out. Deliberately no force simulation — an arrangement the
+   planner recognises next week matters far more than an optimal one, and
+   physics layouts move everything every time they run.                   */
+const SOMA_W=210, DEND_W=[168,152,138], DEND_GAP_X=212, DEND_GAP_Y=62, SOMA_GAP_Y=250;
+function dendW(d){ return DEND_W[Math.min(Math.max(d-1,0),DEND_W.length-1)]; }
+function projectOf(t){ return domById(t.domainId); }
+// Dendrites branch outward from their soma, deeper ones further out. Placed
+// in dependency order by the caller so a node always has a positioned anchor.
+function placeDendrite(n,fromId){
   const from=fromId?(taskById(fromId)||domById(fromId)):null;
-  if(!from){ node.x=40; node.y=40; return; }
-  const sibs=(fromId===node.domainId? DB.tasks.filter(t=>t.domainId===node.domainId&&!parentsOf(t.id).length&&t.id!==node.id)
-                                    : childrenOf(fromId).filter(c=>c.id!==node.id))
-             .filter(s=>s.y!=null);
-  node.x=(from.x||0)+NODE_GAP_X;
-  node.y=sibs.length? Math.max(...sibs.map(s=>s.y))+NODE_GAP_Y : (from.y||0);
+  if(!from){ n.x=40; n.y=40; return; }
+  const sibs=(childrenOf(fromId).length?childrenOf(fromId)
+              :DB.tasks.filter(t=>t.domainId===n.domainId&&!parentsOf(t.id).length))
+             .filter(s=>s.id!==n.id&&s.y!=null);
+  n.x=(from.x||0)+DEND_GAP_X;
+  n.y=sibs.length? Math.max(...sibs.map(s=>s.y))+DEND_GAP_Y : (from.y||0);
 }
 function renderProjectMap(host){
-  if(!pjBoardProject||!DB.domains.some(d=>d.id===pjBoardProject)) pjBoardProject=DB.domains[0].id;
-  const p=DB.domains.find(d=>d.id===pjBoardProject);
-  if(p.x==null){ p.x=40; p.y=180; }
-
-  const pills=document.createElement("div"); pills.className="pj-pills";
-  pills.innerHTML=DB.domains.map(d=>`<button class="pj-pill ${d.id===p.id?"on":""}" data-pj="${d.id}" style="${d.id===p.id?`color:${d.color}`:""}"><span class="chip" style="background:${d.color}"></span>${esc(d.name)}</button>`).join("")
-    +`<button class="btn accent" id="pj_new" style="margin-left:auto;font-size:12px">＋ Project</button>`;
-  host.appendChild(pills);
-  pills.querySelectorAll(".pj-pill").forEach(b=>b.onclick=()=>{ pjBoardProject=b.dataset.pj; pjSelected=null; pjConnectFrom=null; renderProjects(); });
-  pills.querySelector("#pj_new").onclick=()=>editProjectModal(null);
-
-  const card=document.createElement("div"); card.className="pj-card";
-  card.innerHTML=projectHeaderHTML(p,{full:true});
-  host.appendChild(card);
+  // ── one-time auto-placement so nothing is ever born without coordinates.
+  // Each neuron gets a vertical band tall enough for its own dendritic field,
+  // so a project with twenty subtasks doesn't grow down through the next one.
+  let bandY=60;
+  DB.domains.forEach(p=>{
+    const mine=DB.tasks.filter(t=>t.domainId===p.id);
+    if(p.x==null){ p.x=40; p.y=bandY; }
+    // dendrites in dependency order — a node placed relative to its parent
+    // needs that parent to already have coordinates, which array order alone
+    // doesn't guarantee. Whatever's left after no further progress (a cycle,
+    // or an orphan) hangs straight off the soma so nothing stays unplaced.
+    for(let pass=0;pass<mine.length+1;pass++){
+      let did=false;
+      mine.forEach(n=>{
+        if(n.x!=null)return;
+        const from=parentsOf(n.id).filter(q=>q.domainId===p.id)[0];
+        if(!from){ placeDendrite(n,p.id); did=true; }
+        else if(from.x!=null){ placeDendrite(n,from.id); did=true; }
+      });
+      if(!did)break;
+    }
+    mine.forEach(n=>{ if(n.x==null) placeDendrite(n,p.id); });
+    // next neuron starts below this one's whole dendritic field
+    const bottom=mine.length?Math.max(p.y,...mine.map(t=>t.y)):p.y;
+    bandY=Math.max(bandY+SOMA_GAP_Y, bottom+SOMA_GAP_Y);
+  });
 
   const bar=document.createElement("div"); bar.className="pjm-bar";
-  bar.innerHTML=`<button class="pjm-btn ${pjConnectFrom!==null?"on":""}" id="pjm_link">${pjConnectFrom?"✓ pick the node it leads to…":"⇢ Connect"}</button>
-    <button class="pjm-btn" id="pjm_add">＋ Node</button>
+  bar.innerHTML=`<button class="pjm-btn ${pjConnectFrom?"on":""}" id="pjm_link">${pjConnectFrom?"✓ now pick the target…":"⇢ Connect"}</button>
+    <button class="pjm-btn" id="pjm_addp">＋ Project</button>
+    <button class="pjm-btn" id="pjm_add">＋ Subtask</button>
     <button class="pjm-btn" id="pjm_fit">⤢ Fit</button>
-    <span class="pjm-hint">drag background to pan · scroll to zoom · click a node to open it</span>`;
+    <span class="pjm-hint">soma = project · dendrites = its subtasks · axons = links between projects</span>`;
   host.appendChild(bar);
 
   const stage=document.createElement("div"); stage.className="pjm-stage"; host.appendChild(stage);
   const world=document.createElement("div"); world.className="pjm-world"; stage.appendChild(world);
   const svg=document.createElementNS("http://www.w3.org/2000/svg","svg"); svg.setAttribute("class","pjm-links"); world.appendChild(svg);
-
-  const nodes=DB.tasks.filter(t=>t.domainId===p.id);
-  // place in dependency order — a node positioned relative to its parent needs
-  // that parent to already have coordinates, and array order doesn't guarantee
-  // it. Repeat until no further progress, then place whatever's left (a cycle,
-  // or an orphan) off the root so nothing is ever left without a position.
-  for(let pass=0;pass<nodes.length+1;pass++){
-    let did=false;
-    nodes.forEach(n=>{
-      if(n.x!=null)return;
-      const from=parentsOf(n.id).filter(q=>q.domainId===p.id)[0];
-      if(!from){ placeNode(n,p.id); did=true; }
-      else if(from.x!=null){ placeNode(n,from.id); did=true; }
-    });
-    if(!did)break;
-  }
-  nodes.forEach(n=>{ if(n.x==null) placeNode(n,p.id); });
-
   function applyTransform(){ world.style.transform=`translate(${pjPan.x}px,${pjPan.y}px) scale(${pjPan.z})`; }
   applyTransform();
 
-  // ── the project root, drawn as a node so the map visibly has one centre
-  const rootEl=document.createElement("div");
-  rootEl.className="pjm-node pjm-root"+(pjConnectFrom===p.id?" linking":"");
-  rootEl.style.left=p.x+"px"; rootEl.style.top=p.y+"px"; rootEl.style.width=nodeW(0)+"px";
-  rootEl.style.setProperty("--c",p.color);
-  rootEl.innerHTML=`<div class="t">${esc(p.name)}</div><div class="m">${nodes.length} node${nodes.length!==1?"s":""}</div>`;
-  world.appendChild(rootEl);
-
-  const els={}; els[p.id]=rootEl;
-  nodes.forEach(n=>{
-    const d=nodeDepth(n), el=document.createElement("div");
-    el.className="pjm-node d"+Math.min(d,3)+" s-"+(n.state||"planned")+(pjSelected===n.id?" sel":"")+(pjConnectFrom===n.id?" linking":"");
-    el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.style.width=nodeW(d)+"px";
+  const els={};
+  // ── somata
+  DB.domains.forEach(p=>{
+    const stats=projectProcStats(p);
+    const el=document.createElement("div");
+    el.className="pjm-soma st-"+(p.status||"planning")+(pjSelected===p.id?" sel":"")+(pjConnectFrom===p.id?" linking":"");
+    el.style.left=p.x+"px"; el.style.top=p.y+"px"; el.style.width=SOMA_W+"px";
+    el.style.setProperty("--c",p.color);
+    const n=DB.tasks.filter(t=>t.domainId===p.id).length;
+    el.innerHTML=`<div class="t">${esc(p.name)}</div>
+      <div class="m"><span class="ps">${esc((PROJECT_STATUSES.find(s=>s[0]===(p.status||"planning"))||[])[1]||"")}</span>
+        <span class="nn">${n} subtask${n!==1?"s":""}</span></div>
+      ${stats?`<div class="pr">${stats.map(s=>`<span title="${escAttr(s.def.label)}">${s.def.icon}${s.done}/${s.total}</span>`).join("")}</div>`:""}`;
+    world.appendChild(el); els[p.id]=el;
+  });
+  // ── dendrites
+  DB.tasks.filter(t=>domById(t.domainId)).forEach(n=>{
+    const p=projectOf(n), d=nodeDepth(n), el=document.createElement("div");
+    el.className="pjm-dend d"+Math.min(d,3)+" s-"+(n.state||"planned")+(pjSelected===n.id?" sel":"")+(pjConnectFrom===n.id?" linking":"");
+    el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.style.width=dendW(d)+"px";
     el.style.setProperty("--c",p.color);
     el.innerHTML=`<div class="t">${esc(n.title||"(untitled)")}</div>
       <div class="m"><span class="dot"></span>${(NODE_STATES.find(s=>s[0]===(n.state||"planned"))||[])[1]}${n.learned?`<span class="lrn" title="${escAttr(n.learned)}">📝</span>`:""}</div>
-      ${pjSelected===n.id?`<button class="pjm-plus" title="add a node this one leads to">＋</button>`:""}`;
+      ${pjSelected===n.id?`<button class="pjm-plus" title="branch a subtask off this one">＋</button>`:""}`;
     world.appendChild(el); els[n.id]=el;
   });
 
-  // ── links, drawn after the cards exist so real measured heights are used
   function drawLinks(){
     const seg=[];
-    const edge=(a,b,fromId,toId)=>{
+    const curve=(a,b,cls,w,extra,col)=>{
       if(!a||!b)return;
       const x1=a.offsetLeft+a.offsetWidth, y1=a.offsetTop+a.offsetHeight/2;
       const x2=b.offsetLeft,               y2=b.offsetTop+b.offsetHeight/2;
-      const dx=Math.max(36,Math.abs(x2-x1)*0.5);
-      seg.push(`<path class="pjm-link" d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}" data-from="${fromId}" data-to="${toId}"/>`);
+      const dx=Math.max(38,Math.abs(x2-x1)*0.5);
+      seg.push(`<path class="${cls}" style="stroke-width:${w}${col?`;stroke:${col}`:""}" d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}"${extra||""}/>`);
+      return {x2,y2};
     };
-    // the root implicitly feeds every node nothing else feeds, so the map
-    // always reads as one connected plan rather than scattered fragments
-    nodes.filter(n=>!parentsOf(n.id).some(q=>q.domainId===p.id)).forEach(n=>edge(rootEl,els[n.id],p.id,n.id));
-    nodes.forEach(n=>(n.links||[]).forEach(id=>{ if(els[id]) edge(els[n.id],els[id],n.id,id); }));
-    const xs=[p.x+nodeW(0),...nodes.map(n=>n.x+240)], ys=[p.y+120,...nodes.map(n=>n.y+140)];
-    svg.setAttribute("width",Math.max(600,...xs)); svg.setAttribute("height",Math.max(400,...ys));
+    // dendrites: carry their neuron's colour and taper with distance from the
+    // soma, so each project's arbor reads as one structure at a glance
+    DB.domains.forEach(p=>{
+      DB.tasks.filter(t=>t.domainId===p.id&&!parentsOf(t.id).some(q=>q.domainId===p.id))
+        .forEach(n=>curve(els[p.id],els[n.id],"pjm-dendlink",2.6,` data-from="${p.id}" data-to="${n.id}"`,p.color));
+    });
+    DB.tasks.forEach(n=>(n.links||[]).forEach(id=>{
+      const to=taskById(id); if(!to||!els[id])return;
+      if(to.domainId!==n.domainId)return;                 // cross-project handled as an axon below
+      const p=projectOf(n);
+      curve(els[n.id],els[id],"pjm-dendlink",Math.max(1.1,2.6-nodeDepth(n)*0.5),` data-from="${n.id}" data-to="${id}"`,p&&p.color);
+    }));
+    // axons: long-range projections between projects, with a terminal bouton
+    DB.domains.forEach(p=>(p.links||[]).forEach(id=>{
+      const q=domById(id); if(!q||!els[id])return;
+      const end=curve(els[p.id],els[id],"pjm-axon",3.4,` data-axon="1" data-from="${p.id}" data-to="${id}"`);
+      if(end) seg.push(`<circle class="pjm-bouton" cx="${end.x2}" cy="${end.y2}" r="5"/>`);
+    }));
+    // a task linking into another project's task is an axon too
+    DB.tasks.forEach(n=>(n.links||[]).forEach(id=>{
+      const to=taskById(id); if(!to||!els[id]||to.domainId===n.domainId)return;
+      const end=curve(els[n.id],els[id],"pjm-axon",2.6,` data-axon="1" data-from="${n.id}" data-to="${id}"`);
+      if(end) seg.push(`<circle class="pjm-bouton" cx="${end.x2}" cy="${end.y2}" r="4"/>`);
+    }));
+    const all=[...DB.domains,...DB.tasks.filter(t=>domById(t.domainId))];
+    svg.setAttribute("width", Math.max(700,...all.map(n=>(n.x||0)+320)));
+    svg.setAttribute("height",Math.max(460,...all.map(n=>(n.y||0)+200)));
     svg.innerHTML=seg.join("");
-    svg.querySelectorAll(".pjm-link").forEach(pa=>pa.addEventListener("click",ev=>{
+    svg.querySelectorAll("path[data-from]").forEach(pa=>pa.addEventListener("click",ev=>{
       ev.stopPropagation();
       const f=pa.dataset.from,t2=pa.dataset.to;
-      if(f===p.id){ toast("That link is implied — give the node an input to change it"); return; }
-      const src=taskById(f); if(!src)return;
-      if(confirm(`Remove the link "${src.title||"(untitled)"}" → "${(taskById(t2)||{}).title||"(untitled)"}"?`)){
-        src.links=(src.links||[]).filter(x=>x!==t2); persist(); renderProjects();
+      const src=taskById(f)||domById(f), dst=taskById(t2)||domById(t2);
+      if(!src||!dst)return;
+      if(!src.links||!src.links.includes(t2)){ toast("That link is implied by the structure"); return; }
+      if(confirm(`Remove the connection "${src.name||src.title||"(untitled)"}" → "${dst.name||dst.title||"(untitled)"}"?`)){
+        src.links=src.links.filter(x=>x!==t2); persist(); renderProjects();
       }
     }));
   }
-  // synchronous, not rAF: offset metrics are already available once the cards
-  // are in the DOM, and rAF callbacks don't fire at all while the page isn't
-  // compositing (a backgrounded tab), which would leave the map link-less
   drawLinks();
 
-  // ── interactions
-  function nodeClicked(id){
-    if(pjConnectFrom){
-      if(pjConnectFrom===id){ pjConnectFrom=null; renderProjects(); return; }
-      const from=pjConnectFrom===p.id?null:taskById(pjConnectFrom);
-      if(from&&id!==p.id){
-        from.links=[...new Set([...(from.links||[]),id])]; persist(); toast("Linked");
-      } else if(!from){ toast("The root already feeds every unlinked node"); }
-      pjConnectFrom=null; renderProjects(); return;
-    }
-    if(id===p.id){ editProjectModal(p.id); return; }
-    pjSelected=id; renderProjects(); openDetail(id);
+  // ── interaction
+  function connectTo(id){
+    const from=taskById(pjConnectFrom)||domById(pjConnectFrom);
+    if(!from){ pjConnectFrom=null; renderProjects(); return; }
+    if(from.id===id){ pjConnectFrom=null; renderProjects(); return; }
+    // a soma may only project onto another soma (that's what an axon is); a
+    // dendrite may feed a sibling dendrite, or reach into another project
+    const target=taskById(id)||domById(id);
+    if(domById(from.id)&&!domById(id)){ toast("A project's axon projects onto another project — pick a soma"); return; }
+    from.links=[...new Set([...(from.links||[]),id])];
+    pjConnectFrom=null; persist(); renderProjects();
+    toast(domById(from.id)?"Axon projected":"Linked");
+  }
+  function clicked(id){
+    if(pjConnectFrom){ connectTo(id); return; }
+    pjSelected=id;
+    if(domById(id)){ renderProjects(); showProjectPanel(host,domById(id)); }
+    else { renderProjects(); openDetail(id); }
   }
   Object.entries(els).forEach(([id,el])=>{
-    let moved=false,sx=0,sy=0,ox=0,oy=0,dragging=false;
-    const rec=id===p.id?p:taskById(id);
+    const rec=taskById(id)||domById(id);
+    let sx=0,sy=0,ox=0,oy=0,dragging=false,moved=false;
     el.addEventListener("pointerdown",ev=>{
       if(ev.target.classList.contains("pjm-plus"))return;
       ev.stopPropagation(); dragging=true; moved=false;
       sx=ev.clientX; sy=ev.clientY; ox=rec.x; oy=rec.y;
-      el.setPointerCapture(ev.pointerId); el.classList.add("drag");
+      try{el.setPointerCapture(ev.pointerId);}catch(_){}
+      el.classList.add("drag");
     });
     el.addEventListener("pointermove",ev=>{
       if(!dragging)return;
@@ -1731,28 +1788,30 @@ function renderProjectMap(host){
       rec.x=Math.round(ox+dx); rec.y=Math.round(oy+dy);
       el.style.left=rec.x+"px"; el.style.top=rec.y+"px"; drawLinks();
     });
-    el.addEventListener("pointerup",ev=>{
+    el.addEventListener("pointerup",()=>{
       if(!dragging)return; dragging=false; el.classList.remove("drag");
-      if(moved){ persist(); } else { nodeClicked(id); }
+      if(moved)persist(); else clicked(id);
     });
     const plus=el.querySelector(".pjm-plus");
-    if(plus) plus.onclick=ev=>{ ev.stopPropagation(); addNodeFrom(id); };
+    if(plus) plus.onclick=ev=>{ ev.stopPropagation(); branchFrom(id); };
   });
 
-  function addNodeFrom(fromId){
-    const n=newProjectNode(p.id);
-    placeNode(n,fromId);
-    if(fromId!==p.id){ const f=taskById(fromId); if(f) f.links=[...new Set([...(f.links||[]),n.id])]; }
+  function branchFrom(fromId){
+    const owner=domById(fromId)||projectOf(taskById(fromId));
+    if(!owner){ toast("Pick a project or one of its subtasks first"); return; }
+    const n=newProjectNode(owner.id);
+    placeDendrite(n,fromId);
+    if(!domById(fromId)){ const f=taskById(fromId); if(f) f.links=[...new Set([...(f.links||[]),n.id])]; }
     DB.tasks.push(n); pjSelected=n.id; persist(); renderProjects(); openDetail(n.id);
     requestAnimationFrame(()=>{ const tf=document.getElementById("e_title"); if(tf){tf.select();tf.focus();} });
   }
 
-  // pan on background drag; a plain click on empty space makes a free node
   let panning=false,px0=0,py0=0,pox=0,poy=0,panMoved=false;
   stage.addEventListener("pointerdown",ev=>{
     if(ev.target!==stage&&ev.target!==world&&ev.target!==svg)return;
     panning=true; panMoved=false; px0=ev.clientX; py0=ev.clientY; pox=pjPan.x; poy=pjPan.y;
-    stage.setPointerCapture(ev.pointerId); stage.classList.add("grabbing");
+    try{stage.setPointerCapture(ev.pointerId);}catch(_){}
+    stage.classList.add("grabbing");
   });
   stage.addEventListener("pointermove",ev=>{
     if(!panning)return;
@@ -1760,47 +1819,52 @@ function renderProjectMap(host){
     if(Math.abs(dx)>3||Math.abs(dy)>3)panMoved=true;
     pjPan.x=pox+dx; pjPan.y=poy+dy; applyTransform();
   });
-  stage.addEventListener("pointerup",ev=>{
+  stage.addEventListener("pointerup",()=>{
     if(!panning)return; panning=false; stage.classList.remove("grabbing");
     if(panMoved)return;
     if(pjConnectFrom){ pjConnectFrom=null; renderProjects(); return; }
-    if(pjSelected){ pjSelected=null; renderProjects(); return; }
-    const r=stage.getBoundingClientRect();
-    const n=newProjectNode(p.id);
-    n.x=Math.round((ev.clientX-r.left-pjPan.x)/pjPan.z);
-    n.y=Math.round((ev.clientY-r.top -pjPan.y)/pjPan.z);
-    DB.tasks.push(n); pjSelected=n.id; persist(); renderProjects(); openDetail(n.id);
-    requestAnimationFrame(()=>{ const tf=document.getElementById("e_title"); if(tf){tf.select();tf.focus();} });
+    if(pjSelected){ pjSelected=null; renderProjects(); }
   });
   stage.addEventListener("wheel",ev=>{
     ev.preventDefault();
     const r=stage.getBoundingClientRect(), mx=ev.clientX-r.left, my=ev.clientY-r.top;
-    const z=Math.max(0.35,Math.min(1.8,pjPan.z*(ev.deltaY<0?1.1:1/1.1)));
-    // keep the point under the cursor fixed while zooming
+    const z=Math.max(0.28,Math.min(1.8,pjPan.z*(ev.deltaY<0?1.1:1/1.1)));
     pjPan.x=mx-(mx-pjPan.x)*(z/pjPan.z); pjPan.y=my-(my-pjPan.y)*(z/pjPan.z);
     pjPan.z=z; applyTransform();
   },{passive:false});
 
   bar.querySelector("#pjm_link").onclick=()=>{
-    pjConnectFrom=pjConnectFrom?null:(pjSelected||null);
-    if(!pjConnectFrom&&!pjSelected) toast("Select the node the link starts from first");
-    renderProjects();
+    if(pjConnectFrom){ pjConnectFrom=null; renderProjects(); return; }
+    if(!pjSelected){ toast("Select the project or subtask the link starts from"); return; }
+    pjConnectFrom=pjSelected; renderProjects();
   };
-  bar.querySelector("#pjm_add").onclick=()=>addNodeFrom(p.id);
+  bar.querySelector("#pjm_addp").onclick=()=>editProjectModal(null);
+  bar.querySelector("#pjm_add").onclick=()=>{
+    const from=pjSelected||(DB.domains[0]||{}).id;
+    if(!from){ toast("Create a project first"); return; }
+    branchFrom(from);
+  };
   bar.querySelector("#pjm_fit").onclick=()=>{
-    const all=[{x:p.x,y:p.y},...nodes];
+    const all=[...DB.domains,...DB.tasks.filter(t=>domById(t.domainId))];
+    if(!all.length)return;
     const minX=Math.min(...all.map(n=>n.x)), minY=Math.min(...all.map(n=>n.y));
-    const maxX=Math.max(...all.map(n=>n.x+200)), maxY=Math.max(...all.map(n=>n.y+90));
+    const maxX=Math.max(...all.map(n=>n.x+SOMA_W)), maxY=Math.max(...all.map(n=>n.y+110));
     const r=stage.getBoundingClientRect();
-    pjPan.z=Math.max(0.35,Math.min(1.4,Math.min(r.width/(maxX-minX+80),r.height/(maxY-minY+80))));
+    pjPan.z=Math.max(0.28,Math.min(1.3,Math.min(r.width/(maxX-minX+90),r.height/(maxY-minY+90))));
     pjPan.x=40-minX*pjPan.z; pjPan.y=30-minY*pjPan.z; applyTransform();
   };
-  wireProjectHeaders(host);
+
+  if(pjSelected&&domById(pjSelected)) showProjectPanel(host,domById(pjSelected));
 }
-function newProjectNode(domainId){
-  return {id:uid("t_"),title:"",domainId,parentId:null,status:"todo",state:"planned",learned:"",
-    priority:2,deadline:null,endDate:null,duration:null,procedureType:null,linkedAnimals:[],
-    autoTitle:false,materials:[],notes:"",deps:[],links:[],target:null,x:null,y:null,created:Date.now()};
+// The selected project's live detail — procedure counts, animal targets,
+// materials and reading — shown under the network rather than as its own
+// screen, so it never competes with seeing the whole thing at once.
+function showProjectPanel(host,p){
+  host.querySelectorAll(".pj-card").forEach(x=>x.remove());
+  const card=document.createElement("div"); card.className="pj-card"; card.style.marginTop="14px";
+  card.innerHTML=projectHeaderHTML(p,{full:true});
+  host.appendChild(card);
+  wireProjectHeaders(host);
 }
 
 /* ---------- TIMELINE (scheduled times) ---------- */
@@ -4969,6 +5033,14 @@ function openTimelineCreateModal(prefillDeadline){
 }
 function paletteHTML(sel){ return DOMAIN_PALETTE.map(c=>`<span class="tag" data-c="${c}" style="cursor:pointer;border-color:${c};${c===sel?`box-shadow:0 0 0 2px ${c}`:""}"><span style="width:12px;height:12px;border-radius:3px;background:${c};display:inline-block"></span></span>`).join(""); }
 
+// Removing a neuron has to remove the axons other neurons project onto it,
+// or the map keeps drawing connections to something that no longer exists.
+function dropProject(id){
+  DB.domains=DB.domains.filter(d=>d.id!==id);
+  DB.domains.forEach(d=>{ d.links=(d.links||[]).filter(x=>x!==id); });
+  if(pjSelected===id)pjSelected=null;
+  if(pjConnectFrom===id)pjConnectFrom=null;
+}
 /* Project editor. `DB.domains` is still the underlying store (renaming the
    field would break every existing save); only the user-facing wording is
    "project". Passing null creates one, same shape as cohortModal(null). */
@@ -5019,7 +5091,7 @@ function editProjectModal(domId){
     Object.assign(dom,{name, color:chosen, status:chosenStatus, targetDate:vTarget||null,
       description:document.getElementById("d_desc").value.trim(),
       cohortIds:[...document.querySelectorAll(".d_co")].filter(c=>c.checked).map(c=>c.dataset.id)});
-    if(creating){ DB.domains.push(dom); pjBoardProject=dom.id; }
+    if(creating){ DB.domains.push(dom); pjSelected=dom.id; }
     persist(); render(); closeModal(); toast(creating?"Project created":"Project saved");
   });
   const delBtn=document.getElementById("d_del");
@@ -5035,13 +5107,11 @@ function editProjectModal(domId){
         const to=document.getElementById("d_reassign").value;
         DB.tasks.forEach(t=>{ if(t.domainId===dom.id)t.domainId=to; });
         DB.readings.forEach(r=>{ if(r.domainId===dom.id)r.domainId=to; });
-        DB.domains=DB.domains.filter(d=>d.id!==dom.id);
-        if(pjBoardProject===dom.id)pjBoardProject=null;
+        dropProject(dom.id);
         persist(); render(); closeModal(); toast("Project deleted, items reassigned");
       });
     } else if(confirm(`Delete "${dom.name}"?`)){
-      DB.domains=DB.domains.filter(d=>d.id!==dom.id);
-      if(pjBoardProject===dom.id)pjBoardProject=null;
+      dropProject(dom.id);
       persist(); render(); closeModal(); toast("Project deleted");
     }
   });
