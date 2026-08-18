@@ -14,7 +14,6 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" href="icons/favicon-32.png">
 <link href="vendor/fonts.css" rel="stylesheet">
-<script src="vendor/d3.min.js"></script>
 <script src="vendor/three.min.js"></script>
 
 <style>
@@ -62,45 +61,81 @@
   .view{position:absolute;inset:0;overflow:auto}
   .view.hidden{display:none}
 
-  /* arbor */
-  #arbor{inset:0;overflow:hidden}
-  #arbor svg{width:100%;height:100%;display:block}
-  .node-label{font-family:var(--mono);font-size:10px;fill:var(--ink-dim);pointer-events:none}
-  .soma-label{font-family:var(--disp);font-weight:600;font-size:12px;pointer-events:none;letter-spacing:.02em}
-  .book-badge{font-size:11px;pointer-events:none}
-  .legend{position:absolute;left:16px;bottom:14px;background:rgba(13,16,23,.86);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:10px;padding:11px 13px;font-size:11px;color:var(--ink-dim);max-width:240px}
-  .legend b{color:var(--ink);font-family:var(--disp);font-size:11px;letter-spacing:.03em;text-transform:uppercase}
-  .legend .row{display:flex;align-items:center;gap:8px;margin-top:6px}
-  .legend .sw{width:22px;height:0;border-top:2px solid var(--ink-dim)}
-  .legend .sw.dash{border-top:2px dashed var(--mruby)}
-  .legend .dot{width:10px;height:10px;border-radius:50%}
-  .hint{position:absolute;right:16px;bottom:14px;font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
-  /* arbor swimlane board */
-  #arbor{overflow:hidden}
-  #arborBoard{padding:20px 22px 60px;min-width:820px}
-  .board-top{display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap}
-  .board-top .lead{font-family:var(--disp);font-size:14px;color:var(--ink)}
-  .board-top .sub{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
-  .swim-head{display:grid;grid-template-columns:190px repeat(4,1fr);gap:10px;position:sticky;top:0;background:var(--bg);padding-bottom:8px;z-index:2}
-  .swim-head .ch{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);padding:4px 8px;display:flex;align-items:center;gap:7px}
-  .swim-head .ch .n{background:var(--panel2);border:1px solid var(--line);border-radius:20px;padding:0 7px;font-size:10px}
-  .lane{display:grid;grid-template-columns:190px repeat(4,1fr);gap:10px;margin-bottom:10px}
-  .lane-head{display:flex;align-items:flex-start;gap:9px;padding:10px 10px;background:var(--panel);border:1px solid var(--line);border-radius:11px;cursor:pointer}
-  .lane-head .soma{width:13px;height:13px;border-radius:50%;flex:0 0 auto;margin-top:2px}
-  .lane-head .nm{font-family:var(--disp);font-size:13px;font-weight:600;line-height:1.25}
-  .lane-head .bd{font-family:var(--mono);font-size:9.5px;color:var(--gold);margin-top:4px}
-  .lane-head .af{font-family:var(--mono);font-size:9px;color:var(--mruby);border:1px solid var(--mruby);border-radius:20px;padding:0 6px;margin-top:5px;display:inline-block}
-  .cell{background:rgba(255,255,255,.012);border:1px solid var(--line);border-radius:11px;padding:7px;min-height:56px;display:flex;flex-direction:column;gap:6px}
-  .cell.blocked{border-color:#3a2530}
-  .tchip{background:var(--panel);border:1px solid var(--line2);border-left:3px solid var(--c,#667);border-radius:8px;padding:7px 9px;cursor:pointer;transition:.12s}
-  .tchip:hover{border-color:var(--ink-faint);transform:translateY(-1px)}
-  .tchip.hl{box-shadow:0 0 0 2px var(--gcamp)}
-  .tchip.dep{box-shadow:0 0 0 2px var(--mruby)}
-  .tchip .tt{font-size:12.5px;line-height:1.3}
-  .tchip.done .tt{color:var(--ink-faint);text-decoration:line-through}
-  .tchip .sub{display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap}
-  .tchip .par{font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
-  .cell .empty-c{color:var(--ink-faint);font-size:11px;font-family:var(--mono);text-align:center;padding:8px 0;opacity:.5}
+  /* ---- projects: shared ---- */
+  /* plain block layout (same shape as the Materials tab): a flex column here
+     would combine with .wrap's `margin:0 auto` to shrink-wrap the body to its
+     content, which the timeline can't measure against since its own width is
+     what it's trying to compute. The .view's own overflow:auto carries the
+     sideways scroll when a wide month board exceeds the viewport. */
+  #ps-body{padding:16px 22px 60px;max-width:1060px;margin:0 auto}
+  .pj-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden}
+  .pj-head{display:flex;align-items:center;gap:9px;padding:11px 13px;flex-wrap:wrap}
+  .pj-head .chip{width:11px;height:11px;border-radius:50%;flex:0 0 auto}
+  .pj-head h3{font-family:var(--disp);font-size:14px;font-weight:600;margin:0}
+  .pj-head .pj-edit{margin-left:auto;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px;cursor:pointer}
+  .pj-status{font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;border:1px solid var(--line2);border-radius:20px;padding:1px 8px;color:var(--ink-dim)}
+  .pj-status.planning{color:#7db4ff;border-color:#2f4a6b}
+  .pj-status.active{color:var(--gcamp);border-color:#2f6b4a}
+  .pj-status.paused{color:var(--amber);border-color:#8a6a2f}
+  .pj-status.completed{color:var(--ink-faint)}
+  .pj-desc{padding:0 13px 9px;font-size:12.5px;color:var(--ink-dim);line-height:1.55}
+  .pj-facts{display:flex;gap:7px;flex-wrap:wrap;padding:0 13px 11px}
+  .pj-fact{font-family:var(--mono);font-size:10px;color:var(--ink-dim);background:var(--panel2);border:1px solid var(--line2);border-radius:20px;padding:2px 9px;display:inline-flex;align-items:center;gap:5px}
+  .pj-fact.met{color:var(--gcamp);border-color:#2f6b4a}
+  .pj-fact.warn{color:var(--overdue);border-color:#6b2f3a}
+  .pj-sec{border-top:1px solid var(--line);padding:9px 13px}
+  .pj-sec h4{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 7px;font-weight:400}
+  .pj-readrow{display:flex;align-items:center;gap:7px;font-size:12px;padding:2px 0;color:var(--ink-dim)}
+  .pj-readrow input{width:auto;margin:0}
+  .pj-readrow .rd{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pj-readrow .rd.done{color:var(--ink-faint);text-decoration:line-through}
+  /* ---- projects: timeline (continuous date axis) ---- */
+  .pj-tl-nav{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .pj-tl-nav h2{font-family:var(--disp);font-size:14px;margin:0 4px;min-width:190px}
+  .pj-axis{position:relative;height:22px;margin-left:var(--laneW,170px);border-bottom:1px solid var(--line2)}
+  .pj-axis .tk{position:absolute;top:0;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);padding-left:4px;border-left:1px solid var(--line);height:22px;box-sizing:border-box;white-space:nowrap;overflow:hidden}
+  .pj-lane{display:flex;align-items:stretch;border-bottom:1px solid var(--line);min-height:46px}
+  .pj-lane-head{flex:0 0 var(--laneW,170px);width:var(--laneW,170px);padding:8px 10px 8px 0;display:flex;flex-direction:column;gap:3px;cursor:pointer;box-sizing:border-box}
+  .pj-lane-head .nm{font-family:var(--disp);font-size:12.5px;display:flex;align-items:center;gap:6px}
+  .pj-lane-head .nm .chip{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .pj-lane-head .mini{font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
+  .pj-track{flex:1;position:relative;min-height:46px;border-left:1px solid var(--line2);cursor:crosshair}
+  .pj-grid{position:absolute;inset:0;pointer-events:none}
+  .pj-grid span{position:absolute;top:0;bottom:0;width:1px;background:var(--line)}
+  .pj-grid span.today{background:var(--mruby);opacity:.55;width:2px}
+  .pj-bar{position:absolute;height:20px;border-radius:5px;padding:0 6px;font-size:11px;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;box-sizing:border-box;border:1px solid rgba(255,255,255,.14);color:#0b0f16;font-weight:600}
+  .pj-bar:hover{filter:brightness(1.15)}
+  .pj-bar.done{opacity:.45;text-decoration:line-through}
+  .pj-bar.blocked{outline:1px solid var(--overdue);outline-offset:1px}
+  .pj-tick{position:absolute;width:7px;height:7px;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid rgba(0,0,0,.45)}
+  .pj-target-mark{position:absolute;top:2px;bottom:2px;width:2px;background:var(--gold);opacity:.8}
+  /* ---- projects: board ---- */
+  .pj-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+  .pj-pill{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .pj-pill .chip{width:8px;height:8px;border-radius:50%}
+  .pj-pill.on{color:var(--ink);border-color:currentColor}
+  .pj-cols{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:start}
+  .pj-col{background:rgba(255,255,255,.012);border:1px solid var(--line);border-radius:11px;padding:8px;min-height:80px}
+  .pj-col h4{font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px;display:flex;align-items:center;gap:6px;font-weight:400}
+  .pj-col h4 .n{background:var(--panel2);border:1px solid var(--line);border-radius:20px;padding:0 6px;font-size:9.5px}
+  .pj-taskcard{background:var(--panel);border:1px solid var(--line2);border-left:3px solid var(--c,#667);border-radius:8px;padding:7px 9px;margin-bottom:6px}
+  .pj-taskcard .tt{font-size:12.5px;line-height:1.3;cursor:pointer}
+  .pj-taskcard.done .tt{color:var(--ink-faint);text-decoration:line-through}
+  .pj-taskcard .row{display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap}
+  .pj-cycle{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:1px 7px;font-size:10px;cursor:pointer;font-family:var(--mono)}
+  .pj-addtask{width:100%;border:1px dashed var(--line2);background:transparent;color:var(--ink-faint);border-radius:7px;padding:4px;font-size:11.5px;cursor:pointer}
+  .pj-addtask:hover{border-color:var(--gcamp);color:var(--ink-dim)}
+  .tgt-count,.pj-sub-count{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);background:var(--panel2);border:1px solid var(--line2);border-radius:20px;padding:1px 7px}
+  .tgt-count.met{color:var(--gcamp);border-color:#2f6b4a}
+  .subtask-list{display:flex;flex-direction:column;gap:3px}
+  .subtask-row{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-dim);cursor:pointer}
+  .subtask-row input{width:auto;margin:0}
+  .subtask-row .e_sub_open,.pj-subrow .s-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .subtask-row .done,.pj-subrow .s-t.done{color:var(--ink-faint);text-decoration:line-through}
+  .pj-subrow{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-dim);padding-left:4px;margin-top:3px}
+  .pj-subrow input{width:auto;margin:0}
+  @media(max-width:760px){ .pj-cols{grid-template-columns:1fr 1fr} }
+  @media(max-width:480px){ .pj-cols{grid-template-columns:1fr} }
   /* custom date+time picker */
   .datebtn{width:100%;text-align:left;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:13px;cursor:pointer}
   .datebtn:hover{border-color:var(--gcamp)}
@@ -440,6 +475,7 @@
   <div class="top">
     <div class="brand"><h1>Arbor Animals</h1><span class="sub">Segev · Schiller lab</span></div>
     <div class="tabs" id="tabs">
+      <button class="tab" data-v="projects">Projects</button>
       <button class="tab" data-v="timeline">Timeline</button>
       <button class="tab" data-v="materials">Materials</button>
       <button class="tab on" data-v="animals">Animals</button>
@@ -454,16 +490,13 @@
   </div>
 
   <div class="main">
-    <div class="view hidden" id="arbor">
-      <svg id="svg"></svg>
-      <div class="arbor-tools">
-        <button id="ar_link" title="Create a dependency by clicking two tasks">＋ Link tasks</button>
-        <button id="ar_deps" class="on">Dependencies: shown</button>
+    <div class="view hidden" id="projects">
+      <div class="mat-subtabs" id="projSubTabs">
+        <button class="mat-stab on" data-ps="timeline">Timeline</button>
+        <button class="mat-stab" data-ps="board">Board</button>
       </div>
-
-      <div class="hint">drag · scroll to zoom · click a node</div>
+      <div id="ps-body"></div>
     </div>
-    <div class="view hidden wrap" id="outline"></div>
     <div class="view hidden wrap" id="timeline"></div>
     <div class="view hidden" id="materials">
       <div class="mat-subtabs" id="matSubTabs">
@@ -983,6 +1016,17 @@ function migrate(){                       // backfill fields added in later vers
     const dom=domById(c.domainId);
     c.color=dom?dom.color:DOMAIN_PALETTE[i%DOMAIN_PALETTE.length];
   });
+  // domains, reframed as "projects": status replaces the old active-focus
+  // boolean (which only ever drove one highlight in the now-retired graph
+  // view) with a real planning status; description/targetDate/cohortIds are
+  // new. Existing active:true domains become status:"active" so nothing
+  // silently reverts to "planning" on upgrade.
+  DB.domains.forEach(d=>{
+    if(!d.status) d.status=d.active?"active":"planning";
+    if(d.description==null) d.description="";
+    if(d.targetDate===undefined) d.targetDate=null;
+    if(!Array.isArray(d.cohortIds)) d.cohortIds=[];
+  });
 }
 const uid=p=>p+Math.random().toString(36).slice(2,8);
 
@@ -1020,6 +1064,8 @@ const readingsFor=domId=>DB.readings.filter(r=>r.domainId===domId);
 const unreadMandatory=()=>DB.readings.filter(r=>r.tag==="mandatory"&&r.status!=="read");
 const STAT={todo:"#5b6678",active:"var(--gcamp)",blocked:"var(--overdue)",done:"#3a4252"};
 const STAT_LABEL={todo:"To do",active:"Active",blocked:"Blocked",done:"Done"};
+const TASK_STATUSES=["todo","active","blocked","done"];
+const PROJECT_STATUSES=[["planning","Planning"],["active","Active"],["paused","Paused"],["completed","Completed"]];
 const PRI_COL={1:"#3a4252",2:"#6d7a92",3:"#f2b756"};
 function whenDate(s){ if(!s)return null; return new Date(s.length<=10? s+"T00:00:00": s); }
 function hasTime(s){ return !!s && s.length>10; }
@@ -1324,8 +1370,7 @@ function switchTo(v){
 function render(){
   updateReadNudge();
   updateNotifyNudge();
-  if(currentView==="arbor")renderArbor();
-  else if(currentView==="outline")renderOutline();
+  if(currentView==="projects")renderProjects();
   else if(currentView==="timeline")renderTimeline();
   else if(currentView==="materials")renderMaterials();
   else if(currentView==="reading")renderReading();
@@ -1400,217 +1445,286 @@ function openNotificationsModal(){
 }
 document.getElementById("notifyNudge").addEventListener("click",openNotificationsModal);
 
-/* ---------- ARBOR — floating somata + branching subtasks (force graph) ----------
-   Domains float as somata; tasks branch from their parent (or the soma) via solid links.
-   Dependencies are dashed prereq→dependent links. Improvements over the first version:
-   (1) create a dependency directly in the graph via "Link tasks" mode;
-   (2) hover any node to isolate its links (declutter);
-   (3) toggle dependency links on/off; (4) click a dashed link to delete it. */
-let arSim=null, arZoomG=null, arLinkMode=false, arShowDeps=true, arLinkSrc=null;
-function taskReady(t){ return (t.deps||[]).every(d=>{ const dt=taskById(d); return !dt||dt.status==="done"; }); }
-function arBanner(){
-  let b=document.querySelector("#arbor .link-banner"); 
-  if(!arLinkMode){ if(b)b.remove(); return; }
-  if(!b){ b=document.createElement("div"); b.className="link-banner"; document.getElementById("arbor").appendChild(b); }
-  b.textContent = arLinkSrc? `Now click the DEPENDENT task (the one that needs "${taskById(arLinkSrc)?.title.slice(0,28)}")` : "Link mode: click the PREREQUISITE task first";
+/* ---------- PROJECTS ------------------------------------------------------
+   Project planning, built on the domain/task model that has been in the data
+   all along, but wired into the animal/procedure/material/reading systems
+   rather than sitting beside them: every number a project shows about its
+   real-world progress (animals operated, targets met, stock status) is
+   counted live off the actual records, never stored or hand-maintained, so
+   it cannot drift out of date. Two sub-views share one project header:
+   Timeline (a date axis with one lane per project) and Board (one project's
+   tasks in status columns).                                              */
+let projectsSubTab="timeline";
+let pjScale="week";       // "week" | "month"
+let pjOffset=0;           // weeks (week scale) or months (month scale) from now
+let pjBoardProject=null;  // which project the Board is showing
+const PJ_PROC_TYPES=["surgery","perfusion","histology","microscopy"];
+const DAY_MS=864e5;
+
+function projectCohorts(p){ return (DB.cohorts||[]).filter(c=>(p.cohortIds||[]).includes(c.id)); }
+function projectAnimals(p){
+  const names=new Set(projectCohorts(p).map(c=>c.name));
+  return names.size?DB.animals.filter(a=>names.has(a.cohort)):[];
 }
-function renderArbor(){
-  const svg=d3.select("#svg"); svg.selectAll("*").remove();
-  const el=document.getElementById("arbor"),W=el.clientWidth,H=el.clientHeight;
-  // toolbar wiring (static elements; rebind each render)
-  const lb=document.getElementById("ar_link"), db=document.getElementById("ar_deps");
-  lb.classList.toggle("on",arLinkMode); lb.textContent=arLinkMode?"✓ Linking… (click 2 tasks)":"＋ Link tasks";
-  db.classList.toggle("on",arShowDeps); db.textContent=arShowDeps?"Dependencies: shown":"Dependencies: hidden";
-  lb.onclick=()=>{ arLinkMode=!arLinkMode; arLinkSrc=null; arBanner(); renderArbor(); };
-  db.onclick=()=>{ arShowDeps=!arShowDeps; renderArbor(); };
-  arBanner();
+function projectTasks(p){ return DB.tasks.filter(t=>t.domainId===p.id); }
+// live procedure counts across every animal in the project's cohorts —
+// hasProcEntry already defines "done" as a diary entry dated today or earlier
+function projectProcStats(p){
+  const animals=projectAnimals(p); if(!animals.length)return null;
+  return PJ_PROC_TYPES.map(ptype=>({ptype, def:diaryTypeDef(ptype),
+    done:animals.filter(a=>hasProcEntry(a,ptype,true)).length, total:animals.length}));
+}
+function projectMaterials(p){
+  const names=new Set();
+  projectTasks(p).forEach(t=>(t.materials||[]).forEach(m=>names.add(m)));
+  return [...names].map(m=>({name:m, inv:invOf(m)}));
+}
+function dateOnly(s){ const d=whenDate(s); if(!d)return null; d.setHours(0,0,0,0); return d; }
 
-  const defs=svg.append("defs");
-  const f=defs.append("filter").attr("id","glow").attr("x","-60%").attr("y","-60%").attr("width","220%").attr("height","220%");
-  f.append("feGaussianBlur").attr("stdDeviation","3.2").attr("result","b");
-  const mg=f.append("feMerge"); mg.append("feMergeNode").attr("in","b"); mg.append("feMergeNode").attr("in","SourceGraphic");
-  arZoomG=svg.append("g");
-  svg.call(d3.zoom().scaleExtent([0.3,2.4]).on("zoom",ev=>arZoomG.attr("transform",ev.transform)));
-  svg.style("touch-action","none"); // let D3 handle all touch events (enables pinch+drag)
-
-  // nodes: somata (domains) + tasks
-  const nodes=[],links=[];
-  DB.domains.forEach(d=>nodes.push({id:d.id,type:"soma",name:d.name,color:d.color,active:d.active}));
-  DB.tasks.forEach(t=>nodes.push({id:t.id,type:"task",t}));
-  const nById=Object.fromEntries(nodes.map(nd=>[nd.id,nd]));
-  DB.tasks.forEach(t=>{
-    const target=t.parentId&&nById[t.parentId]?t.parentId:t.domainId;
-    if(nById[target])links.push({source:t.id,target,kind:"branch",color:domById(t.domainId)?.color||"#556"});
-    (t.deps||[]).forEach(dep=>{ if(nById[dep])links.push({source:dep,target:t.id,kind:"dep"}); });
+function renderProjects(){
+  const tabBar=document.getElementById("projSubTabs");
+  tabBar.querySelectorAll(".mat-stab").forEach(b=>{
+    b.classList.toggle("on",b.dataset.ps===projectsSubTab);
+    b.onclick=()=>{ projectsSubTab=b.dataset.ps; renderProjects(); };
   });
-  const visible=links.filter(l=>l.kind==="branch"||arShowDeps);
-
-  const link=arZoomG.append("g").selectAll("path").data(visible).join("path")
-    .attr("fill","none")
-    .attr("stroke",d=>d.kind==="dep"?"var(--mruby)":d.color)
-    .attr("stroke-opacity",d=>d.kind==="dep"?0.5:0.3)
-    .attr("stroke-width",d=>d.kind==="dep"?1.5:1.6)
-    .attr("stroke-dasharray",d=>d.kind==="dep"?"5 4":null)
-    .style("cursor",d=>d.kind==="dep"?"pointer":"default")
-    .on("click",(ev,d)=>{ if(d.kind!=="dep")return; ev.stopPropagation();
-      const dependent=taskById(typeof d.target==="object"?d.target.id:d.target), prereq=(typeof d.source==="object"?d.source.id:d.source);
-      if(dependent && confirm(`Remove dependency?\n"${dependent.title}" will no longer wait on its prerequisite.`)){
-        dependent.deps=(dependent.deps||[]).filter(x=>x!==prereq); persist(); renderArbor(); }
-    });
-
-  const node=arZoomG.append("g").selectAll("g").data(nodes).join("g").style("cursor","pointer")
-    .call(d3.drag()
-      .on("start",(ev,d)=>{if(!ev.active)arSim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
-      .on("drag",(ev,d)=>{d.fx=ev.x;d.fy=ev.y;})
-      .on("end",(ev,d)=>{if(!ev.active)arSim.alphaTarget(0);d.fx=null;d.fy=null;}))
-    .on("click",(ev,d)=>{
-      if(arLinkMode && d.type==="task"){
-        if(!arLinkSrc){ arLinkSrc=d.id; arBanner(); highlightNode(d.id); }
-        else if(arLinkSrc===d.id){ arLinkSrc=null; arBanner(); unhighlight(); }
-        else { const dep=taskById(d.id); if(!(dep.deps||[]).includes(arLinkSrc)){ dep.deps=[...(dep.deps||[]),arLinkSrc]; persist(); toast("Dependency created"); }
-               arLinkSrc=null; renderArbor(); }
-        return;
-      }
-      if(d.type==="task")openDetail(d.id); else editDomainModal(d.id);
-    })
-    .on("mouseenter",(ev,d)=>{ if(!arLinkMode)highlightNode(d.id); })
-    .on("mouseleave",()=>{ if(!arLinkMode)unhighlight(); });
-
-  // somata
-  const soma=node.filter(d=>d.type==="soma");
-  soma.append("circle").attr("r",16).attr("fill",d=>d.color).attr("fill-opacity",d=>d.active?.28:.16)
-    .attr("stroke",d=>d.color).attr("stroke-width",d=>d.active?3:2).attr("filter",d=>d.active?"url(#glow)":null);
-  soma.append("circle").attr("r",4).attr("fill",d=>d.color);
-  soma.append("text").attr("class","soma-label").attr("x",21).attr("y",4).attr("fill",d=>d.color).text(d=>d.name);
-  soma.append("text").attr("class","book-badge").attr("x",21).attr("y",18).attr("fill","var(--gold)")
-    .text(d=>{ const na=DB.animals.filter(a=>(a.tasks||[]).some(tid=>{const t=taskById(tid);return t&&t.domainId===d.id;})).length;
-      const ur=readingsFor(d.id).filter(r=>r.tag==="mandatory"&&r.status!=="read").length;
-      return [na?`🐁 ${na}`:"",ur?`📖 ${ur}`:""].filter(Boolean).join("  "); });
-
-  // tasks
-  const task=node.filter(d=>d.type==="task");
-  const rOf=t=>6+(t.priority||2)*2.2;
-  task.append("circle").attr("r",d=>rOf(d.t))
-    .attr("fill",d=>domById(d.t.domainId)?.color||"#667")
-    .attr("fill-opacity",d=>d.t.status==="done"?.18:(d.t.status==="active"?.95:.55))
-    .attr("stroke",d=>d.t.status==="active"?"#fff":STAT[d.t.status]).attr("stroke-width",d=>d.t.status==="blocked"?2.6:(d.t.status==="active"?1.6:2))
-    .attr("filter",d=>d.t.status==="active"?"url(#glow)":null);
-  task.append("text").attr("class","node-label").attr("x",d=>rOf(d.t)+5).attr("y",3)
-    .text(d=>{const s=d.t.title; return s.length>26?s.slice(0,25)+"…":s;});
-
-  // hover isolate helpers
-  function touches(l,id){ const s=typeof l.source==="object"?l.source.id:l.source, tg=typeof l.target==="object"?l.target.id:l.target; return s===id||tg===id; }
-  function neighborIds(id){ const set=new Set([id]); visible.forEach(l=>{ if(touches(l,id)){ set.add(typeof l.source==="object"?l.source.id:l.source); set.add(typeof l.target==="object"?l.target.id:l.target);} }); return set; }
-  window.highlightNode=(id)=>{ const keep=neighborIds(id);
-    node.style("opacity",d=>keep.has(d.id)?1:0.18);
-    link.style("opacity",l=>touches(l,id)?1:0.06).style("stroke-width",l=>touches(l,id)?(l.kind==="dep"?2.4:2.2):(l.kind==="dep"?1.5:1.6)); };
-  window.unhighlight=()=>{ node.style("opacity",1); link.style("opacity",null).style("stroke-width",l=>l.kind==="dep"?1.5:1.6); };
-
-  arSim=d3.forceSimulation(nodes)
-    .force("link",d3.forceLink(links).id(d=>d.id).distance(d=>d.kind==="dep"?120:66).strength(d=>d.kind==="dep"?.05:.9))
-    .force("charge",d3.forceManyBody().strength(-300))
-    .force("collide",d3.forceCollide().radius(d=>d.type==="soma"?54:rOf(d.t)+13))
-    .force("center",d3.forceCenter(W/2,H/2))
-    .force("x",d3.forceX(W/2).strength(.02)).force("y",d3.forceY(H/2).strength(.02))
-    .on("tick",()=>{
-      link.attr("d",d=>{ const a=d.source,b=d.target; const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
-        return d.kind==="dep"? `M${a.x},${a.y} Q ${mx},${my-30} ${b.x},${b.y}` : `M${a.x},${a.y} L ${b.x},${b.y}`; });
-      node.attr("transform",d=>`translate(${d.x},${d.y})`);
-    });
+  const host=document.getElementById("ps-body"); host.innerHTML="";
+  if(!DB.domains.length){
+    const e=document.createElement("div"); e.className="empty"; e.style.padding="34px 0";
+    e.innerHTML=`No projects yet.<div style="margin-top:12px"><button class="btn accent" id="pj_first">＋ New project</button></div>`;
+    host.appendChild(e);
+    e.querySelector("#pj_first").onclick=()=>editProjectModal(null);
+    return;
+  }
+  if(projectsSubTab==="board") renderProjectsBoard(host);
+  else renderProjectsTimeline(host);
 }
-
-
-/* ---------- OUTLINE ---------- */
-const collapsed=new Set();          // collapsed task subtrees
-const collapsedDomains=new Set();   // collapsed whole domains
-let hideCompleted=false;
-function subtreeAllDone(t){ if(t.status!=="done")return false; return childrenOf(t.id).every(subtreeAllDone); }
-function moveTask(id,dir){
-  const t=taskById(id); if(!t)return;
-  const sibs=DB.tasks.filter(x=> (x.parentId||null)===(t.parentId||null) && (t.parentId? true : x.domainId===t.domainId));
-  const j=sibs.indexOf(t), swap=sibs[j+dir]; if(!swap)return;
-  const iA=DB.tasks.indexOf(t), iB=DB.tasks.indexOf(swap);
-  DB.tasks[iA]=swap; DB.tasks[iB]=t; persist(); renderOutline();
+// The header block shown above a project — the integration payoff: procedure
+// progress, material stock and reading list all pulled live from the systems
+// that already own that data.
+function projectHeaderHTML(p,opts){
+  opts=opts||{};
+  const stats=projectProcStats(p), mats=projectMaterials(p), reads=readingsFor(p.id);
+  const short=v=>v?fmtWhenFull(v).replace(/,.*$/,""):"";
+  const factRows=[];
+  if(stats) factRows.push(stats.map(s=>`<span class="pj-fact ${s.done>=s.total?"met":""}">${s.def.icon} ${s.def.label} ${s.done}/${s.total}</span>`).join(""));
+  const tgtTasks=projectTasks(p).map(t=>targetProgress(t)).filter(Boolean);
+  if(tgtTasks.length) factRows.push(tgtTasks.map(g=>`<span class="pj-fact ${g.want&&g.have>=g.want?"met":""}">🐭 ${esc(g.cohort.name)}${g.tpl?" · "+esc(g.tpl.name):""} ${g.have}/${g.want||"—"}</span>`).join(""));
+  if(p.targetDate) factRows.push(`<span class="pj-fact">🎯 target ${esc(short(p.targetDate))}</span>`);
+  return `<div class="pj-head">
+      <span class="chip" style="background:${p.color}"></span>
+      <h3>${esc(p.name)}</h3>
+      <span class="pj-status ${p.status||"planning"}">${esc((PROJECT_STATUSES.find(s=>s[0]===(p.status||"planning"))||[])[1]||"Planning")}</span>
+      <button class="pj-edit" data-pj="${p.id}">✎ edit</button>
+    </div>
+    ${p.description?`<div class="pj-desc">${esc(p.description)}</div>`:""}
+    ${factRows.length?`<div class="pj-facts">${factRows.join("")}</div>`:""}
+    ${opts.full&&mats.length?`<div class="pj-sec"><h4>Materials</h4><div class="pj-facts" style="padding:0">
+      ${mats.map(m=>`<span class="pj-fact ${m.inv.status==="out"||m.inv.status==="low"?"warn":""}"><span style="width:7px;height:7px;border-radius:50%;background:${STOCK[m.inv.status].color};display:inline-block"></span>${esc(m.name)}</span>`).join("")}
+    </div></div>`:""}
+    ${opts.full?`<div class="pj-sec"><h4>Reading (${reads.filter(r=>r.status==="read").length}/${reads.length})</h4>
+      ${reads.length?reads.map(r=>`<label class="pj-readrow">
+          <input type="checkbox" class="pj-read-chk" data-id="${r.id}" ${r.status==="read"?"checked":""}>
+          <span class="rd ${r.status==="read"?"done":""}">${esc(r.title)}</span>
+          ${r.link?`<a class="rlink" href="${escAttr(r.link)}" target="_blank" rel="noopener">open ↗</a>`:""}
+        </label>`).join(""):`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">nothing yet</div>`}
+      <button class="btn ghost pj-addread" data-pj="${p.id}" style="font-size:11.5px;padding:4px 9px;margin-top:7px">＋ add reading</button></div>`:""}`;
 }
-function duplicateTask(id){
-  const t=taskById(id); if(!t)return; const idMap={};
-  (function clone(orig,newParent){
-    const copy={...orig,id:uid("t_"),parentId:newParent,deps:[...(orig.deps||[])],materials:[...(orig.materials||[])],created:Date.now()};
-    idMap[orig.id]=copy.id; DB.tasks.push(copy);
-    childrenOf(orig.id).filter(c=>!Object.values(idMap).includes(c.id)).forEach(c=>clone(c,copy.id));
-    return copy;
-  })(t,t.parentId);
-  taskById(idMap[t.id]).title=t.title+" (copy)";
-  Object.values(idMap).forEach(nid=>{ const nt=taskById(nid); nt.deps=(nt.deps||[]).map(d=>idMap[d]||d); });
-  persist(); renderOutline(); toast("Task + subtree duplicated");
-}
-function renderOutline(){
-  const host=document.getElementById("outline"); host.innerHTML="";
-  // toolbar
-  const bar=document.createElement("div");
-  bar.style.cssText="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;align-items:center";
-  bar.innerHTML=`<button class="btn ghost" id="ol_expand">⤢ Expand all</button>
-    <button class="btn ghost" id="ol_roots">⇧ Collapse to first level</button>
-    <button class="btn ghost" id="ol_domains">▸ Collapse domains</button>
-    <div class="spacer" style="flex:1"></div>
-    <button class="btn ${hideCompleted?"accent":"ghost"}" id="ol_hide">${hideCompleted?"☑":"☐"} Hide completed</button>`;
-  host.appendChild(bar);
-  bar.querySelector("#ol_expand").onclick=()=>{ collapsed.clear(); collapsedDomains.clear(); renderOutline(); };
-  bar.querySelector("#ol_roots").onclick=()=>{ collapsedDomains.clear(); collapsed.clear();
-    DB.tasks.forEach(t=>{ if(childrenOf(t.id).length) collapsed.add(t.id); }); renderOutline(); };
-  bar.querySelector("#ol_domains").onclick=()=>{ DB.domains.forEach(d=>collapsedDomains.add(d.id)); renderOutline(); };
-  bar.querySelector("#ol_hide").onclick=()=>{ hideCompleted=!hideCompleted; renderOutline(); };
-
-  DB.domains.forEach(dom=>{
-    const roots=DB.tasks.filter(t=>t.domainId===dom.id&&(!t.parentId||!taskById(t.parentId)||taskById(t.parentId).domainId!==dom.id));
-    const all=DB.tasks.filter(t=>t.domainId===dom.id);
-    const unread=readingsFor(dom.id).filter(r=>r.tag==="mandatory"&&r.status!=="read").length;
-    const domOpen=!collapsedDomains.has(dom.id);
-    const block=document.createElement("div"); block.className="domain-block";
-    const head=document.createElement("div"); head.className="domain-head"; head.style.cursor="pointer";
-    head.innerHTML=`<span class="caret" style="width:12px">${domOpen?"▾":"▸"}</span>
-      <span class="chip" style="background:${dom.color}"></span>
-      <h2>${esc(dom.name)}</h2><span class="count">${all.length} task${all.length!==1?"s":""}</span>
-      ${dom.active?`<span class="activeflag">active</span>`:""}
-      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
-        ${unread?`<span class="pill read">📖 ${unread} to read</span>`:""}
-        <button class="dom-edit" title="Edit domain" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px">✎ edit</button>
-      </span>`;
-    head.onclick=()=>{ collapsedDomains.has(dom.id)?collapsedDomains.delete(dom.id):collapsedDomains.add(dom.id); renderOutline(); };
-    head.querySelector(".dom-edit").addEventListener("click",e=>{ e.stopPropagation(); editDomainModal(dom.id); });
-    block.appendChild(head);
-    if(domOpen){
-      const ul=document.createElement("ul"); ul.className="tree";
-      roots.forEach(r=>{ const nn=taskNode(r); if(nn)ul.appendChild(nn); }); block.appendChild(ul);
-      if(!ul.children.length){ const e=document.createElement("div"); e.className="empty"; e.style.padding="14px 0"; e.textContent=hideCompleted?"nothing outstanding":"no tasks yet"; block.appendChild(e); }
-    }
-    host.appendChild(block);
+// shared wiring for whatever project headers a sub-view rendered
+function wireProjectHeaders(host){
+  host.querySelectorAll(".pj-edit").forEach(b=>b.onclick=e=>{ e.stopPropagation(); editProjectModal(b.dataset.pj); });
+  host.querySelectorAll(".pj-read-chk").forEach(cb=>cb.onchange=()=>{
+    const r=DB.readings.find(x=>x.id===cb.dataset.id); if(!r)return;
+    r.status=cb.checked?"read":"unread"; persist(); renderProjects();
+  });
+  host.querySelectorAll(".pj-addread").forEach(b=>b.onclick=()=>{
+    addReadingModal();
+    // preselect this project in the existing (unmodified) add-reading modal
+    const sel=document.getElementById("r_dom"); if(sel) sel.value=b.dataset.pj;
   });
 }
-function taskNode(t){
-  if(hideCompleted && subtreeAllDone(t)) return null;
-  const li=document.createElement("li"); li.className="leaf";
-  const kids=childrenOf(t.id),isOpen=!collapsed.has(t.id),dcls=dueClass(t.deadline,t.status,t.endDate);
-  const row=document.createElement("div"); row.className="task-row"+(t.id===selectedId?" sel":"");
-  row.innerHTML=`<span class="pri" style="background:${PRI_COL[t.priority||2]}"></span>
-    <span class="caret">${kids.length?(isOpen?"▾":"▸"):""}</span>
-    <span class="stat" style="background:${STAT[t.status]}"></span>
-    <span class="ttl ${t.status==="done"?"done":""}">${esc(t.title)}</span>
-    <span class="meta">${(t.materials&&t.materials.length)?`<span class="pill mat">⚙ ${t.materials.length}</span>`:""}
-      ${t.deadline?`<span class="pill due ${dcls}">${fmtDue(t.deadline)}</span>`:""}
-      <span class="rowacts" style="display:inline-flex;gap:3px;opacity:.55">
-        <button class="ra" data-act="up" title="move up" style="border:0;background:transparent;color:var(--ink-dim);cursor:pointer;font-size:11px;padding:1px 3px">▲</button>
-        <button class="ra" data-act="down" title="move down" style="border:0;background:transparent;color:var(--ink-dim);cursor:pointer;font-size:11px;padding:1px 3px">▼</button>
-        <button class="ra" data-act="dup" title="duplicate task + children" style="border:0;background:transparent;color:var(--ink-dim);cursor:pointer;font-size:12px;padding:1px 3px">⧉</button>
-      </span></span>`;
-  row.querySelector(".caret").addEventListener("click",e=>{e.stopPropagation(); collapsed.has(t.id)?collapsed.delete(t.id):collapsed.add(t.id); renderOutline();});
-  row.querySelector(".ttl").addEventListener("click",()=>openDetail(t.id));
-  row.querySelector(".stat").addEventListener("click",e=>{e.stopPropagation();cycleStatus(t.id);});
-  row.querySelectorAll(".ra").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation();
-    const a=b.dataset.act; if(a==="up")moveTask(t.id,-1); else if(a==="down")moveTask(t.id,1); else duplicateTask(t.id); }));
-  li.appendChild(row);
-  if(kids.length&&isOpen){ const ul=document.createElement("ul"); kids.forEach(k=>{ const nn=taskNode(k); if(nn)ul.appendChild(nn); }); li.appendChild(ul); }
-  return li;
+
+/* ---- Timeline: continuous date axis, one lane per project ---------------- */
+function pjWindow(){
+  const d=new Date(); d.setHours(0,0,0,0);
+  if(pjScale==="week"){
+    const s=new Date(d); s.setDate(d.getDate()-d.getDay()+pjOffset*7);
+    const e=new Date(s); e.setDate(s.getDate()+7);
+    return {start:s,end:e,label:`${s.toLocaleDateString(undefined,{month:"short",day:"numeric"})} – ${new Date(e-DAY_MS).toLocaleDateString(undefined,{month:"short",day:"numeric"})}, ${s.getFullYear()}`};
+  }
+  const s=new Date(d.getFullYear(),d.getMonth()+pjOffset,1);
+  const e=new Date(s.getFullYear(),s.getMonth()+6,1);   // ~6-month rolling window
+  return {start:s,end:e,label:`${s.toLocaleDateString(undefined,{month:"short",year:"numeric"})} – ${new Date(e-DAY_MS).toLocaleDateString(undefined,{month:"short",year:"numeric"})}`};
+}
+function renderProjectsTimeline(host){
+  const win=pjWindow(), spanDays=Math.round((win.end-win.start)/DAY_MS);
+  const nav=document.createElement("div"); nav.className="pj-tl-nav";
+  nav.innerHTML=`<button class="cal-nav-btn" id="pj_prev">‹</button>
+    <button class="cal-nav-btn today" id="pj_today">Today</button>
+    <button class="cal-nav-btn" id="pj_next">›</button>
+    <h2>${esc(win.label)}</h2>
+    <div class="seg" style="flex:0 0 auto;width:auto">
+      <button data-sc="week"  class="${pjScale==="week"?"on":""}" style="padding:5px 12px;font-size:11.5px">Week</button>
+      <button data-sc="month" class="${pjScale==="month"?"on":""}" style="padding:5px 12px;font-size:11.5px">Month</button>
+    </div>
+    <div style="flex:1"></div>
+    <button class="btn accent" id="pj_new" style="font-size:12px">＋ Project</button>`;
+  host.appendChild(nav);
+  nav.querySelector("#pj_prev").onclick=()=>{pjOffset--;renderProjects();};
+  nav.querySelector("#pj_next").onclick=()=>{pjOffset++;renderProjects();};
+  nav.querySelector("#pj_today").onclick=()=>{pjOffset=0;renderProjects();};
+  nav.querySelector("#pj_new").onclick=()=>editProjectModal(null);
+  nav.querySelectorAll("[data-sc]").forEach(b=>b.onclick=()=>{ pjScale=b.dataset.sc; pjOffset=0; renderProjects(); });
+
+  const board=document.createElement("div"); host.appendChild(board);
+  // measured once: bars are positioned in px, so the axis needs a real width.
+  // Below the minimum readable track width the board itself is made wider than
+  // the viewport and the whole thing scrolls sideways as one piece — axis and
+  // lanes are both children of `board`, so they can never drift out of
+  // alignment the way two independently-scrolled regions would.
+  // board.clientWidth, not host's — host is the padded scroll container, so its
+  // clientWidth counts that padding as usable space and overstates the room
+  // available by the padding amount (bars then overflow on narrow screens).
+  const availAll=board.clientWidth;
+  const laneW=Math.min(190,Math.max(110,Math.round(availAll*0.22)));
+  board.style.setProperty("--laneW",laneW+"px");
+  const avail=availAll-laneW-8;
+  const trackW=Math.max(pjScale==="month"?420:240, avail);
+  if(trackW>avail) board.style.minWidth=(laneW+trackW+8)+"px";
+  const pxPerDay=trackW/spanDays;
+  const xOf=d=>((dateOnly(d)-win.start)/DAY_MS)*pxPerDay;
+
+  // axis ticks: days in week scale, months in month scale
+  const axis=document.createElement("div"); axis.className="pj-axis"; board.appendChild(axis);
+  const ticks=[];
+  if(pjScale==="week"){
+    for(let i=0;i<spanDays;i++){ const d=new Date(win.start); d.setDate(win.start.getDate()+i);
+      ticks.push({x:i*pxPerDay, w:pxPerDay, label:d.toLocaleDateString(undefined,{weekday:"short",day:"numeric"})}); }
+  } else {
+    let m=new Date(win.start);
+    while(m<win.end){ const next=new Date(m.getFullYear(),m.getMonth()+1,1);
+      ticks.push({x:xOf(m), w:((Math.min(next,win.end)-m)/DAY_MS)*pxPerDay, label:m.toLocaleDateString(undefined,{month:"short"})});
+      m=next; }
+  }
+  ticks.forEach(t=>{ const el=document.createElement("div"); el.className="tk";
+    el.style.left=t.x+"px"; el.style.width=t.w+"px"; el.textContent=t.label; axis.appendChild(el); });
+
+  const today=new Date(); today.setHours(0,0,0,0);
+  const gridHTML=ticks.map(t=>`<span style="left:${t.x}px"></span>`).join("")
+    +((today>=win.start&&today<win.end)?`<span class="today" style="left:${xOf(today)}px"></span>`:"");
+
+  DB.domains.forEach(p=>{
+    const card=document.createElement("div"); card.className="pj-card";
+    card.innerHTML=projectHeaderHTML(p);
+    const lane=document.createElement("div"); lane.className="pj-lane";
+    lane.innerHTML=`<div class="pj-lane-head">
+        <span class="nm"><span class="chip" style="background:${p.color}"></span>${esc(p.name)}</span>
+        <span class="mini">${projectTasks(p).length} task${projectTasks(p).length!==1?"s":""}</span>
+      </div>
+      <div class="pj-track"><div class="pj-grid">${gridHTML}</div></div>`;
+    const track=lane.querySelector(".pj-track");
+
+    // planned work: one bar per dated task
+    const dated=projectTasks(p).filter(t=>t.deadline);
+    let row=0;
+    dated.forEach(t=>{
+      const s=dateOnly(t.deadline), e=t.endDate?dateOnly(t.endDate):s;
+      if(e<win.start||s>=win.end)return;
+      const x0=Math.max(0,xOf(s)), x1=Math.min(trackW,xOf(e)+pxPerDay);
+      const bar=document.createElement("div"); bar.className="pj-bar "+(t.status||"todo");
+      bar.style.left=x0+"px"; bar.style.width=Math.max(6,x1-x0)+"px"; bar.style.top=(6+row*24)+"px";
+      bar.style.background=p.color; bar.title=`${t.title||"(untitled)"} — ${STAT_LABEL[t.status]||""}`;
+      bar.textContent=t.title||"(untitled)";
+      bar.onclick=ev=>{ ev.stopPropagation(); openDetail(t.id); };
+      track.appendChild(bar); row++;
+    });
+    // what actually happened: real procedure dates from the linked cohorts'
+    // animal diaries, so planned vs. real cadence sit on the same axis
+    const seen=new Set();
+    projectAnimals(p).forEach(a=>(a.diary||[]).forEach(en=>{
+      if(!PJ_PROC_TYPES.includes(en.type))return;
+      const d=dateOnly(en.date); if(!d||d<win.start||d>=win.end)return;
+      const key=en.type+"|"+en.date; if(seen.has(key))return; seen.add(key);
+      const def=diaryTypeDef(en.type);
+      const tick=document.createElement("div"); tick.className="pj-tick";
+      tick.style.left=(xOf(d)+pxPerDay/2)+"px"; tick.style.bottom="7px"; tick.style.background=def.color;
+      tick.title=`${def.label} — ${en.date}`;
+      track.appendChild(tick);
+    }));
+    if(p.targetDate){ const d=dateOnly(p.targetDate);
+      if(d>=win.start&&d<win.end){ const m=document.createElement("div"); m.className="pj-target-mark";
+        m.style.left=xOf(d)+"px"; m.title="Project target: "+p.targetDate; track.appendChild(m); } }
+    track.style.minHeight=Math.max(46,row*24+14)+"px";
+    // click empty track space → new task starting on that date
+    track.onclick=ev=>{
+      if(ev.target!==track&&!ev.target.classList.contains("pj-grid"))return;
+      const day=Math.floor((ev.offsetX)/pxPerDay);
+      const d=new Date(win.start); d.setDate(win.start.getDate()+day);
+      const pad=n=>String(n).padStart(2,"0");
+      createAndOpenTask({domainId:p.id, deadline:`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`});
+    };
+    lane.querySelector(".pj-lane-head").onclick=()=>{ pjBoardProject=p.id; projectsSubTab="board"; renderProjects(); };
+    card.appendChild(lane);
+    board.appendChild(card);
+  });
+  wireProjectHeaders(board);
+}
+
+/* ---- Board: one project's tasks in status columns ------------------------ */
+function renderProjectsBoard(host){
+  if(!pjBoardProject||!DB.domains.some(d=>d.id===pjBoardProject)) pjBoardProject=DB.domains[0].id;
+  const p=DB.domains.find(d=>d.id===pjBoardProject);
+
+  const pills=document.createElement("div"); pills.className="pj-pills";
+  pills.innerHTML=DB.domains.map(d=>`<button class="pj-pill ${d.id===p.id?"on":""}" data-pj="${d.id}" style="${d.id===p.id?`color:${d.color}`:""}"><span class="chip" style="background:${d.color}"></span>${esc(d.name)}</button>`).join("")
+    +`<button class="btn accent" id="pj_new2" style="margin-left:auto;font-size:12px">＋ Project</button>`;
+  host.appendChild(pills);
+  pills.querySelectorAll(".pj-pill").forEach(b=>b.onclick=()=>{ pjBoardProject=b.dataset.pj; renderProjects(); });
+  pills.querySelector("#pj_new2").onclick=()=>editProjectModal(null);
+
+  const card=document.createElement("div"); card.className="pj-card";
+  card.innerHTML=projectHeaderHTML(p,{full:true});
+  host.appendChild(card);
+
+  const cols=document.createElement("div"); cols.className="pj-cols"; host.appendChild(cols);
+  // only top-level tasks get cards; subtasks ride along under their parent
+  const tasks=projectTasks(p).filter(t=>!t.parentId||!taskById(t.parentId));
+  TASK_STATUSES.forEach(st=>{
+    const mine=tasks.filter(t=>(t.status||"todo")===st);
+    const col=document.createElement("div"); col.className="pj-col";
+    col.innerHTML=`<h4><span class="stat" style="background:${STAT[st]};width:8px;height:8px;border-radius:50%;display:inline-block"></span>${STAT_LABEL[st]}<span class="n">${mine.length}</span></h4>`;
+    mine.forEach(t=>{
+      const kids=childrenOf(t.id), tg=targetProgress(t);
+      const el=document.createElement("div"); el.className="pj-taskcard"+(st==="done"?" done":"");
+      el.style.setProperty("--c",p.color);
+      el.innerHTML=`<div class="tt">${esc(t.title||"(untitled)")}</div>
+        <div class="row">
+          <button class="pj-cycle" title="next status">${STAT_LABEL[st]} ▸</button>
+          ${t.deadline?`<span class="pj-sub-count">${esc(fmtWhenFull(t.deadline).replace(/,.*$/,""))}</span>`:""}
+          ${tg?`<span class="tgt-count ${tg.want&&tg.have>=tg.want?"met":""}">🐭 ${tg.have}/${tg.want||"—"}</span>`:""}
+          ${kids.length?`<span class="pj-sub-count">☑ ${kids.filter(k=>k.status==="done").length}/${kids.length}</span>`:""}
+        </div>
+        ${kids.map(k=>`<div class="pj-subrow">
+            <input type="checkbox" class="pj-sub-chk" data-id="${k.id}" ${k.status==="done"?"checked":""}>
+            <span class="s-t ${k.status==="done"?"done":""}" data-open="${k.id}">${esc(k.title||"(untitled)")}</span>
+          </div>`).join("")}`;
+      el.querySelector(".tt").onclick=()=>openDetail(t.id);
+      el.querySelector(".pj-cycle").onclick=()=>{
+        t.status=TASK_STATUSES[(TASK_STATUSES.indexOf(st)+1)%TASK_STATUSES.length];
+        persist(); renderProjects();
+      };
+      el.querySelectorAll(".pj-sub-chk").forEach(cb=>cb.onchange=()=>{
+        const k=taskById(cb.dataset.id); if(!k)return;
+        k.status=cb.checked?"done":"todo"; persist(); renderProjects();
+      });
+      el.querySelectorAll("[data-open]").forEach(sp=>sp.onclick=()=>openDetail(sp.dataset.open));
+      col.appendChild(el);
+    });
+    const add=document.createElement("button"); add.className="pj-addtask"; add.textContent="＋ Task";
+    add.onclick=()=>createAndOpenTask({domainId:p.id,status:st});
+    col.appendChild(add);
+    cols.appendChild(col);
+  });
+  wireProjectHeaders(host);
 }
 
 /* ---------- TIMELINE (scheduled times) ---------- */
@@ -3184,7 +3298,6 @@ function animalCard(a){
       btn.textContent = v ? (labels[field]||"")+v : (labels[field]||"")+field+"?";
       btn.style.color = v ? "" : "var(--ink-faint)";
       if(currentView==="timeline") renderTimeline();
-      if(currentView==="outline")  renderOutline();
     }, undefined, field==="dob");
   });
   const bvc=card.querySelector(".am-bv-card");
@@ -4078,6 +4191,9 @@ function procedureSectionHTML(p){
 function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   opts=opts||{};
   let hp=!!initial.headpost, win=!!initial.window;
+  // carried through untouched — records which saved procedure template this
+  // surgery was applied from, so project animal-count targets can match on it
+  const appliedTemplateId=initial.appliedTemplateId||null;
   let winAp=initial.winAp!=null?initial.winAp:"", winMl=initial.winMl!=null?initial.winMl:"", winDiam=initial.winDiam!=null?initial.winDiam:"3";
   const injs=(initial.injections||[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],...x}));
   const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px";
@@ -4260,7 +4376,7 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   paintInjs(); updatePreview();
 
   return {
-    getSnapshot(){ readInjFields(); return {headpost:hp, window:win, winAp, winMl, winDiam, injections:injs.map(x=>({...x}))}; },
+    getSnapshot(){ readInjFields(); return {headpost:hp, window:win, winAp, winMl, winDiam, appliedTemplateId, injections:injs.map(x=>({...x}))}; },
     refresh: updatePreview
   };
 }
@@ -4359,7 +4475,9 @@ function animalModal(id,draft){
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
       dob:vDob, sacrificed:vSac, termination,
-      surgeryDetail:{headpost:tpl.headpost,window:tpl.window,winAp:tpl.winAp,winMl:tpl.winMl,winDiam:tpl.winDiam,injections:tpl.injections.map(x=>({...x}))},
+      // stamp which template this came from so a project task's "N animals via
+      // procedure X" target can count real matches later
+      surgeryDetail:{headpost:tpl.headpost,window:tpl.window,winAp:tpl.winAp,winMl:tpl.winMl,winDiam:tpl.winDiam,appliedTemplateId:tpl.id,injections:tpl.injections.map(x=>({...x}))},
       comments:document.getElementById("am_com").value
     };
     closeModal();
@@ -4380,7 +4498,7 @@ function animalModal(id,draft){
     const name=document.getElementById("am_name").value.trim(); if(!name){toast("Name needed");return;}
     const snap=procEditor.getSnapshot();
     const cleanInjs=snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
-    const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
+    const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,appliedTemplateId:snap.appliedTemplateId||null,injections:cleanInjs}:null;
     const rec={name,cohort:document.getElementById("am_cohort").value,cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
       dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
@@ -4411,24 +4529,96 @@ function openDetail(id){
       <input id="e_title" value="${escAttr(t.title)}" list="e_blueprints" autocomplete="off" placeholder="Task title…">
       <datalist id="e_blueprints">${[...new Set(DB.tasks.filter(x=>x.id!==t.id).map(x=>x.title))].sort().map(tt=>`<option value="${escAttr(tt)}">`).join("")}</datalist></div>
     <div class="fld"><label>Status</label><div class="seg" id="e_status">
-      ${["todo","done"].map(s=>`<button data-s="${s}" class="${t.status===s?"on":""}" style="${t.status===s?`color:${cssStat(s)}`:""}">${STAT_LABEL[s]}</button>`).join("")}</div></div>
+      ${TASK_STATUSES.map(s=>`<button data-s="${s}" class="${t.status===s?"on":""}" style="${t.status===s?`color:${cssStat(s)}`:""}">${STAT_LABEL[s]}</button>`).join("")}</div></div>
     <div class="drow">
       <div class="fld" style="width:200px"><label>Start (date + hour)</label><button type="button" id="e_due" class="datebtn ${t.deadline?"":"datebtn-empty"}">${t.deadline?fmtWhenFull(t.deadline):"📅  start"}</button></div>
       <div class="fld" style="flex:1"><label>End <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">date + time</span></label>
         <button type="button" id="e_endDate" class="datebtn ${t.endDate?"":"datebtn-empty"}">${t.endDate?fmtWhenFull(t.endDate):"📅  end"}</button></div></div>
     <div class="fld"><label>Notes</label><textarea id="e_notes">${esc(t.notes||"")}</textarea></div>
+    ${targetFieldHTML(t)}
+    ${subtaskListHTML(t)}
     ${(() => { const la=DB.animals.filter(a=>(a.tasks||[]).includes(t.id)); return la.length?`<div class="fld"><label>Linked animals (${la.length})</label><div style="font-size:12.5px;line-height:1.7">${la.map(a=>`<div><span class="stat" style="background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};display:inline-block;margin-right:6px"></span>${esc(a.name)} <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${esc(a.cohort)}</span></div>`).join("")}</div><div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:4px">link/unlink from the Animals tab</div></div>`:""; })()}
     <div class="drow" style="margin-top:18px"><button class="btn danger" id="e_del">Delete task</button></div>`;
   wireDetail(t); document.getElementById("detail").classList.add("open");
-  if(currentView==="outline")renderOutline();
+}
+/* ── Task targets: "N animals of cohort X (optionally via procedure template Y)".
+   Progress is never stored — it's counted live off the real animal records, so
+   it can't drift out of date the way a manually-updated number would. */
+function targetProgress(t){
+  const tg=t&&t.target; if(!tg||!tg.cohortId)return null;
+  const co=(DB.cohorts||[]).find(c=>c.id===tg.cohortId); if(!co)return null;
+  let animals=DB.animals.filter(a=>a.cohort===co.name);
+  if(tg.procedureTemplateId) animals=animals.filter(a=>a.surgeryDetail&&a.surgeryDetail.appliedTemplateId===tg.procedureTemplateId);
+  const want=+tg.count||0;
+  return {cohort:co, have:animals.length, want, tplId:tg.procedureTemplateId||"",
+          tpl:(DB.config.procedureLib||[]).find(p=>p.id===tg.procedureTemplateId)||null};
+}
+function targetFieldHTML(t){
+  const tg=t.target||{}, tpls=DB.config.procedureLib||[], cohorts=DB.cohorts||[];
+  if(!cohorts.length) return "";
+  const p=targetProgress(t);
+  return `<div class="fld"><label>Animal target <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">optional — counted live from real animal records</span></label>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <select id="e_tgt_cohort" style="flex:0 0 auto;min-width:120px"><option value="">— no target —</option>${cohorts.map(c=>`<option value="${c.id}" ${tg.cohortId===c.id?"selected":""}>${esc(c.name)}</option>`).join("")}</select>
+      <input id="e_tgt_count" type="number" min="0" value="${tg.count!=null?tg.count:""}" placeholder="how many" style="flex:0 0 auto;width:100px">
+      ${tpls.length?`<select id="e_tgt_tpl" style="flex:1;min-width:150px"><option value="">any procedure</option>${tpls.map(pl=>`<option value="${pl.id}" ${tg.procedureTemplateId===pl.id?"selected":""}>${esc(pl.name)}</option>`).join("")}</select>`:""}
+    </div>
+    ${p?`<div style="display:flex;gap:8px;align-items:center;margin-top:7px;flex-wrap:wrap">
+      <span class="tgt-count ${p.have>=p.want&&p.want>0?"met":""}">${p.have}/${p.want||"—"} animals</span>
+      <button type="button" class="btn ghost" id="e_tgt_add" style="font-size:11.5px;padding:4px 9px">＋ add animal toward this</button>
+    </div>`:""}
+  </div>`;
+}
+function subtaskListHTML(t){
+  const kids=childrenOf(t.id);
+  return `<div class="fld"><label>Subtasks${kids.length?` (${kids.filter(k=>k.status==="done").length}/${kids.length})`:""}</label>
+    ${kids.length?`<div class="subtask-list">${kids.map(k=>`
+      <label class="subtask-row">
+        <input type="checkbox" class="e_sub_chk" data-id="${k.id}" ${k.status==="done"?"checked":""}>
+        <span class="e_sub_open ${k.status==="done"?"done":""}" data-id="${k.id}">${esc(k.title||"(untitled)")}</span>
+      </label>`).join("")}</div>`:`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">none yet</div>`}
+    <button type="button" class="btn ghost" id="e_addsub" style="font-size:11.5px;padding:4px 9px;margin-top:7px">＋ Subtask</button></div>`;
 }
 function wireDetail(t){
-  const save=p=>{ Object.assign(t,p); persist(); document.getElementById("dTitleView").textContent=t.title||"New task"; if(currentView!=="arbor")render(); };
-  document.getElementById("e_title").addEventListener("input",e=>{ const v=e.target.value; Object.assign(t,{title:v,autoTitle:false}); persist(); document.getElementById("dTitleView").textContent=v||"New task"; if(currentView!=="arbor")render(); });
+  const save=p=>{ Object.assign(t,p); persist(); document.getElementById("dTitleView").textContent=t.title||"New task"; render(); };
+  document.getElementById("e_title").addEventListener("input",e=>{ const v=e.target.value; Object.assign(t,{title:v,autoTitle:false}); persist(); document.getElementById("dTitleView").textContent=v||"New task"; render(); });
   bindDateButton(document.getElementById("e_due"), ()=>t.deadline||"", v=>save({deadline:v||null}));
   const edEl=document.getElementById("e_endDate"); if(edEl) bindDateButton(edEl, ()=>t.endDate||"", v=>save({endDate:v||null}));
   document.getElementById("e_notes").addEventListener("input",e=>save({notes:e.target.value}));
   document.getElementById("e_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;save({status:b.dataset.s});persist();openDetail(t.id);});
+  // ── animal target: cohort + count + optional procedure template
+  const tgtCo=document.getElementById("e_tgt_cohort");
+  if(tgtCo){
+    const readTarget=()=>{
+      const cohortId=tgtCo.value;
+      if(!cohortId){ save({target:null}); openDetail(t.id); return; }
+      const cntEl=document.getElementById("e_tgt_count"), tplEl=document.getElementById("e_tgt_tpl");
+      save({target:{cohortId, count:+((cntEl&&cntEl.value)||0)||0, procedureTemplateId:(tplEl&&tplEl.value)||""}});
+      openDetail(t.id);
+    };
+    tgtCo.addEventListener("change",readTarget);
+    const cntEl=document.getElementById("e_tgt_count"); if(cntEl) cntEl.addEventListener("change",readTarget);
+    const tplEl=document.getElementById("e_tgt_tpl"); if(tplEl) tplEl.addEventListener("change",readTarget);
+    const addBtn=document.getElementById("e_tgt_add");
+    // quick-jump: open a new-animal form already carrying this target's cohort
+    // and (if set) the procedure template's own headpost/window/injections, so
+    // hitting a target is one click rather than re-entering it all by hand.
+    if(addBtn) addBtn.addEventListener("click",()=>{
+      const p=targetProgress(t); if(!p)return;
+      const draft={cohort:p.cohort.name, alive:true, termination:"alive", tasks:[]};
+      if(p.tpl) draft.surgeryDetail={headpost:p.tpl.headpost,window:p.tpl.window,winAp:p.tpl.winAp,winMl:p.tpl.winMl,
+        winDiam:p.tpl.winDiam,appliedTemplateId:p.tpl.id,injections:(p.tpl.injections||[]).map(x=>({...x}))};
+      closeDetail(); switchTo("animals"); animalModal(null,draft);
+    });
+  }
+  // ── subtasks (plain tasks with parentId — same records, just nested)
+  const addSub=document.getElementById("e_addsub");
+  if(addSub) addSub.addEventListener("click",()=>createAndOpenTask({domainId:t.domainId,parentId:t.id}));
+  document.querySelectorAll("#dBody .e_sub_chk").forEach(cb=>cb.addEventListener("change",()=>{
+    const k=taskById(cb.dataset.id); if(!k)return;
+    k.status=cb.checked?"done":"todo"; persist(); render(); openDetail(t.id);
+  }));
+  document.querySelectorAll("#dBody .e_sub_open").forEach(sp=>sp.addEventListener("click",()=>openDetail(sp.dataset.id)));
   document.getElementById("e_del").addEventListener("click",()=>{ if(!confirm("Delete this task?"))return;
     childrenOf(t.id).forEach(k=>k.parentId=t.parentId);
     DB.tasks.forEach(x=>x.deps=(x.deps||[]).filter(d=>d!==t.id));
@@ -4437,12 +4627,7 @@ function wireDetail(t){
 function closeDetail(){
   if(selectedId){ const t=taskById(selectedId); if(t&&!t.title){ DB.tasks=DB.tasks.filter(x=>x.id!==selectedId); persist(); } }
   document.getElementById("detail").classList.remove("open"); selectedId=null;
-  // only re-render the active view — full render() was causing outline toolbar to misplace
-  if(currentView==="outline") renderOutline();
-  else if(currentView==="timeline") renderTimeline();
-  else if(currentView==="animals") renderAnimals();
-  else if(currentView==="arbor") renderArbor();
-  else render();
+  render();
 }
 document.getElementById("dClose").addEventListener("click",closeDetail);
 function isDescendant(c,of){ let n=taskById(c); while(n&&n.parentId){ if(n.parentId===of)return true; n=taskById(n.parentId);} return false; }
@@ -4548,9 +4733,9 @@ function createAndOpenTask(opts){
   opts=opts||{};
   const domId=opts.domainId||(DB.domains.find(d=>d.active)||DB.domains[0]||{}).id||"";
   const nt={id:uid("t_"),title:"",domainId:domId,parentId:opts.parentId||null,
-    status:"todo",priority:2,deadline:opts.deadline||null,endDate:opts.endDate||null,
+    status:opts.status||"todo",priority:2,deadline:opts.deadline||null,endDate:opts.endDate||null,
     duration:null,procedureType:null,linkedAnimals:[],autoTitle:false,
-    materials:[],notes:"",deps:[],created:Date.now()};
+    materials:[],notes:"",deps:[],target:null,created:Date.now()};
   DB.tasks.push(nt); persist(); render();
   // open the detail panel on the new task
   openDetail(nt.id);
@@ -4681,50 +4866,80 @@ function openTimelineCreateModal(prefillDeadline){
 }
 function paletteHTML(sel){ return DOMAIN_PALETTE.map(c=>`<span class="tag" data-c="${c}" style="cursor:pointer;border-color:${c};${c===sel?`box-shadow:0 0 0 2px ${c}`:""}"><span style="width:12px;height:12px;border-radius:3px;background:${c};display:inline-block"></span></span>`).join(""); }
 
-function editDomainModal(domId){
-  const dom=domById(domId); if(!dom)return;
-  const nTasks=DB.tasks.filter(t=>t.domainId===domId).length;
-  const nReads=DB.readings.filter(r=>r.domainId===domId).length;
-  const others=DB.domains.filter(d=>d.id!==domId);
-  modal(`<h3>Edit domain</h3>
-    <div class="fld"><label>Name</label><input id="d_name" value="${escAttr(dom.name)}" autofocus></div>
+/* Project editor. `DB.domains` is still the underlying store (renaming the
+   field would break every existing save); only the user-facing wording is
+   "project". Passing null creates one, same shape as cohortModal(null). */
+function editProjectModal(domId){
+  const creating=!domId;
+  const dom=creating
+    ? {id:uid("dm_"),name:"",color:DOMAIN_PALETTE[(DB.domains||[]).length%DOMAIN_PALETTE.length],
+       status:"planning",description:"",targetDate:null,cohortIds:[]}
+    : domById(domId);
+  if(!dom)return;
+  const nTasks=DB.tasks.filter(t=>t.domainId===dom.id).length;
+  const nReads=DB.readings.filter(r=>r.domainId===dom.id).length;
+  const others=DB.domains.filter(d=>d.id!==dom.id);
+  modal(`<h3>${creating?"New":"Edit"} project</h3>
+    <div class="fld"><label>Name</label><input id="d_name" value="${escAttr(dom.name)}" placeholder="e.g. M1→SNr projection mapping" autofocus></div>
+    <div class="fld"><label>Goal / description</label><textarea id="d_desc" placeholder="what this project is for">${esc(dom.description||"")}</textarea></div>
+    <div class="drow">
+      <div class="fld" style="flex:1"><label>Status</label>
+        <div class="seg" id="d_status">${PROJECT_STATUSES.map(([k,l])=>`<button data-s="${k}" class="${(dom.status||"planning")===k?"on":""}">${l}</button>`).join("")}</div></div>
+      <div class="fld" style="width:190px"><label>Target date</label>
+        <button type="button" id="d_target" class="datebtn datebtn-sm ${dom.targetDate?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${dom.targetDate?fmtWhenFull(dom.targetDate):"set date"}</button></div>
+    </div>
     <div class="fld"><label>Colour</label><div class="taglist" id="d_pal">${paletteHTML(dom.color)}</div></div>
-    <div class="fld"><label>Status</label>
-      <div class="seg" id="d_active">
-        <button data-a="1" class="${dom.active?"on":""}" style="${dom.active?"color:var(--mruby)":""}">Active focus</button>
-        <button data-a="0" class="${!dom.active?"on":""}">Background</button>
-      </div>
-      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:6px">Active domains glow in the Arbor and carry the "active" flag. You can mark one or several.</div>
-    </div>
+    <div class="fld"><label>Cohorts <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">procedure progress is counted live from these animals</span></label>
+      ${(DB.cohorts||[]).length?`<div class="taglist" id="d_cohorts">${(DB.cohorts||[]).map(c=>`
+        <label class="tag" style="cursor:pointer;gap:6px;${(dom.cohortIds||[]).includes(c.id)?`box-shadow:0 0 0 2px ${c.color}`:""}">
+          <input type="checkbox" class="d_co" data-id="${c.id}" ${(dom.cohortIds||[]).includes(c.id)?"checked":""} style="width:auto;margin:0">
+          <span style="width:9px;height:9px;border-radius:50%;background:${c.color};display:inline-block"></span>${esc(c.name)}</label>`).join("")}</div>`
+        :`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">no cohorts yet — create one in the Animals tab</div>`}</div>
     <div class="drow" style="margin-top:18px;align-items:center">
-      <button class="btn danger" id="d_del">Delete domain</button>
-      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${nTasks} task${nTasks!==1?"s":""} · ${nReads} reading${nReads!==1?"s":""} attached</div>
+      ${creating?"":`<button class="btn danger" id="d_del">Delete project</button>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${nTasks} task${nTasks!==1?"s":""} · ${nReads} reading${nReads!==1?"s":""} attached</div>`}
     </div>
-    <div class="actions"><button class="btn accent" id="d_save">Done</button></div>`);
-  let chosen=dom.color;
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="d_save">${creating?"Create":"Done"}</button></div>`,{wide:true});
+  let chosen=dom.color, vTarget=dom.targetDate||"";
   document.getElementById("d_pal").addEventListener("click",e=>{const t=e.target.closest(".tag");if(!t)return;chosen=t.dataset.c;
     document.querySelectorAll("#d_pal .tag").forEach(x=>x.style.boxShadow="none");t.style.boxShadow=`0 0 0 2px ${chosen}`;});
-  document.getElementById("d_active").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
-    dom.active=b.dataset.a==="1"; persist();
-    document.querySelectorAll("#d_active button").forEach(x=>{x.classList.toggle("on",x===b);x.style.color=(x===b&&dom.active)?"var(--mruby)":"";});});
-  document.getElementById("d_save").addEventListener("click",()=>{ const name=document.getElementById("d_name").value.trim();
-    if(!name){toast("Name can't be empty");return;} dom.name=name; dom.color=chosen; persist(); render(); closeModal(); });
-  document.getElementById("d_del").addEventListener("click",()=>{
-    if(DB.domains.length<=1){ toast("Can't delete the last domain"); return; }
+  let chosenStatus=dom.status||"planning";
+  document.getElementById("d_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+    chosenStatus=b.dataset.s; document.querySelectorAll("#d_status button").forEach(x=>x.classList.toggle("on",x===b));});
+  const tBtn=document.getElementById("d_target");
+  tBtn.onclick=()=>openCalendar(tBtn, vTarget, v=>{ vTarget=v||"";
+    tBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${vTarget?fmtWhenFull(vTarget):"set date"}`;
+    tBtn.classList.toggle("datebtn-empty",!vTarget); }, undefined, true);
+  document.getElementById("d_save").addEventListener("click",()=>{
+    const name=document.getElementById("d_name").value.trim();
+    if(!name){toast("Name can't be empty");return;}
+    Object.assign(dom,{name, color:chosen, status:chosenStatus, targetDate:vTarget||null,
+      description:document.getElementById("d_desc").value.trim(),
+      cohortIds:[...document.querySelectorAll(".d_co")].filter(c=>c.checked).map(c=>c.dataset.id)});
+    if(creating){ DB.domains.push(dom); pjBoardProject=dom.id; }
+    persist(); render(); closeModal(); toast(creating?"Project created":"Project saved");
+  });
+  const delBtn=document.getElementById("d_del");
+  if(delBtn) delBtn.addEventListener("click",()=>{
     if(nTasks||nReads){
+      if(!others.length){ toast("Nothing to reassign its tasks to — delete or move them first"); return; }
       const opts=others.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("");
       modal(`<h3>Delete "${esc(dom.name)}"</h3>
-        <p style="color:var(--ink-dim);font-size:13px;line-height:1.5;margin-top:0">It has ${nTasks} task${nTasks!==1?"s":""} and ${nReads} reading${nReads!==1?"s":""}. Move them to another domain, then delete.</p>
+        <p style="color:var(--ink-dim);font-size:13px;line-height:1.5;margin-top:0">It has ${nTasks} task${nTasks!==1?"s":""} and ${nReads} reading${nReads!==1?"s":""}. Move them to another project, then delete.</p>
         <div class="fld"><label>Reassign to</label><select id="d_reassign">${opts}</select></div>
-        <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn danger" id="d_delconfirm">Move & delete</button></div>`);
+        <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn danger" id="d_delconfirm">Move &amp; delete</button></div>`);
       document.getElementById("d_delconfirm").addEventListener("click",()=>{
         const to=document.getElementById("d_reassign").value;
-        DB.tasks.forEach(t=>{ if(t.domainId===domId)t.domainId=to; });
-        DB.readings.forEach(r=>{ if(r.domainId===domId)r.domainId=to; });
-        DB.domains=DB.domains.filter(d=>d.id!==domId); persist(); render(); closeModal(); toast("Domain deleted, items reassigned");
+        DB.tasks.forEach(t=>{ if(t.domainId===dom.id)t.domainId=to; });
+        DB.readings.forEach(r=>{ if(r.domainId===dom.id)r.domainId=to; });
+        DB.domains=DB.domains.filter(d=>d.id!==dom.id);
+        if(pjBoardProject===dom.id)pjBoardProject=null;
+        persist(); render(); closeModal(); toast("Project deleted, items reassigned");
       });
     } else if(confirm(`Delete "${dom.name}"?`)){
-      DB.domains=DB.domains.filter(d=>d.id!==domId); persist(); render(); closeModal(); toast("Domain deleted");
+      DB.domains=DB.domains.filter(d=>d.id!==dom.id);
+      if(pjBoardProject===dom.id)pjBoardProject=null;
+      persist(); render(); closeModal(); toast("Project deleted");
     }
   });
 }
@@ -4980,7 +5195,9 @@ function exportFullDatabaseExcel(){
     {name:"Inventory",rows:invRows},
   ]);
 }
-window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); });
+// the Projects timeline lays bars out in px against a measured container
+// width, so it has to be recomputed when that width changes
+window.addEventListener("resize",()=>{ if(currentView==="projects")renderProjects(); });
 (async function(){
   // top-level try/catch: an exception anywhere in boot (loadDB/seed/migrate/render)
   // used to be an unhandled promise rejection that silently killed the entire boot
