@@ -89,53 +89,58 @@
   .pj-readrow input{width:auto;margin:0}
   .pj-readrow .rd{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pj-readrow .rd.done{color:var(--ink-faint);text-decoration:line-through}
-  /* ---- projects: timeline (continuous date axis) ---- */
-  .pj-tl-nav{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
-  .pj-tl-nav h2{font-family:var(--disp);font-size:14px;margin:0 4px;min-width:190px}
-  .pj-axis{position:relative;height:22px;margin-left:var(--laneW,170px);border-bottom:1px solid var(--line2)}
-  .pj-axis .tk{position:absolute;top:0;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);padding-left:4px;border-left:1px solid var(--line);height:22px;box-sizing:border-box;white-space:nowrap;overflow:hidden}
-  .pj-lane{display:flex;align-items:stretch;border-bottom:1px solid var(--line);min-height:46px}
-  .pj-lane-head{flex:0 0 var(--laneW,170px);width:var(--laneW,170px);padding:8px 10px 8px 0;display:flex;flex-direction:column;gap:3px;cursor:pointer;box-sizing:border-box}
-  .pj-lane-head .nm{font-family:var(--disp);font-size:12.5px;display:flex;align-items:center;gap:6px}
-  .pj-lane-head .nm .chip{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
-  .pj-lane-head .mini{font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
-  .pj-track{flex:1;position:relative;min-height:46px;border-left:1px solid var(--line2);cursor:crosshair}
-  .pj-grid{position:absolute;inset:0;pointer-events:none}
-  .pj-grid span{position:absolute;top:0;bottom:0;width:1px;background:var(--line)}
-  .pj-grid span.today{background:var(--mruby);opacity:.55;width:2px}
-  .pj-bar{position:absolute;height:20px;border-radius:5px;padding:0 6px;font-size:11px;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;box-sizing:border-box;border:1px solid rgba(255,255,255,.14);color:#0b0f16;font-weight:600}
-  .pj-bar:hover{filter:brightness(1.15)}
-  .pj-bar.done{opacity:.45;text-decoration:line-through}
-  .pj-bar.blocked{outline:1px solid var(--overdue);outline-offset:1px}
-  .pj-tick{position:absolute;width:7px;height:7px;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;border:1px solid rgba(0,0,0,.45)}
-  .pj-target-mark{position:absolute;top:2px;bottom:2px;width:2px;background:var(--gold);opacity:.8}
-  /* ---- projects: board ---- */
   .pj-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
   .pj-pill{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:20px;padding:5px 12px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
   .pj-pill .chip{width:8px;height:8px;border-radius:50%}
   .pj-pill.on{color:var(--ink);border-color:currentColor}
-  .pj-cols{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:start}
-  .pj-col{background:rgba(255,255,255,.012);border:1px solid var(--line);border-radius:11px;padding:8px;min-height:80px}
-  .pj-col h4{font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px;display:flex;align-items:center;gap:6px;font-weight:400}
-  .pj-col h4 .n{background:var(--panel2);border:1px solid var(--line);border-radius:20px;padding:0 6px;font-size:9.5px}
-  .pj-taskcard{background:var(--panel);border:1px solid var(--line2);border-left:3px solid var(--c,#667);border-radius:8px;padding:7px 9px;margin-bottom:6px}
-  .pj-taskcard .tt{font-size:12.5px;line-height:1.3;cursor:pointer}
-  .pj-taskcard.done .tt{color:var(--ink-faint);text-decoration:line-through}
-  .pj-taskcard .row{display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap}
-  .pj-cycle{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:1px 7px;font-size:10px;cursor:pointer;font-family:var(--mono)}
-  .pj-addtask{width:100%;border:1px dashed var(--line2);background:transparent;color:var(--ink-faint);border-radius:7px;padding:4px;font-size:11.5px;cursor:pointer}
-  .pj-addtask:hover{border-color:var(--gcamp);color:var(--ink-dim)}
+  /* ---- projects: the map ---- */
+  .pjm-bar{display:flex;align-items:center;gap:8px;margin:14px 0 8px;flex-wrap:wrap}
+  .pjm-btn{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:8px;padding:5px 11px;font-size:11.5px;cursor:pointer}
+  .pjm-btn:hover{border-color:var(--gcamp);color:var(--ink)}
+  .pjm-btn.on{color:var(--gold);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
+  .pjm-hint{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-left:auto}
+  .pjm-stage{position:relative;height:min(64vh,620px);overflow:hidden;border:1px solid var(--line);border-radius:12px;
+    background:radial-gradient(ellipse at 30% 20%,rgba(125,180,255,.05),transparent 60%),var(--bg2);cursor:grab;touch-action:none}
+  .pjm-stage.grabbing{cursor:grabbing}
+  .pjm-world{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
+  .pjm-links{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
+  .pjm-link{fill:none;stroke:var(--line2);stroke-width:1.6;pointer-events:stroke;cursor:pointer}
+  .pjm-link:hover{stroke:var(--mruby);stroke-width:2.4}
+  .pjm-node{position:absolute;background:var(--panel);border:1px solid var(--line2);border-left:3px solid var(--c,#667);
+    border-radius:10px;padding:8px 10px;cursor:pointer;box-sizing:border-box;user-select:none;touch-action:none;
+    box-shadow:0 6px 18px -12px #000;transition:border-color .12s,box-shadow .12s}
+  .pjm-node:hover{border-color:var(--ink-faint)}
+  .pjm-node.drag{box-shadow:0 14px 30px -12px #000;z-index:5}
+  .pjm-node.sel{border-color:var(--gcamp);box-shadow:0 0 0 2px rgba(84,224,138,.25),0 6px 18px -12px #000}
+  .pjm-node.linking{border-color:var(--gold);box-shadow:0 0 0 2px rgba(240,200,90,.3)}
+  .pjm-node .t{font-size:12.5px;line-height:1.3;color:var(--ink);overflow-wrap:anywhere}
+  .pjm-node .m{display:flex;align-items:center;gap:5px;margin-top:5px;font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
+  .pjm-node .m .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;border:1px solid var(--ink-faint)}
+  .pjm-node .lrn{margin-left:auto;font-size:10px}
+  /* depth: the backbone reads heavier than the twigs */
+  .pjm-node.d0 .t{font-family:var(--disp);font-size:14px;font-weight:600}
+  .pjm-node.d1 .t{font-size:13px;font-weight:600}
+  .pjm-node.d3{opacity:.92}
+  .pjm-node.d3 .t{font-size:11.5px}
+  /* state: planned is an outline, running glows, done is filled and quiet */
+  .pjm-node.s-planned{border-style:dashed}
+  .pjm-node.s-planned .m .dot{background:transparent}
+  .pjm-node.s-running{box-shadow:0 0 0 1px rgba(84,224,138,.18),0 0 22px -6px var(--gcamp)}
+  .pjm-node.s-running .m .dot{background:var(--gcamp);border-color:var(--gcamp)}
+  .pjm-node.s-done{opacity:.62}
+  .pjm-node.s-done .m .dot{background:var(--ink-faint)}
+  .pjm-node.s-done .t{text-decoration:line-through;text-decoration-color:var(--ink-faint)}
+  .pjm-root{background:linear-gradient(180deg,var(--panel2),var(--panel));border-left-width:4px}
+  .pjm-root .t{font-family:var(--disp);font-size:15px;font-weight:600}
+  .pjm-plus{position:absolute;right:-11px;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;
+    border:1px solid var(--gcamp);background:var(--panel2);color:var(--gcamp);font-size:12px;line-height:1;cursor:pointer;padding:0}
   .tgt-count,.pj-sub-count{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);background:var(--panel2);border:1px solid var(--line2);border-radius:20px;padding:1px 7px}
   .tgt-count.met{color:var(--gcamp);border-color:#2f6b4a}
   .subtask-list{display:flex;flex-direction:column;gap:3px}
   .subtask-row{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-dim);cursor:pointer}
   .subtask-row input{width:auto;margin:0}
-  .subtask-row .e_sub_open,.pj-subrow .s-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .subtask-row .done,.pj-subrow .s-t.done{color:var(--ink-faint);text-decoration:line-through}
-  .pj-subrow{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-dim);padding-left:4px;margin-top:3px}
-  .pj-subrow input{width:auto;margin:0}
-  @media(max-width:760px){ .pj-cols{grid-template-columns:1fr 1fr} }
-  @media(max-width:480px){ .pj-cols{grid-template-columns:1fr} }
+  .subtask-row .e_sub_open{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .subtask-row .done{color:var(--ink-faint);text-decoration:line-through}
   /* custom date+time picker */
   .datebtn{width:100%;text-align:left;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:13px;cursor:pointer}
   .datebtn:hover{border-color:var(--gcamp)}
@@ -491,10 +496,6 @@
 
   <div class="main">
     <div class="view hidden" id="projects">
-      <div class="mat-subtabs" id="projSubTabs">
-        <button class="mat-stab on" data-ps="timeline">Timeline</button>
-        <button class="mat-stab" data-ps="board">Board</button>
-      </div>
       <div id="ps-body"></div>
     </div>
     <div class="view hidden wrap" id="timeline"></div>
@@ -1026,6 +1027,30 @@ function migrate(){                       // backfill fields added in later vers
     if(d.description==null) d.description="";
     if(d.targetDate===undefined) d.targetDate=null;
     if(!Array.isArray(d.cohortIds)) d.cohortIds=[];
+    if(d.x===undefined) d.x=null;   // root node's own position on the project map
+    if(d.y===undefined) d.y=null;
+  });
+  // Project nodes: a plan is a directed graph, not a tree — work converges as
+  // well as branches. `links` (ids this node leads to) subsumes both the old
+  // parentId ("decomposes into") and deps ("feeds"), which were always the
+  // same edge seen from two directions. The old fields are left in place,
+  // unread, rather than deleted — same safety habit as a.weights elsewhere.
+  if(!DB._nodeLinksMigrated){
+    DB.tasks.forEach(t=>{ if(!Array.isArray(t.links)) t.links=[]; });
+    DB.tasks.forEach(t=>{
+      if(t.parentId){ const p=DB.tasks.find(x=>x.id===t.parentId); if(p&&!p.links.includes(t.id)) p.links.push(t.id); }
+      (t.deps||[]).forEach(d=>{ const dep=DB.tasks.find(x=>x.id===d); if(dep&&!dep.links.includes(t.id)) dep.links.push(t.id); });
+    });
+    DB._nodeLinksMigrated=true;
+  }
+  DB.tasks.forEach(t=>{
+    if(!Array.isArray(t.links)) t.links=[];
+    // "blocked" has no equivalent here: an experiment is planned, running, or
+    // done — being stuck is a fact about its notes, not a fourth state.
+    if(!t.state) t.state={todo:"planned",active:"running",done:"done",blocked:"planned"}[t.status]||"planned";
+    if(t.learned==null) t.learned="";
+    if(t.x===undefined) t.x=null;
+    if(t.y===undefined) t.y=null;
   });
 }
 const uid=p=>p+Math.random().toString(36).slice(2,8);
@@ -1059,12 +1084,24 @@ function taskColor(t){
   if(aid){ const a=DB.animals.find(x=>x.id===aid); const co=a&&cohortByName(a.cohort); if(co&&co.color)return co.color; }
   const dom=domById(t.domainId); return dom?dom.color:"#556";
 }
-const childrenOf=id=>DB.tasks.filter(x=>x.parentId===id);
+// "children" now means "what this node leads to" — follows the graph's links
+// rather than a single parentId, so a node can legitimately be downstream of
+// several others (two experiments jointly feeding one conclusion).
+const childrenOf=id=>{ const t=taskById(id); if(!t)return []; return (t.links||[]).map(taskById).filter(Boolean); };
+const parentsOf=id=>DB.tasks.filter(x=>(x.links||[]).includes(id));
+// Depth from the project root, used only for visual weight. Cycle-guarded:
+// the data model permits a loop even though a sane plan won't have one.
+function nodeDepth(t,seen){
+  seen=seen||new Set();
+  if(seen.has(t.id))return 0;
+  seen.add(t.id);
+  const ps=parentsOf(t.id).filter(p=>p.domainId===t.domainId);
+  if(!ps.length)return 1;                       // hangs straight off the project root
+  return 1+Math.min(...ps.map(p=>nodeDepth(p,new Set(seen))));
+}
 const readingsFor=domId=>DB.readings.filter(r=>r.domainId===domId);
 const unreadMandatory=()=>DB.readings.filter(r=>r.tag==="mandatory"&&r.status!=="read");
 const STAT={todo:"#5b6678",active:"var(--gcamp)",blocked:"var(--overdue)",done:"#3a4252"};
-const STAT_LABEL={todo:"To do",active:"Active",blocked:"Blocked",done:"Done"};
-const TASK_STATUSES=["todo","active","blocked","done"];
 const PROJECT_STATUSES=[["planning","Planning"],["active","Active"],["paused","Paused"],["completed","Completed"]];
 const PRI_COL={1:"#3a4252",2:"#6d7a92",3:"#f2b756"};
 function whenDate(s){ if(!s)return null; return new Date(s.length<=10? s+"T00:00:00": s); }
@@ -1356,7 +1393,6 @@ function offerTubeDecrement(virusName){
 }
 function esc(s){return String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
 function escAttr(s){return String(s??"").replace(/"/g,"&quot;").replace(/</g,"&lt;");}
-function cssStat(s){return{todo:"#8a94a6",active:"#54e08a",blocked:"#ff5f6d",done:"#8a94a6"}[s];}
 
 /* ---------- view switching ---------- */
 let currentView="animals",selectedId=null;
@@ -1451,15 +1487,23 @@ document.getElementById("notifyNudge").addEventListener("click",openNotification
    rather than sitting beside them: every number a project shows about its
    real-world progress (animals operated, targets met, stock status) is
    counted live off the actual records, never stored or hand-maintained, so
-   it cannot drift out of date. Two sub-views share one project header:
-   Timeline (a date axis with one lane per project) and Board (one project's
-   tasks in status columns).                                              */
-let projectsSubTab="timeline";
-let pjScale="week";       // "week" | "month"
-let pjOffset=0;           // weeks (week scale) or months (month scale) from now
-let pjBoardProject=null;  // which project the Board is showing
+   it cannot drift out of date.
+
+   The plan itself is a MAP, not a list: a pannable constellation of nodes
+   joined by "leads to" links. A thesis is one thing with many moving parts,
+   and the shape of that web is the plan — so structure is the primary object
+   here, not a status field hanging off independent tickets. Work converges
+   as readily as it branches (two experiments jointly justifying one
+   conclusion is a normal shape), which is why this is a directed graph and
+   not a tree. A failed experiment keeps its place and its forward links:
+   what it taught is a real input to whatever came next, recorded in its own
+   "what we learned" note rather than encoded as a status.               */
+let pjBoardProject=null;  // which project the map is showing
 const PJ_PROC_TYPES=["surgery","perfusion","histology","microscopy"];
 const DAY_MS=864e5;
+const NODE_STATES=[["planned","Planned"],["running","Running"],["done","Done"]];
+// canvas transform (shared across renders so panning survives a repaint)
+let pjPan={x:60,y:40,z:1}, pjConnectFrom=null, pjSelected=null;
 
 function projectCohorts(p){ return (DB.cohorts||[]).filter(c=>(p.cohortIds||[]).includes(c.id)); }
 function projectAnimals(p){
@@ -1482,11 +1526,6 @@ function projectMaterials(p){
 function dateOnly(s){ const d=whenDate(s); if(!d)return null; d.setHours(0,0,0,0); return d; }
 
 function renderProjects(){
-  const tabBar=document.getElementById("projSubTabs");
-  tabBar.querySelectorAll(".mat-stab").forEach(b=>{
-    b.classList.toggle("on",b.dataset.ps===projectsSubTab);
-    b.onclick=()=>{ projectsSubTab=b.dataset.ps; renderProjects(); };
-  });
   const host=document.getElementById("ps-body"); host.innerHTML="";
   if(!DB.domains.length){
     const e=document.createElement("div"); e.className="empty"; e.style.padding="34px 0";
@@ -1495,8 +1534,7 @@ function renderProjects(){
     e.querySelector("#pj_first").onclick=()=>editProjectModal(null);
     return;
   }
-  if(projectsSubTab==="board") renderProjectsBoard(host);
-  else renderProjectsTimeline(host);
+  renderProjectMap(host);
 }
 // The header block shown above a project — the integration payoff: procedure
 // progress, material stock and reading list all pulled live from the systems
@@ -1543,188 +1581,226 @@ function wireProjectHeaders(host){
   });
 }
 
-/* ---- Timeline: continuous date axis, one lane per project ---------------- */
-function pjWindow(){
-  const d=new Date(); d.setHours(0,0,0,0);
-  if(pjScale==="week"){
-    const s=new Date(d); s.setDate(d.getDate()-d.getDay()+pjOffset*7);
-    const e=new Date(s); e.setDate(s.getDate()+7);
-    return {start:s,end:e,label:`${s.toLocaleDateString(undefined,{month:"short",day:"numeric"})} – ${new Date(e-DAY_MS).toLocaleDateString(undefined,{month:"short",day:"numeric"})}, ${s.getFullYear()}`};
-  }
-  const s=new Date(d.getFullYear(),d.getMonth()+pjOffset,1);
-  const e=new Date(s.getFullYear(),s.getMonth()+6,1);   // ~6-month rolling window
-  return {start:s,end:e,label:`${s.toLocaleDateString(undefined,{month:"short",year:"numeric"})} – ${new Date(e-DAY_MS).toLocaleDateString(undefined,{month:"short",year:"numeric"})}`};
+/* ---- The map ------------------------------------------------------------
+   Nodes are absolutely-positioned HTML cards (crisp text, easy styling) over
+   a single SVG layer carrying the links (clean curves). Both live inside one
+   transformed container, so pan/zoom is a single CSS transform rather than
+   re-laying-out anything. Deliberately no force simulation: the whole point
+   is a stable arrangement the planner controls and recognises, and a physics
+   layout actively fights that by drifting every time it re-renders.      */
+const NODE_W=[176,160,146,134];    // card width by depth — the backbone reads heavier
+const NODE_GAP_Y=64, NODE_GAP_X=214;
+function nodeW(d){ return NODE_W[Math.min(d,NODE_W.length-1)]; }
+// Auto-placement: a new node sits to the right of whatever it came from, slid
+// down past that parent's existing children so nothing is ever born on top of
+// something else. Free dragging afterwards is what actually shapes the map.
+function placeNode(node,fromId){
+  const from=fromId?(taskById(fromId)||domById(fromId)):null;
+  if(!from){ node.x=40; node.y=40; return; }
+  const sibs=(fromId===node.domainId? DB.tasks.filter(t=>t.domainId===node.domainId&&!parentsOf(t.id).length&&t.id!==node.id)
+                                    : childrenOf(fromId).filter(c=>c.id!==node.id))
+             .filter(s=>s.y!=null);
+  node.x=(from.x||0)+NODE_GAP_X;
+  node.y=sibs.length? Math.max(...sibs.map(s=>s.y))+NODE_GAP_Y : (from.y||0);
 }
-function renderProjectsTimeline(host){
-  const win=pjWindow(), spanDays=Math.round((win.end-win.start)/DAY_MS);
-  const nav=document.createElement("div"); nav.className="pj-tl-nav";
-  nav.innerHTML=`<button class="cal-nav-btn" id="pj_prev">‹</button>
-    <button class="cal-nav-btn today" id="pj_today">Today</button>
-    <button class="cal-nav-btn" id="pj_next">›</button>
-    <h2>${esc(win.label)}</h2>
-    <div class="seg" style="flex:0 0 auto;width:auto">
-      <button data-sc="week"  class="${pjScale==="week"?"on":""}" style="padding:5px 12px;font-size:11.5px">Week</button>
-      <button data-sc="month" class="${pjScale==="month"?"on":""}" style="padding:5px 12px;font-size:11.5px">Month</button>
-    </div>
-    <div style="flex:1"></div>
-    <button class="btn accent" id="pj_new" style="font-size:12px">＋ Project</button>`;
-  host.appendChild(nav);
-  nav.querySelector("#pj_prev").onclick=()=>{pjOffset--;renderProjects();};
-  nav.querySelector("#pj_next").onclick=()=>{pjOffset++;renderProjects();};
-  nav.querySelector("#pj_today").onclick=()=>{pjOffset=0;renderProjects();};
-  nav.querySelector("#pj_new").onclick=()=>editProjectModal(null);
-  nav.querySelectorAll("[data-sc]").forEach(b=>b.onclick=()=>{ pjScale=b.dataset.sc; pjOffset=0; renderProjects(); });
-
-  const board=document.createElement("div"); host.appendChild(board);
-  // measured once: bars are positioned in px, so the axis needs a real width.
-  // Below the minimum readable track width the board itself is made wider than
-  // the viewport and the whole thing scrolls sideways as one piece — axis and
-  // lanes are both children of `board`, so they can never drift out of
-  // alignment the way two independently-scrolled regions would.
-  // board.clientWidth, not host's — host is the padded scroll container, so its
-  // clientWidth counts that padding as usable space and overstates the room
-  // available by the padding amount (bars then overflow on narrow screens).
-  const availAll=board.clientWidth;
-  const laneW=Math.min(190,Math.max(110,Math.round(availAll*0.22)));
-  board.style.setProperty("--laneW",laneW+"px");
-  const avail=availAll-laneW-8;
-  const trackW=Math.max(pjScale==="month"?420:240, avail);
-  if(trackW>avail) board.style.minWidth=(laneW+trackW+8)+"px";
-  const pxPerDay=trackW/spanDays;
-  const xOf=d=>((dateOnly(d)-win.start)/DAY_MS)*pxPerDay;
-
-  // axis ticks: days in week scale, months in month scale
-  const axis=document.createElement("div"); axis.className="pj-axis"; board.appendChild(axis);
-  const ticks=[];
-  if(pjScale==="week"){
-    for(let i=0;i<spanDays;i++){ const d=new Date(win.start); d.setDate(win.start.getDate()+i);
-      ticks.push({x:i*pxPerDay, w:pxPerDay, label:d.toLocaleDateString(undefined,{weekday:"short",day:"numeric"})}); }
-  } else {
-    let m=new Date(win.start);
-    while(m<win.end){ const next=new Date(m.getFullYear(),m.getMonth()+1,1);
-      ticks.push({x:xOf(m), w:((Math.min(next,win.end)-m)/DAY_MS)*pxPerDay, label:m.toLocaleDateString(undefined,{month:"short"})});
-      m=next; }
-  }
-  ticks.forEach(t=>{ const el=document.createElement("div"); el.className="tk";
-    el.style.left=t.x+"px"; el.style.width=t.w+"px"; el.textContent=t.label; axis.appendChild(el); });
-
-  const today=new Date(); today.setHours(0,0,0,0);
-  const gridHTML=ticks.map(t=>`<span style="left:${t.x}px"></span>`).join("")
-    +((today>=win.start&&today<win.end)?`<span class="today" style="left:${xOf(today)}px"></span>`:"");
-
-  DB.domains.forEach(p=>{
-    const card=document.createElement("div"); card.className="pj-card";
-    card.innerHTML=projectHeaderHTML(p);
-    const lane=document.createElement("div"); lane.className="pj-lane";
-    lane.innerHTML=`<div class="pj-lane-head">
-        <span class="nm"><span class="chip" style="background:${p.color}"></span>${esc(p.name)}</span>
-        <span class="mini">${projectTasks(p).length} task${projectTasks(p).length!==1?"s":""}</span>
-      </div>
-      <div class="pj-track"><div class="pj-grid">${gridHTML}</div></div>`;
-    const track=lane.querySelector(".pj-track");
-
-    // planned work: one bar per dated task
-    const dated=projectTasks(p).filter(t=>t.deadline);
-    let row=0;
-    dated.forEach(t=>{
-      const s=dateOnly(t.deadline), e=t.endDate?dateOnly(t.endDate):s;
-      if(e<win.start||s>=win.end)return;
-      const x0=Math.max(0,xOf(s)), x1=Math.min(trackW,xOf(e)+pxPerDay);
-      const bar=document.createElement("div"); bar.className="pj-bar "+(t.status||"todo");
-      bar.style.left=x0+"px"; bar.style.width=Math.max(6,x1-x0)+"px"; bar.style.top=(6+row*24)+"px";
-      bar.style.background=p.color; bar.title=`${t.title||"(untitled)"} — ${STAT_LABEL[t.status]||""}`;
-      bar.textContent=t.title||"(untitled)";
-      bar.onclick=ev=>{ ev.stopPropagation(); openDetail(t.id); };
-      track.appendChild(bar); row++;
-    });
-    // what actually happened: real procedure dates from the linked cohorts'
-    // animal diaries, so planned vs. real cadence sit on the same axis
-    const seen=new Set();
-    projectAnimals(p).forEach(a=>(a.diary||[]).forEach(en=>{
-      if(!PJ_PROC_TYPES.includes(en.type))return;
-      const d=dateOnly(en.date); if(!d||d<win.start||d>=win.end)return;
-      const key=en.type+"|"+en.date; if(seen.has(key))return; seen.add(key);
-      const def=diaryTypeDef(en.type);
-      const tick=document.createElement("div"); tick.className="pj-tick";
-      tick.style.left=(xOf(d)+pxPerDay/2)+"px"; tick.style.bottom="7px"; tick.style.background=def.color;
-      tick.title=`${def.label} — ${en.date}`;
-      track.appendChild(tick);
-    }));
-    if(p.targetDate){ const d=dateOnly(p.targetDate);
-      if(d>=win.start&&d<win.end){ const m=document.createElement("div"); m.className="pj-target-mark";
-        m.style.left=xOf(d)+"px"; m.title="Project target: "+p.targetDate; track.appendChild(m); } }
-    track.style.minHeight=Math.max(46,row*24+14)+"px";
-    // click empty track space → new task starting on that date
-    track.onclick=ev=>{
-      if(ev.target!==track&&!ev.target.classList.contains("pj-grid"))return;
-      const day=Math.floor((ev.offsetX)/pxPerDay);
-      const d=new Date(win.start); d.setDate(win.start.getDate()+day);
-      const pad=n=>String(n).padStart(2,"0");
-      createAndOpenTask({domainId:p.id, deadline:`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`});
-    };
-    lane.querySelector(".pj-lane-head").onclick=()=>{ pjBoardProject=p.id; projectsSubTab="board"; renderProjects(); };
-    card.appendChild(lane);
-    board.appendChild(card);
-  });
-  wireProjectHeaders(board);
-}
-
-/* ---- Board: one project's tasks in status columns ------------------------ */
-function renderProjectsBoard(host){
+function renderProjectMap(host){
   if(!pjBoardProject||!DB.domains.some(d=>d.id===pjBoardProject)) pjBoardProject=DB.domains[0].id;
   const p=DB.domains.find(d=>d.id===pjBoardProject);
+  if(p.x==null){ p.x=40; p.y=180; }
 
   const pills=document.createElement("div"); pills.className="pj-pills";
   pills.innerHTML=DB.domains.map(d=>`<button class="pj-pill ${d.id===p.id?"on":""}" data-pj="${d.id}" style="${d.id===p.id?`color:${d.color}`:""}"><span class="chip" style="background:${d.color}"></span>${esc(d.name)}</button>`).join("")
-    +`<button class="btn accent" id="pj_new2" style="margin-left:auto;font-size:12px">＋ Project</button>`;
+    +`<button class="btn accent" id="pj_new" style="margin-left:auto;font-size:12px">＋ Project</button>`;
   host.appendChild(pills);
-  pills.querySelectorAll(".pj-pill").forEach(b=>b.onclick=()=>{ pjBoardProject=b.dataset.pj; renderProjects(); });
-  pills.querySelector("#pj_new2").onclick=()=>editProjectModal(null);
+  pills.querySelectorAll(".pj-pill").forEach(b=>b.onclick=()=>{ pjBoardProject=b.dataset.pj; pjSelected=null; pjConnectFrom=null; renderProjects(); });
+  pills.querySelector("#pj_new").onclick=()=>editProjectModal(null);
 
   const card=document.createElement("div"); card.className="pj-card";
   card.innerHTML=projectHeaderHTML(p,{full:true});
   host.appendChild(card);
 
-  const cols=document.createElement("div"); cols.className="pj-cols"; host.appendChild(cols);
-  // only top-level tasks get cards; subtasks ride along under their parent
-  const tasks=projectTasks(p).filter(t=>!t.parentId||!taskById(t.parentId));
-  TASK_STATUSES.forEach(st=>{
-    const mine=tasks.filter(t=>(t.status||"todo")===st);
-    const col=document.createElement("div"); col.className="pj-col";
-    col.innerHTML=`<h4><span class="stat" style="background:${STAT[st]};width:8px;height:8px;border-radius:50%;display:inline-block"></span>${STAT_LABEL[st]}<span class="n">${mine.length}</span></h4>`;
-    mine.forEach(t=>{
-      const kids=childrenOf(t.id), tg=targetProgress(t);
-      const el=document.createElement("div"); el.className="pj-taskcard"+(st==="done"?" done":"");
-      el.style.setProperty("--c",p.color);
-      el.innerHTML=`<div class="tt">${esc(t.title||"(untitled)")}</div>
-        <div class="row">
-          <button class="pj-cycle" title="next status">${STAT_LABEL[st]} ▸</button>
-          ${t.deadline?`<span class="pj-sub-count">${esc(fmtWhenFull(t.deadline).replace(/,.*$/,""))}</span>`:""}
-          ${tg?`<span class="tgt-count ${tg.want&&tg.have>=tg.want?"met":""}">🐭 ${tg.have}/${tg.want||"—"}</span>`:""}
-          ${kids.length?`<span class="pj-sub-count">☑ ${kids.filter(k=>k.status==="done").length}/${kids.length}</span>`:""}
-        </div>
-        ${kids.map(k=>`<div class="pj-subrow">
-            <input type="checkbox" class="pj-sub-chk" data-id="${k.id}" ${k.status==="done"?"checked":""}>
-            <span class="s-t ${k.status==="done"?"done":""}" data-open="${k.id}">${esc(k.title||"(untitled)")}</span>
-          </div>`).join("")}`;
-      el.querySelector(".tt").onclick=()=>openDetail(t.id);
-      el.querySelector(".pj-cycle").onclick=()=>{
-        t.status=TASK_STATUSES[(TASK_STATUSES.indexOf(st)+1)%TASK_STATUSES.length];
-        persist(); renderProjects();
-      };
-      el.querySelectorAll(".pj-sub-chk").forEach(cb=>cb.onchange=()=>{
-        const k=taskById(cb.dataset.id); if(!k)return;
-        k.status=cb.checked?"done":"todo"; persist(); renderProjects();
-      });
-      el.querySelectorAll("[data-open]").forEach(sp=>sp.onclick=()=>openDetail(sp.dataset.open));
-      col.appendChild(el);
+  const bar=document.createElement("div"); bar.className="pjm-bar";
+  bar.innerHTML=`<button class="pjm-btn ${pjConnectFrom!==null?"on":""}" id="pjm_link">${pjConnectFrom?"✓ pick the node it leads to…":"⇢ Connect"}</button>
+    <button class="pjm-btn" id="pjm_add">＋ Node</button>
+    <button class="pjm-btn" id="pjm_fit">⤢ Fit</button>
+    <span class="pjm-hint">drag background to pan · scroll to zoom · click a node to open it</span>`;
+  host.appendChild(bar);
+
+  const stage=document.createElement("div"); stage.className="pjm-stage"; host.appendChild(stage);
+  const world=document.createElement("div"); world.className="pjm-world"; stage.appendChild(world);
+  const svg=document.createElementNS("http://www.w3.org/2000/svg","svg"); svg.setAttribute("class","pjm-links"); world.appendChild(svg);
+
+  const nodes=DB.tasks.filter(t=>t.domainId===p.id);
+  // place in dependency order — a node positioned relative to its parent needs
+  // that parent to already have coordinates, and array order doesn't guarantee
+  // it. Repeat until no further progress, then place whatever's left (a cycle,
+  // or an orphan) off the root so nothing is ever left without a position.
+  for(let pass=0;pass<nodes.length+1;pass++){
+    let did=false;
+    nodes.forEach(n=>{
+      if(n.x!=null)return;
+      const from=parentsOf(n.id).filter(q=>q.domainId===p.id)[0];
+      if(!from){ placeNode(n,p.id); did=true; }
+      else if(from.x!=null){ placeNode(n,from.id); did=true; }
     });
-    const add=document.createElement("button"); add.className="pj-addtask"; add.textContent="＋ Task";
-    add.onclick=()=>createAndOpenTask({domainId:p.id,status:st});
-    col.appendChild(add);
-    cols.appendChild(col);
+    if(!did)break;
+  }
+  nodes.forEach(n=>{ if(n.x==null) placeNode(n,p.id); });
+
+  function applyTransform(){ world.style.transform=`translate(${pjPan.x}px,${pjPan.y}px) scale(${pjPan.z})`; }
+  applyTransform();
+
+  // ── the project root, drawn as a node so the map visibly has one centre
+  const rootEl=document.createElement("div");
+  rootEl.className="pjm-node pjm-root"+(pjConnectFrom===p.id?" linking":"");
+  rootEl.style.left=p.x+"px"; rootEl.style.top=p.y+"px"; rootEl.style.width=nodeW(0)+"px";
+  rootEl.style.setProperty("--c",p.color);
+  rootEl.innerHTML=`<div class="t">${esc(p.name)}</div><div class="m">${nodes.length} node${nodes.length!==1?"s":""}</div>`;
+  world.appendChild(rootEl);
+
+  const els={}; els[p.id]=rootEl;
+  nodes.forEach(n=>{
+    const d=nodeDepth(n), el=document.createElement("div");
+    el.className="pjm-node d"+Math.min(d,3)+" s-"+(n.state||"planned")+(pjSelected===n.id?" sel":"")+(pjConnectFrom===n.id?" linking":"");
+    el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.style.width=nodeW(d)+"px";
+    el.style.setProperty("--c",p.color);
+    el.innerHTML=`<div class="t">${esc(n.title||"(untitled)")}</div>
+      <div class="m"><span class="dot"></span>${(NODE_STATES.find(s=>s[0]===(n.state||"planned"))||[])[1]}${n.learned?`<span class="lrn" title="${escAttr(n.learned)}">📝</span>`:""}</div>
+      ${pjSelected===n.id?`<button class="pjm-plus" title="add a node this one leads to">＋</button>`:""}`;
+    world.appendChild(el); els[n.id]=el;
   });
+
+  // ── links, drawn after the cards exist so real measured heights are used
+  function drawLinks(){
+    const seg=[];
+    const edge=(a,b,fromId,toId)=>{
+      if(!a||!b)return;
+      const x1=a.offsetLeft+a.offsetWidth, y1=a.offsetTop+a.offsetHeight/2;
+      const x2=b.offsetLeft,               y2=b.offsetTop+b.offsetHeight/2;
+      const dx=Math.max(36,Math.abs(x2-x1)*0.5);
+      seg.push(`<path class="pjm-link" d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}" data-from="${fromId}" data-to="${toId}"/>`);
+    };
+    // the root implicitly feeds every node nothing else feeds, so the map
+    // always reads as one connected plan rather than scattered fragments
+    nodes.filter(n=>!parentsOf(n.id).some(q=>q.domainId===p.id)).forEach(n=>edge(rootEl,els[n.id],p.id,n.id));
+    nodes.forEach(n=>(n.links||[]).forEach(id=>{ if(els[id]) edge(els[n.id],els[id],n.id,id); }));
+    const xs=[p.x+nodeW(0),...nodes.map(n=>n.x+240)], ys=[p.y+120,...nodes.map(n=>n.y+140)];
+    svg.setAttribute("width",Math.max(600,...xs)); svg.setAttribute("height",Math.max(400,...ys));
+    svg.innerHTML=seg.join("");
+    svg.querySelectorAll(".pjm-link").forEach(pa=>pa.addEventListener("click",ev=>{
+      ev.stopPropagation();
+      const f=pa.dataset.from,t2=pa.dataset.to;
+      if(f===p.id){ toast("That link is implied — give the node an input to change it"); return; }
+      const src=taskById(f); if(!src)return;
+      if(confirm(`Remove the link "${src.title||"(untitled)"}" → "${(taskById(t2)||{}).title||"(untitled)"}"?`)){
+        src.links=(src.links||[]).filter(x=>x!==t2); persist(); renderProjects();
+      }
+    }));
+  }
+  // synchronous, not rAF: offset metrics are already available once the cards
+  // are in the DOM, and rAF callbacks don't fire at all while the page isn't
+  // compositing (a backgrounded tab), which would leave the map link-less
+  drawLinks();
+
+  // ── interactions
+  function nodeClicked(id){
+    if(pjConnectFrom){
+      if(pjConnectFrom===id){ pjConnectFrom=null; renderProjects(); return; }
+      const from=pjConnectFrom===p.id?null:taskById(pjConnectFrom);
+      if(from&&id!==p.id){
+        from.links=[...new Set([...(from.links||[]),id])]; persist(); toast("Linked");
+      } else if(!from){ toast("The root already feeds every unlinked node"); }
+      pjConnectFrom=null; renderProjects(); return;
+    }
+    if(id===p.id){ editProjectModal(p.id); return; }
+    pjSelected=id; renderProjects(); openDetail(id);
+  }
+  Object.entries(els).forEach(([id,el])=>{
+    let moved=false,sx=0,sy=0,ox=0,oy=0,dragging=false;
+    const rec=id===p.id?p:taskById(id);
+    el.addEventListener("pointerdown",ev=>{
+      if(ev.target.classList.contains("pjm-plus"))return;
+      ev.stopPropagation(); dragging=true; moved=false;
+      sx=ev.clientX; sy=ev.clientY; ox=rec.x; oy=rec.y;
+      el.setPointerCapture(ev.pointerId); el.classList.add("drag");
+    });
+    el.addEventListener("pointermove",ev=>{
+      if(!dragging)return;
+      const dx=(ev.clientX-sx)/pjPan.z, dy=(ev.clientY-sy)/pjPan.z;
+      if(Math.abs(dx)>3||Math.abs(dy)>3)moved=true;
+      rec.x=Math.round(ox+dx); rec.y=Math.round(oy+dy);
+      el.style.left=rec.x+"px"; el.style.top=rec.y+"px"; drawLinks();
+    });
+    el.addEventListener("pointerup",ev=>{
+      if(!dragging)return; dragging=false; el.classList.remove("drag");
+      if(moved){ persist(); } else { nodeClicked(id); }
+    });
+    const plus=el.querySelector(".pjm-plus");
+    if(plus) plus.onclick=ev=>{ ev.stopPropagation(); addNodeFrom(id); };
+  });
+
+  function addNodeFrom(fromId){
+    const n=newProjectNode(p.id);
+    placeNode(n,fromId);
+    if(fromId!==p.id){ const f=taskById(fromId); if(f) f.links=[...new Set([...(f.links||[]),n.id])]; }
+    DB.tasks.push(n); pjSelected=n.id; persist(); renderProjects(); openDetail(n.id);
+    requestAnimationFrame(()=>{ const tf=document.getElementById("e_title"); if(tf){tf.select();tf.focus();} });
+  }
+
+  // pan on background drag; a plain click on empty space makes a free node
+  let panning=false,px0=0,py0=0,pox=0,poy=0,panMoved=false;
+  stage.addEventListener("pointerdown",ev=>{
+    if(ev.target!==stage&&ev.target!==world&&ev.target!==svg)return;
+    panning=true; panMoved=false; px0=ev.clientX; py0=ev.clientY; pox=pjPan.x; poy=pjPan.y;
+    stage.setPointerCapture(ev.pointerId); stage.classList.add("grabbing");
+  });
+  stage.addEventListener("pointermove",ev=>{
+    if(!panning)return;
+    const dx=ev.clientX-px0, dy=ev.clientY-py0;
+    if(Math.abs(dx)>3||Math.abs(dy)>3)panMoved=true;
+    pjPan.x=pox+dx; pjPan.y=poy+dy; applyTransform();
+  });
+  stage.addEventListener("pointerup",ev=>{
+    if(!panning)return; panning=false; stage.classList.remove("grabbing");
+    if(panMoved)return;
+    if(pjConnectFrom){ pjConnectFrom=null; renderProjects(); return; }
+    if(pjSelected){ pjSelected=null; renderProjects(); return; }
+    const r=stage.getBoundingClientRect();
+    const n=newProjectNode(p.id);
+    n.x=Math.round((ev.clientX-r.left-pjPan.x)/pjPan.z);
+    n.y=Math.round((ev.clientY-r.top -pjPan.y)/pjPan.z);
+    DB.tasks.push(n); pjSelected=n.id; persist(); renderProjects(); openDetail(n.id);
+    requestAnimationFrame(()=>{ const tf=document.getElementById("e_title"); if(tf){tf.select();tf.focus();} });
+  });
+  stage.addEventListener("wheel",ev=>{
+    ev.preventDefault();
+    const r=stage.getBoundingClientRect(), mx=ev.clientX-r.left, my=ev.clientY-r.top;
+    const z=Math.max(0.35,Math.min(1.8,pjPan.z*(ev.deltaY<0?1.1:1/1.1)));
+    // keep the point under the cursor fixed while zooming
+    pjPan.x=mx-(mx-pjPan.x)*(z/pjPan.z); pjPan.y=my-(my-pjPan.y)*(z/pjPan.z);
+    pjPan.z=z; applyTransform();
+  },{passive:false});
+
+  bar.querySelector("#pjm_link").onclick=()=>{
+    pjConnectFrom=pjConnectFrom?null:(pjSelected||null);
+    if(!pjConnectFrom&&!pjSelected) toast("Select the node the link starts from first");
+    renderProjects();
+  };
+  bar.querySelector("#pjm_add").onclick=()=>addNodeFrom(p.id);
+  bar.querySelector("#pjm_fit").onclick=()=>{
+    const all=[{x:p.x,y:p.y},...nodes];
+    const minX=Math.min(...all.map(n=>n.x)), minY=Math.min(...all.map(n=>n.y));
+    const maxX=Math.max(...all.map(n=>n.x+200)), maxY=Math.max(...all.map(n=>n.y+90));
+    const r=stage.getBoundingClientRect();
+    pjPan.z=Math.max(0.35,Math.min(1.4,Math.min(r.width/(maxX-minX+80),r.height/(maxY-minY+80))));
+    pjPan.x=40-minX*pjPan.z; pjPan.y=30-minY*pjPan.z; applyTransform();
+  };
   wireProjectHeaders(host);
+}
+function newProjectNode(domainId){
+  return {id:uid("t_"),title:"",domainId,parentId:null,status:"todo",state:"planned",learned:"",
+    priority:2,deadline:null,endDate:null,duration:null,procedureType:null,linkedAnimals:[],
+    autoTitle:false,materials:[],notes:"",deps:[],links:[],target:null,x:null,y:null,created:Date.now()};
 }
 
 /* ---------- TIMELINE (scheduled times) ---------- */
@@ -4528,13 +4604,15 @@ function openDetail(id){
     <div class="fld"><label>Title</label>
       <input id="e_title" value="${escAttr(t.title)}" list="e_blueprints" autocomplete="off" placeholder="Task title…">
       <datalist id="e_blueprints">${[...new Set(DB.tasks.filter(x=>x.id!==t.id).map(x=>x.title))].sort().map(tt=>`<option value="${escAttr(tt)}">`).join("")}</datalist></div>
-    <div class="fld"><label>Status</label><div class="seg" id="e_status">
-      ${TASK_STATUSES.map(s=>`<button data-s="${s}" class="${t.status===s?"on":""}" style="${t.status===s?`color:${cssStat(s)}`:""}">${STAT_LABEL[s]}</button>`).join("")}</div></div>
+    <div class="fld"><label>State</label><div class="seg" id="e_state">
+      ${NODE_STATES.map(([k,l])=>`<button data-s="${k}" class="${(t.state||"planned")===k?"on":""}">${l}</button>`).join("")}</div></div>
     <div class="drow">
       <div class="fld" style="width:200px"><label>Start (date + hour)</label><button type="button" id="e_due" class="datebtn ${t.deadline?"":"datebtn-empty"}">${t.deadline?fmtWhenFull(t.deadline):"📅  start"}</button></div>
       <div class="fld" style="flex:1"><label>End <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">date + time</span></label>
         <button type="button" id="e_endDate" class="datebtn ${t.endDate?"":"datebtn-empty"}">${t.endDate?fmtWhenFull(t.endDate):"📅  end"}</button></div></div>
     <div class="fld"><label>Notes</label><textarea id="e_notes">${esc(t.notes||"")}</textarea></div>
+    <div class="fld"><label>What we learned <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">an experiment that didn't work still feeds what came next</span></label>
+      <textarea id="e_learned" placeholder="the finding, the reason it failed, what it ruled out…">${esc(t.learned||"")}</textarea></div>
     ${targetFieldHTML(t)}
     ${subtaskListHTML(t)}
     ${(() => { const la=DB.animals.filter(a=>(a.tasks||[]).includes(t.id)); return la.length?`<div class="fld"><label>Linked animals (${la.length})</label><div style="font-size:12.5px;line-height:1.7">${la.map(a=>`<div><span class="stat" style="background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};display:inline-block;margin-right:6px"></span>${esc(a.name)} <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${esc(a.cohort)}</span></div>`).join("")}</div><div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:4px">link/unlink from the Animals tab</div></div>`:""; })()}
@@ -4570,14 +4648,16 @@ function targetFieldHTML(t){
   </div>`;
 }
 function subtaskListHTML(t){
-  const kids=childrenOf(t.id);
-  return `<div class="fld"><label>Subtasks${kids.length?` (${kids.filter(k=>k.status==="done").length}/${kids.length})`:""}</label>
+  const kids=childrenOf(t.id), ins=parentsOf(t.id);
+  return `${ins.length?`<div class="fld"><label>Fed by</label><div class="subtask-list">${ins.map(k=>`
+      <div class="subtask-row"><span class="e_sub_open ${k.state==="done"?"done":""}" data-id="${k.id}">↳ ${esc(k.title||"(untitled)")}</span></div>`).join("")}</div></div>`:""}
+    <div class="fld"><label>Leads to${kids.length?` (${kids.filter(k=>k.state==="done").length}/${kids.length} done)`:""}</label>
     ${kids.length?`<div class="subtask-list">${kids.map(k=>`
       <label class="subtask-row">
-        <input type="checkbox" class="e_sub_chk" data-id="${k.id}" ${k.status==="done"?"checked":""}>
-        <span class="e_sub_open ${k.status==="done"?"done":""}" data-id="${k.id}">${esc(k.title||"(untitled)")}</span>
-      </label>`).join("")}</div>`:`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">none yet</div>`}
-    <button type="button" class="btn ghost" id="e_addsub" style="font-size:11.5px;padding:4px 9px;margin-top:7px">＋ Subtask</button></div>`;
+        <input type="checkbox" class="e_sub_chk" data-id="${k.id}" ${k.state==="done"?"checked":""}>
+        <span class="e_sub_open ${k.state==="done"?"done":""}" data-id="${k.id}">${esc(k.title||"(untitled)")}</span>
+      </label>`).join("")}</div>`:`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">nothing yet</div>`}
+    <button type="button" class="btn ghost" id="e_addsub" style="font-size:11.5px;padding:4px 9px;margin-top:7px">＋ Node this leads to</button></div>`;
 }
 function wireDetail(t){
   const save=p=>{ Object.assign(t,p); persist(); document.getElementById("dTitleView").textContent=t.title||"New task"; render(); };
@@ -4585,7 +4665,10 @@ function wireDetail(t){
   bindDateButton(document.getElementById("e_due"), ()=>t.deadline||"", v=>save({deadline:v||null}));
   const edEl=document.getElementById("e_endDate"); if(edEl) bindDateButton(edEl, ()=>t.endDate||"", v=>save({endDate:v||null}));
   document.getElementById("e_notes").addEventListener("input",e=>save({notes:e.target.value}));
-  document.getElementById("e_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;save({status:b.dataset.s});persist();openDetail(t.id);});
+  const lrn=document.getElementById("e_learned");
+  if(lrn) lrn.addEventListener("input",e=>save({learned:e.target.value}));
+  document.getElementById("e_state").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+    save({state:b.dataset.s, status:{planned:"todo",running:"active",done:"done"}[b.dataset.s]});persist();openDetail(t.id);});
   // ── animal target: cohort + count + optional procedure template
   const tgtCo=document.getElementById("e_tgt_cohort");
   if(tgtCo){
@@ -4611,21 +4694,41 @@ function wireDetail(t){
       closeDetail(); switchTo("animals"); animalModal(null,draft);
     });
   }
-  // ── subtasks (plain tasks with parentId — same records, just nested)
+  // ── downstream nodes (the same records — "leads to" is just a link)
   const addSub=document.getElementById("e_addsub");
-  if(addSub) addSub.addEventListener("click",()=>createAndOpenTask({domainId:t.domainId,parentId:t.id}));
+  if(addSub) addSub.addEventListener("click",()=>{
+    const n=newProjectNode(t.domainId);
+    placeNode(n,t.id);
+    t.links=[...new Set([...(t.links||[]),n.id])];
+    DB.tasks.push(n); pjSelected=n.id; persist(); render(); openDetail(n.id);
+    requestAnimationFrame(()=>{ const tf=document.getElementById("e_title"); if(tf){tf.select();tf.focus();} });
+  });
   document.querySelectorAll("#dBody .e_sub_chk").forEach(cb=>cb.addEventListener("change",()=>{
     const k=taskById(cb.dataset.id); if(!k)return;
-    k.status=cb.checked?"done":"todo"; persist(); render(); openDetail(t.id);
+    k.state=cb.checked?"done":"planned"; k.status=cb.checked?"done":"todo";
+    persist(); render(); openDetail(t.id);
   }));
   document.querySelectorAll("#dBody .e_sub_open").forEach(sp=>sp.addEventListener("click",()=>openDetail(sp.dataset.id)));
-  document.getElementById("e_del").addEventListener("click",()=>{ if(!confirm("Delete this task?"))return;
-    childrenOf(t.id).forEach(k=>k.parentId=t.parentId);
-    DB.tasks.forEach(x=>x.deps=(x.deps||[]).filter(d=>d!==t.id));
-    DB.tasks=DB.tasks.filter(x=>x.id!==t.id); persist(); closeDetail(); render(); toast("Task deleted"); });
+  document.getElementById("e_del").addEventListener("click",()=>{ if(!confirm("Delete this node?"))return;
+    // bridge across the gap: whatever fed this node now feeds what it led to,
+    // so deleting a step doesn't silently sever the chain through it
+    const ins=parentsOf(t.id), outs=(t.links||[]).slice();
+    ins.forEach(pn=>{
+      pn.links=(pn.links||[]).filter(x=>x!==t.id);
+      outs.forEach(o=>{ if(o!==pn.id&&!pn.links.includes(o)) pn.links.push(o); });
+    });
+    DB.tasks.forEach(x=>{ x.deps=(x.deps||[]).filter(d=>d!==t.id); x.links=(x.links||[]).filter(d=>d!==t.id); });
+    DB.tasks=DB.tasks.filter(x=>x.id!==t.id);
+    if(pjSelected===t.id)pjSelected=null;
+    persist(); closeDetail(); render(); toast("Node deleted"); });
 }
 function closeDetail(){
-  if(selectedId){ const t=taskById(selectedId); if(t&&!t.title){ DB.tasks=DB.tasks.filter(x=>x.id!==selectedId); persist(); } }
+  if(selectedId){ const t=taskById(selectedId);
+    if(t&&!t.title){ // discard a never-named node, and any link pointing at it
+      DB.tasks.forEach(x=>{ x.links=(x.links||[]).filter(d=>d!==selectedId); });
+      DB.tasks=DB.tasks.filter(x=>x.id!==selectedId);
+      if(pjSelected===selectedId)pjSelected=null;
+      persist(); } }
   document.getElementById("detail").classList.remove("open"); selectedId=null;
   render();
 }
