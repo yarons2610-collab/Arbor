@@ -189,8 +189,12 @@
   .dend-add{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:1px 7px;font-size:12px;cursor:pointer;flex:0 0 auto}
   .dend-add:hover{color:var(--ink)}
   .hintlet{font-family:var(--mono);font-size:9px;color:var(--ink-faint);font-weight:400}
-  .spine-row{display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--line)}
-  .spine-row.sel{background:rgba(255,255,255,.04);border-radius:6px;padding-left:4px;padding-right:4px}
+  .spine-row{display:flex;align-items:center;gap:6px}
+  .spine-block{padding:6px 0;border-bottom:1px solid var(--line)}
+  .spine-block.sel{background:rgba(255,255,255,.04);border-radius:6px;padding-left:4px;padding-right:4px}
+  .spine-ref{width:100%;margin-top:4px;font-family:var(--mono);font-size:10.5px;background:transparent;border:1px solid transparent;border-radius:6px;padding:2px 5px;color:var(--ink-faint)}
+  .spine-ref:focus{border-color:var(--line2);background:var(--panel2);color:var(--ink);outline:none}
+  .sharerow{display:flex;align-items:center;gap:7px;font-size:12.5px;padding:3px 0;cursor:pointer}
   .spine-name{flex:1;min-width:0;font-size:12.5px;background:transparent;border:1px solid transparent;border-radius:6px;padding:3px 5px;color:var(--ink)}
   .spine-name:focus{border-color:var(--line2);background:var(--panel2);outline:none}
   .spine-when{flex:0 0 auto;font-size:11px!important;padding:3px 8px!important}
@@ -475,11 +479,11 @@
     <div class="view hidden" id="arbor">
       <svg id="svg"></svg>
       <div class="arbor-tools">
-        <button id="ar_add" title="Create a new soma — a project, with its own dendrites">＋ Soma</button>
+        <button id="ar_add" title="Start a new paper, pre-seeded with its parts">＋ Paper</button>
         <button id="ar_fit" class="hidden" title="Zoom back out to the whole network">⤢ Whole network</button>
       </div>
 
-      <div class="hint">drag · scroll to zoom · click a cell to open it</div>
+      <div class="hint">click a paper to open it · drag a part onto another to re-branch</div>
     </div>
     <div class="view hidden wrap" id="outline"></div>
     <div class="view hidden wrap" id="timeline"></div>
@@ -1003,7 +1007,20 @@ function migrate(){                       // backfill fields added in later vers
   });
   // somata (DB.domains) gained a free-text outline: the plan for the project in
   // the user's own words. Additive only — nothing else about a soma changed.
-  DB.domains.forEach(d=>{ if(d.outline==null) d.outline=""; });
+  // A soma is a paper now: what was its free-text outline is its abstract, and
+  // it can share points with other papers (axons).
+  DB.domains.forEach(d=>{
+    if(d.abstract==null) d.abstract=d.outline||"";
+    if(!Array.isArray(d.links)) d.links=[];
+  });
+  // A dendrite is a part of the paper, so it has one body of text rather than a
+  // notes field and a findings field. Fold any existing findings into the text
+  // instead of leaving them stranded in a record nothing renders.
+  DB.tasks.forEach(t=>{
+    if(t.learned&&!String(t.notes||"").includes(t.learned)){
+      t.notes=(t.notes?t.notes+"\n\n":"")+t.learned; t.learned="";
+    }
+  });
   // Spines: a dendrite is a standing structure (a protocol, a procedure type) and
   // is never "done", so the dates that used to live on it move down one level to
   // the individual runs growing off it. Every dendrite that already carried a
@@ -1023,6 +1040,7 @@ function migrate(){                       // backfill fields added in later vers
     DB._spinesMigrated=true;
   }
   // a spine whose dendrite was deleted has nowhere to hang
+  DB.spines.forEach(sp=>{ if(sp.ref==null) sp.ref=""; });   // link/citation for the datum
   DB.spines=DB.spines.filter(sp=>DB.tasks.some(t=>t.id===sp.dendriteId));
 }
 const uid=p=>p+Math.random().toString(36).slice(2,8);
@@ -1460,7 +1478,8 @@ document.getElementById("notifyNudge").addEventListener("click",openNotification
    old "link tasks" mode are gone: an edge here means "belongs to", never
    "waits for". */
 let arSim=null, arZoomG=null, arZoom=null, arSvg=null, arNodeSel=null, arLinkSel=null;
-let arFocus=null;                         // soma id whose cell is zoomed in, or null
+let arFocus=null;                         // soma whose cell is open, or null
+let arMode="network";                     // "network" = the somata | "cell" = one tree
 const somaOf=n=>n.type==="soma"?n.id:(n.t?n.t.domainId:null);
 const dendritesOf=domId=>DB.tasks.filter(t=>t.domainId===domId);
 // A dendrite whose parent is missing (or sits in another soma after a move)
@@ -1495,185 +1514,181 @@ function reparentDendrite(id,targetId,targetIsSoma){
   persist(); return `"${t.title||"dendrite"}" now branches off "${tgt.title||"dendrite"}"`;
 }
 
+const PAPER_PARTS=["Introduction","Methods","Results","Discussion","References"];
 function addSoma(){
   const d={id:uid("d"),name:"",color:DOMAIN_PALETTE[DB.domains.length%DOMAIN_PALETTE.length],
-           active:false,outline:""};
-  DB.domains.push(d); persist(); renderArbor(); editSomaModal(d.id,true);
+           abstract:"",links:[]};
+  DB.domains.push(d);
+  // every paper has the same bones; rename or delete them freely
+  PAPER_PARTS.forEach(nm=>DB.tasks.push({id:uid("t_"),title:nm,domainId:d.id,parentId:null,
+    notes:"",materials:[],linkedAnimals:[],created:Date.now()}));
+  persist(); focusCell(d.id); editSomaModal(d.id,true);
 }
 
-// Fit the viewport around a set of simulation nodes. Labels run off to the right
-// of each node, so the right pad is deliberately the larger one.
-function arZoomTo(ns,dur){
-  if(!arZoom||!arSvg||!ns||!ns.length)return;
-  const el=document.getElementById("arbor"),W=el.clientWidth,H=el.clientHeight;
-  if(!W||!H)return;
-  const xs=ns.map(n=>n.x||0), ys=ns.map(n=>n.y||0);
-  const x0=Math.min(...xs)-70,x1=Math.max(...xs)+190,y0=Math.min(...ys)-70,y1=Math.max(...ys)+70;
-  const k=Math.max(.3,Math.min(2.4,.95*Math.min(W/(x1-x0),H/(y1-y0))));
-  arSvg.transition().duration(dur==null?450:dur).call(arZoom.transform,
-    d3.zoomIdentity.translate(W/2,H/2).scale(k).translate(-(x0+x1)/2,-(y0+y1)/2));
-}
-// Dim what's outside the focused cell rather than hiding it — half the point of
-// zooming into a project is still seeing where it sits among the others.
-function applyFocus(){
-  const fit=document.getElementById("ar_fit");
-  if(fit)fit.classList.toggle("hidden",!arFocus);
-  if(!arNodeSel)return;
-  arNodeSel.style("opacity",d=>!arFocus||somaOf(d)===arFocus?1:.12);
-  arLinkSel.style("opacity",l=>!arFocus||l.dom===arFocus?1:.06);
-}
-function focusCell(domId){
-  arFocus=domId; applyFocus();
-  if(arSim)arZoomTo(arSim.nodes().filter(n=>somaOf(n)===domId));
-}
-function clearFocus(){
-  arFocus=null; applyFocus();
-  if(arSim)arZoomTo(arSim.nodes());
-}
+function clearFocus(){ arMode="network"; arFocus=null; renderArbor(); }
+function focusCell(domId){ arMode="cell"; arFocus=domId; renderArbor(); }
 function renderArbor(){
+  if(arMode==="cell"&&arFocus&&domById(arFocus)) renderCellTree(arFocus);
+  else renderNetwork();
+}
+function arSetup(){
   const svg=d3.select("#svg"); svg.selectAll("*").remove();
-  const el=document.getElementById("arbor"),W=el.clientWidth,H=el.clientHeight;
   arSvg=svg;
   document.getElementById("ar_add").onclick=addSoma;
   document.getElementById("ar_fit").onclick=clearFocus;
-
+  document.getElementById("ar_fit").classList.toggle("hidden",arMode!=="cell");
   const defs=svg.append("defs");
   const f=defs.append("filter").attr("id","glow").attr("x","-60%").attr("y","-60%").attr("width","220%").attr("height","220%");
   f.append("feGaussianBlur").attr("stdDeviation","3.2").attr("result","b");
   const mg=f.append("feMerge"); mg.append("feMergeNode").attr("in","b"); mg.append("feMergeNode").attr("in","SourceGraphic");
   arZoomG=svg.append("g");
-  arZoom=d3.zoom().scaleExtent([0.3,2.4]).on("zoom",ev=>arZoomG.attr("transform",ev.transform));
-  svg.call(arZoom);
-  svg.style("touch-action","none"); // let D3 handle all touch events (enables pinch+drag)
-  // clicking the empty background is the way back out of a focused cell
-  svg.on("click",ev=>{ if(ev.target===svg.node()&&arFocus)clearFocus(); });
+  arZoom=d3.zoom().scaleExtent([0.25,2.4]).on("zoom",ev=>arZoomG.attr("transform",ev.transform));
+  svg.call(arZoom).style("touch-action","none");
+  return svg;
+}
 
-  // nodes: somata (projects) + dendrites
-  const nodes=[],links=[];
-  DB.domains.forEach(d=>nodes.push({id:d.id,type:"soma",name:d.name,color:d.color,active:d.active}));
-  DB.tasks.forEach(t=>nodes.push({id:t.id,type:"dendrite",t}));
-  const nById=Object.fromEntries(nodes.map(nd=>[nd.id,nd]));
-  DB.tasks.forEach(t=>{
-    const par=parentDend(t);
-    const target=par?par.id:t.domainId;
-    if(nById[target])links.push({source:t.id,target,dom:t.domainId,depth:dendDepth(t),
-      color:domById(t.domainId)?.color||"#556"});
-  });
-
-  const link=arZoomG.append("g").selectAll("path").data(links).join("path")
-    .attr("fill","none").attr("stroke",d=>d.color)
-    .attr("stroke-opacity",0.3).attr("stroke-width",d=>Math.max(.7,2.1-d.depth*.42));
-
-  // Where would this dendrite land if dropped right now? Nearest node within
-  // DROP_R, skipping itself and anything already below it (that would fold the
-  // subtree into its own descendant). Distance-based rather than DOM hit-testing
-  // so it still works while the node sits under the cursor.
-  const DROP_R=42;
-  function dropTargetFor(d){
-    if(d.type!=="dendrite")return null;
-    const banned=new Set(subtreeOf(d.t).map(x=>x.id));
-    // read the *held* position (fx/fy), not x/y: x/y only catch up on the next
-    // simulation tick, so they lag the cursor and are stale outright whenever
-    // the sim has cooled or the tab isn't compositing.
-    const px=d.fx!=null?d.fx:(d.x||0), py=d.fy!=null?d.fy:(d.y||0);
-    const at=n=>[n.fx!=null?n.fx:(n.x||0), n.fy!=null?n.fy:(n.y||0)];
-    let best=null,bestD=DROP_R;
-    nodes.forEach(n=>{
-      if(n===d||banned.has(n.id))return;
-      const [nx,ny]=at(n); const dist=Math.hypot(nx-px,ny-py);
-      if(dist<bestD){ bestD=dist; best=n; }
-    });
-    return best;
-  }
-  let dragMoved=false, dropTarget=null;
-  function paintDropTarget(){
-    node.select("circle.dropring").remove();
-    if(!dropTarget)return;
-    node.filter(n=>n===dropTarget).insert("circle",":first-child").attr("class","dropring")
-      .attr("r",dropTarget.type==="soma"?24:rOf(dropTarget.t)+9)
-      .attr("fill","none").attr("stroke","var(--gold)").attr("stroke-width",2).attr("stroke-dasharray","3 3");
-  }
+/* ---- network mode: just the somata ---- */
+// Dendrites don't appear here on purpose — a soma is a paper, and the overview
+// is the set of papers, not their innards. Click one to go inside it.
+function renderNetwork(){
+  const svg=arSetup();
+  const el=document.getElementById("arbor"),W=el.clientWidth,H=el.clientHeight;
+  const nodes=DB.domains.map(d=>({id:d.id,name:d.name,color:d.color}));
+  const byId=Object.fromEntries(nodes.map(n=>[n.id,n]));
+  // axons: a shared point between two papers. Stored on both ends, so de-dupe
+  // by id order or every link would be drawn twice.
+  const axons=[];
+  DB.domains.forEach(d=>(d.links||[]).forEach(o=>{ if(d.id<o&&byId[o])axons.push({source:d.id,target:o}); }));
+  const axonSel=arZoomG.append("g").selectAll("path").data(axons).join("path")
+    .attr("fill","none").attr("stroke","var(--gold)").attr("stroke-opacity",.4).attr("stroke-width",1.6);
   const node=arZoomG.append("g").selectAll("g").data(nodes).join("g").style("cursor","pointer")
     .call(d3.drag()
-      .on("start",(ev,d)=>{if(!ev.active)arSim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;dragMoved=false;dropTarget=null;})
-      .on("drag",(ev,d)=>{ d.fx=ev.x; d.fy=ev.y;
-        if(Math.abs(ev.dx)+Math.abs(ev.dy)>0)dragMoved=true;
-        const nt=dropTargetFor(d);
-        if(nt!==dropTarget){ dropTarget=nt; paintDropTarget(); } })
-      .on("end",(ev,d)=>{
-        if(!ev.active)arSim.alphaTarget(0);
-        d.fx=null; d.fy=null;
-        const tgt=dropTarget; dropTarget=null; paintDropTarget();
-        if(dragMoved&&tgt&&d.type==="dendrite"){
-          const msg=reparentDendrite(d.id,tgt.id,tgt.type==="soma");
-          if(msg){ toast(msg); renderArbor(); }
-        }
-      }))
-    .on("click",(ev,d)=>{
-      ev.stopPropagation();
-      if(dragMoved){ dragMoved=false; return; }   // a drag ends in a click; don't also open the editor
-      focusCell(somaOf(d));
-      if(d.type==="dendrite")openDetail(d.id); else editSomaModal(d.id);
-    })
-    .on("mouseenter",(ev,d)=>{ if(!arFocus)highlightNode(d.id); })
-    .on("mouseleave",()=>{ if(!arFocus)unhighlight(); });
-  arNodeSel=node; arLinkSel=link;
-
-  // somata
-  const soma=node.filter(d=>d.type==="soma");
-  soma.append("circle").attr("r",16).attr("fill",d=>d.color).attr("fill-opacity",d=>d.active?.28:.16)
-    .attr("stroke",d=>d.color).attr("stroke-width",d=>d.active?3:2).attr("filter",d=>d.active?"url(#glow)":null);
-  soma.append("circle").attr("r",4).attr("fill",d=>d.color);
-  soma.append("text").attr("class","soma-label").attr("x",21).attr("y",4).attr("fill",d=>d.color).text(d=>d.name||"(unnamed soma)");
-  soma.append("text").attr("class","book-badge").attr("x",21).attr("y",18).attr("fill","var(--gold)")
-    .text(d=>{ const na=DB.animals.filter(a=>(a.tasks||[]).some(tid=>{const t=taskById(tid);return t&&t.domainId===d.id;})).length;
-      const ur=readingsFor(d.id).filter(r=>r.tag==="mandatory"&&r.status!=="read").length;
-      return [na?`\ud83d\udc01 ${na}`:"",ur?`\ud83d\udcd6 ${ur}`:""].filter(Boolean).join("  "); });
-
-  // dendrites
-  const dend=node.filter(d=>d.type==="dendrite");
-  // a branch tapers as it divides, same as the real thing
-  const rOf=t=>Math.max(4.6,(6+(t.priority||2)*2.2)-dendDepth(t)*1.7);
-  dend.append("circle").attr("r",d=>rOf(d.t))
-    .attr("fill",d=>domById(d.t.domainId)?.color||"#667").attr("fill-opacity",.55)
-    .attr("stroke",d=>domById(d.t.domainId)?.color||"#667").attr("stroke-width",2).attr("stroke-opacity",.8);
-  // spines: the dated runs, drawn as the small protrusions they're named after.
-  // Capped at 10 so a long-running protocol doesn't become a solid ring \u2014 the
-  // count beside the label is the honest number.
-  dend.each(function(d){
-    const sps=spinesOf(d.t.id); if(!sps.length)return;
-    const g=d3.select(this), r=rOf(d.t)+4.5, col=domById(d.t.domainId)?.color||"#667";
-    const shown=sps.slice(0,10);
-    shown.forEach((sp,i)=>{
-      const a=(-Math.PI/2)+(i/Math.max(shown.length,3))*Math.PI*2;
-      g.append("circle").attr("cx",Math.cos(a)*r).attr("cy",Math.sin(a)*r).attr("r",1.9)
-        .attr("fill",sp.status==="done"?"#3a4252":col).attr("fill-opacity",sp.status==="done"?.7:1);
-    });
-  });
-  dend.append("text").attr("class","node-label").attr("x",d=>rOf(d.t)+5).attr("y",3)
-    .text(d=>{const n=spinesOf(d.t.id).length; let s=d.t.title||"(unnamed)";
-      if(s.length>26)s=s.slice(0,25)+"\u2026"; return n?`${s}  \u00b7  ${n}`:s;});
-
-  // hover isolate helpers
-  function touches(l,id){ const s=typeof l.source==="object"?l.source.id:l.source, tg=typeof l.target==="object"?l.target.id:l.target; return s===id||tg===id; }
-  function neighborIds(id){ const set=new Set([id]); links.forEach(l=>{ if(touches(l,id)){ set.add(typeof l.source==="object"?l.source.id:l.source); set.add(typeof l.target==="object"?l.target.id:l.target);} }); return set; }
-  window.highlightNode=(id)=>{ const keep=neighborIds(id);
-    node.style("opacity",d=>keep.has(d.id)?1:0.18);
-    link.style("opacity",l=>touches(l,id)?1:0.06).style("stroke-width",l=>touches(l,id)?2.2:1.6); };
-  window.unhighlight=()=>{ node.style("opacity",1); link.style("stroke-width",1.6); applyFocus(); };
-
+      .on("start",(ev,d)=>{if(!ev.active)arSim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
+      .on("drag",(ev,d)=>{d.fx=ev.x;d.fy=ev.y;})
+      .on("end",(ev,d)=>{if(!ev.active)arSim.alphaTarget(0);d.fx=null;d.fy=null;}))
+    .on("click",(ev,d)=>{ ev.stopPropagation(); arMode="cell"; arFocus=d.id; renderArbor(); });
+  node.append("circle").attr("r",18).attr("fill",d=>d.color).attr("fill-opacity",.18)
+    .attr("stroke",d=>d.color).attr("stroke-width",2);
+  node.append("circle").attr("r",4.5).attr("fill",d=>d.color);
+  node.append("text").attr("class","soma-label").attr("x",24).attr("y",4).attr("fill",d=>d.color)
+    .text(d=>d.name||"(unnamed soma)");
+  node.append("text").attr("class","book-badge").attr("x",24).attr("y",18).attr("fill","var(--ink-faint)")
+    .text(d=>{const n=dendritesOf(d.id).length; return n?`${n} part${n!==1?"s":""}`:"empty";});
   arSim=d3.forceSimulation(nodes)
-    .force("link",d3.forceLink(links).id(d=>d.id).distance(66).strength(.9))
-    .force("charge",d3.forceManyBody().strength(-300))
-    .force("collide",d3.forceCollide().radius(d=>d.type==="soma"?54:rOf(d.t)+13))
+    .force("charge",d3.forceManyBody().strength(-420))
+    .force("collide",d3.forceCollide().radius(70))
     .force("center",d3.forceCenter(W/2,H/2))
-    .force("x",d3.forceX(W/2).strength(.02)).force("y",d3.forceY(H/2).strength(.02))
+    .force("link",d3.forceLink(axons).id(d=>d.id).distance(240).strength(.25))
     .on("tick",()=>{
-      link.attr("d",d=>`M${d.source.x},${d.source.y} L ${d.target.x},${d.target.y}`);
+      axonSel.attr("d",l=>`M${l.source.x},${l.source.y} L ${l.target.x},${l.target.y}`);
       node.attr("transform",d=>`translate(${d.x},${d.y})`);
     });
-  applyFocus();
+  arNodeSel=null; arLinkSel=null;
 }
+
+/* ---- cell mode: one soma's tree, laid out and STILL ---- */
+function renderCellTree(domId){
+  const dom=domById(domId); if(!dom)return;
+  if(arSim){ arSim.stop(); arSim=null; }        // nothing swims in here
+  const svg=arSetup();
+  const el=document.getElementById("arbor"),W=el.clientWidth,H=el.clientHeight;
+  svg.on("click",ev=>{ if(ev.target===svg.node()) clearFocus(); });
+
+  const wrap=t=>({t,id:t.id,children:kidsOf(t).map(wrap)});
+  const root=d3.hierarchy({soma:dom,id:domId,children:rootDendritesOf(domId).map(wrap)});
+  // left-to-right so long names have somewhere to go; nodeSize keeps the row
+  // pitch fixed instead of squeezing everything into the viewport
+  d3.tree().nodeSize([34,230])(root);
+  const all=root.descendants();
+  // d3 lays a horizontal tree out as (depth, breadth); swap into screen x/y
+  all.forEach(n=>{ const d=n.y, b=n.x; n.px=d; n.py=b; });
+
+  const g=arZoomG.append("g");
+  const linkSel=g.append("g").selectAll("path").data(root.links()).join("path")
+    .attr("fill","none").attr("stroke",dom.color).attr("stroke-opacity",.32)
+    .attr("stroke-width",l=>Math.max(.8,2.2-l.target.depth*.4))
+    .attr("d",l=>{const x0=l.source.px,y0=l.source.py,x1=l.target.px,y1=l.target.py,mx=(x0+x1)/2;
+      return `M${x0},${y0} C${mx},${y0} ${mx},${y1} ${x1},${y1}`;});
+
+  const DROP_R=46;
+  let dragging=null, dropTarget=null;
+  const nodeSel=g.append("g").selectAll("g").data(all).join("g")
+    .attr("transform",n=>`translate(${n.px},${n.py})`).style("cursor","pointer");
+
+  function paintRing(){
+    nodeSel.select("circle.dropring").remove();
+    if(!dropTarget)return;
+    nodeSel.filter(n=>n===dropTarget).insert("circle",":first-child").attr("class","dropring")
+      .attr("r",22).attr("fill","none").attr("stroke","var(--gold)")
+      .attr("stroke-width",2).attr("stroke-dasharray","3 3");
+  }
+  function targetFor(n,x,y){
+    const banned=new Set(subtreeOf(n.data.t).map(v=>v.id));
+    let best=null,bd=DROP_R;
+    all.forEach(o=>{ if(o===n||(o.data.t&&banned.has(o.data.t.id)))return;
+      const dist=Math.hypot(o.px-x,o.py-y); if(dist<bd){bd=dist;best=o;} });
+    return best;
+  }
+  let moved=false;
+  nodeSel.call(d3.drag()
+    // d3.hierarchy nodes carry their own x/y from the layout — and for a
+    // horizontal tree those are (breadth, depth), the transpose of what we
+    // draw at. Without an explicit subject, d3.drag computes its grab offset
+    // against that transposed pair and the node flies off at right angles.
+    .subject((ev,n)=>({x:n.px,y:n.py}))
+    .on("start",(ev,n)=>{ if(!n.data.t)return; dragging=n; moved=false; dropTarget=null; })
+    .on("drag",(ev,n)=>{ if(!dragging)return;
+      moved=true;
+      n.px=ev.x; n.py=ev.y;
+      nodeSel.filter(v=>v===n).attr("transform",`translate(${ev.x},${ev.y})`).style("opacity",.75);
+      const nt=targetFor(n,ev.x,ev.y);
+      if(nt!==dropTarget){ dropTarget=nt; paintRing(); } })
+    .on("end",(ev,n)=>{
+      if(!dragging)return;
+      const tgt=dropTarget; dragging=null; dropTarget=null;
+      if(moved&&tgt){
+        const msg=reparentDendrite(n.data.t.id,tgt.data.t?tgt.data.t.id:domId,!tgt.data.t);
+        if(msg)toast(msg);
+      }
+      renderArbor();                       // always re-layout: the tree is the truth
+    }))
+    .on("click",(ev,n)=>{ ev.stopPropagation();
+      if(moved){ moved=false; return; }
+      if(n.data.t)openDetail(n.data.t.id); else editSomaModal(domId); });
+
+  // soma at the root, dendrites beyond it
+  const somaSel=nodeSel.filter(n=>!n.data.t);
+  somaSel.append("circle").attr("r",15).attr("fill",dom.color).attr("fill-opacity",.22)
+    .attr("stroke",dom.color).attr("stroke-width",2.5).attr("filter","url(#glow)");
+  somaSel.append("text").attr("class","soma-label").attr("x",0).attr("y",-24)
+    .attr("text-anchor","middle").attr("fill",dom.color).text(dom.name||"(unnamed soma)");
+
+  const dendSel=nodeSel.filter(n=>!!n.data.t);
+  const rr=n=>Math.max(5,10.5-n.depth*1.6);
+  dendSel.append("circle").attr("r",rr).attr("fill",dom.color).attr("fill-opacity",.5)
+    .attr("stroke",dom.color).attr("stroke-width",1.8);
+  dendSel.each(function(n){
+    const sps=spinesOf(n.data.t.id); if(!sps.length)return;
+    const sel=d3.select(this), r=rr(n)+4.5;
+    sps.slice(0,10).forEach((sp,i,arr)=>{
+      const a=(-Math.PI/2)+(i/Math.max(arr.length,3))*Math.PI*2;
+      sel.append("circle").attr("cx",Math.cos(a)*r).attr("cy",Math.sin(a)*r).attr("r",1.9)
+        .attr("fill",dom.color);
+    });
+  });
+  dendSel.append("text").attr("class","node-label").attr("x",n=>rr(n)+7).attr("y",3.5)
+    .attr("fill","var(--ink-dim)")
+    .text(n=>{const c=spinesOf(n.data.t.id).length; let x=n.data.t.title||"(unnamed)";
+      if(x.length>28)x=x.slice(0,27)+"…"; return c?`${x}  ·  ${c}`:x;});
+
+  // one deliberate fit when the cell opens, then the view stays put
+  const xs=all.map(n=>n.px), ys=all.map(n=>n.py);
+  const x0=Math.min(...xs)-90,x1=Math.max(...xs)+250,y0=Math.min(...ys)-70,y1=Math.max(...ys)+70;
+  const k=Math.max(.25,Math.min(1.4,.95*Math.min(W/(x1-x0),H/(y1-y0))));
+  svg.call(arZoom.transform,d3.zoomIdentity.translate(W/2,H/2).scale(k)
+    .translate(-(x0+x1)/2,-(y0+y1)/2));
+}
+
 
 
 /* ---------- OUTLINE ---------- */
@@ -4568,20 +4583,18 @@ function openDetail(id){
     <div class="fld"><label>Name</label>
       <input id="e_title" value="${escAttr(t.title)}" list="e_blueprints" autocomplete="off" placeholder="Dendrite name…">
       <datalist id="e_blueprints">${[...new Set(DB.tasks.filter(x=>x.id!==t.id).map(x=>x.title))].sort().map(tt=>`<option value="${escAttr(tt)}">`).join("")}</datalist></div>
-    <div class="fld"><label>Notes <span class="hintlet">what this is, how it's done, what it depends on</span></label>
-      <textarea id="e_notes" rows="4">${esc(t.notes||"")}</textarea></div>
-    <div class="fld"><label>What we learned <span class="hintlet">findings, including the ones that didn't work</span></label>
-      <textarea id="e_learned" rows="4" placeholder="a result that ruled something out is still a result…">${esc(t.learned||"")}</textarea></div>
+    <div class="fld"><label>Text</label>
+      <textarea id="e_notes" rows="9">${esc(t.notes||"")}</textarea></div>
 
-    <div class="fld"><label>Spines <span class="hintlet">the dated runs growing on this dendrite — these are what the Timeline shows</span></label>
+    <div class="fld"><label>Data</label>
       <div id="e_spines"></div>
-      <button class="btn ghost" id="e_addspine" style="margin-top:8px">＋ Spine</button></div>
+      <button class="btn ghost" id="e_addspine" style="margin-top:8px">＋ Datum</button></div>
 
-    <div class="fld"><label>Reading <span class="hintlet">papers filed under this dendrite</span></label>
+    <div class="fld"><label>Reading</label>
       <div id="e_reads"></div></div>
 
     ${la.length?`<div class="fld"><label>Linked animals (${la.length})</label><div style="font-size:12.5px;line-height:1.7">${la.map(a=>`<div><span class="stat" style="background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};display:inline-block;margin-right:6px"></span>${esc(a.name)} <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${esc(a.cohort)}</span></div>`).join("")}</div><div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:4px">link/unlink from the Animals tab</div></div>`:""}
-    ${(()=>{ const rows=dendriteProcRollup(t); return rows.length?`<div class="fld"><label>Procedures run <span class="hintlet">counted live from the diary of every linked animal</span></label>
+    ${(()=>{ const rows=dendriteProcRollup(t); return rows.length?`<div class="fld"><label>Procedures run</label>
       <div style="font-size:12.5px;line-height:1.8">${rows.map(r=>`<div>${r.icon} ${esc(r.label)} <span style="font-family:var(--mono);color:var(--ink-faint)">× ${r.n}</span></div>`).join("")}</div></div>`:""; })()}
 
     <div class="drow" style="margin-top:18px"><button class="btn danger" id="e_del">Delete dendrite</button></div>`;
@@ -4601,24 +4614,28 @@ function dendriteProcRollup(t){
 function drawSpines(t){
   const host=document.getElementById("e_spines"); if(!host)return;
   const sps=spinesOf(t.id);
-  if(!sps.length){ host.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint);padding:4px 0">Nothing dated yet. A spine is one run, one session, one deadline.</div>`; return; }
+  if(!sps.length){ host.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint);padding:4px 0">No data on this part yet.</div>`; return; }
   host.innerHTML=sps.map(sp=>{
     const dc=dueClass(sp.deadline,sp.status,sp.endDate);
-    return `<div class="spine-row${sp.id===spineFocus?" sel":""}" data-id="${sp.id}">
-      <button class="spine-done" title="${sp.status==="done"?"Done":"Not done yet"}">${sp.status==="done"?"✓":"○"}</button>
-      <input class="spine-name" value="${escAttr(sp.title)}" placeholder="what happens">
-      <button type="button" class="datebtn spine-when ${sp.deadline?"":"datebtn-empty"}">${sp.deadline?fmtWhenFull(sp.deadline):"📅 when"}</button>
-      <span class="spine-due" style="color:${dc==="overdue"?"var(--overdue)":dc==="soon"?"var(--amber)":"var(--ink-faint)"}">${sp.deadline?fmtDue(sp.deadline):""}</span>
-      <button class="spine-del" title="Delete this spine">✕</button>
+    return `<div class="spine-block${sp.id===spineFocus?" sel":""}" data-id="${sp.id}">
+      <div class="spine-row">
+        <button class="spine-done" title="${sp.status==="done"?"Collected":"Not collected yet"}">${sp.status==="done"?"✓":"○"}</button>
+        <input class="spine-name" value="${escAttr(sp.title)}" placeholder="what the datum is">
+        <button type="button" class="datebtn spine-when ${sp.deadline?"":"datebtn-empty"}">${sp.deadline?fmtWhenFull(sp.deadline):"📅 when"}</button>
+        <span class="spine-due" style="color:${dc==="overdue"?"var(--overdue)":dc==="soon"?"var(--amber)":"var(--ink-faint)"}">${sp.deadline?fmtDue(sp.deadline):""}</span>
+        <button class="spine-del" title="Delete this datum">✕</button>
+      </div>
+      <input class="spine-ref" value="${escAttr(sp.ref||"")}" placeholder="link or reference — where the data lives">
     </div>`;
   }).join("");
-  host.querySelectorAll(".spine-row").forEach(row=>{
+  host.querySelectorAll(".spine-block").forEach(row=>{
     const sp=spineById(row.dataset.id); if(!sp)return;
+    row.querySelector(".spine-ref").addEventListener("input",e=>{ sp.ref=e.target.value; persist(); });
     row.querySelector(".spine-name").addEventListener("input",e=>{ sp.title=e.target.value; persist(); if(currentView==="timeline")renderTimeline(); });
     row.querySelector(".spine-done").addEventListener("click",()=>{ sp.status=sp.status==="done"?"todo":"done"; persist(); drawSpines(t); render(); });
     bindDateButton(row.querySelector(".spine-when"), ()=>sp.deadline||"", v=>{ sp.deadline=v||null; persist(); drawSpines(t); render(); });
     row.querySelector(".spine-del").addEventListener("click",()=>{
-      if(!confirm(`Delete the spine "${sp.title||"(unnamed)"}"?`))return;
+      if(!confirm(`Delete "${sp.title||"(unnamed datum)"}"?`))return;
       DB.spines=DB.spines.filter(x=>x.id!==sp.id); persist(); drawSpines(t); render(); });
   });
 }
@@ -4647,7 +4664,6 @@ function wireDetail(t){
   const save=p=>{ Object.assign(t,p); persist(); document.getElementById("dTitleView").textContent=t.title||"New dendrite"; if(currentView!=="arbor")render(); };
   document.getElementById("e_title").addEventListener("input",e=>{ const v=e.target.value; Object.assign(t,{title:v,autoTitle:false}); persist(); document.getElementById("dTitleView").textContent=v||"New dendrite"; if(currentView!=="arbor")render(); });
   document.getElementById("e_notes").addEventListener("input",e=>save({notes:e.target.value}));
-  document.getElementById("e_learned").addEventListener("input",e=>save({learned:e.target.value}));
   document.getElementById("e_addspine").addEventListener("click",()=>{ addSpine(t.id,{}); drawSpines(t); render(); });
   drawSpines(t); drawDendReadings(t);
   document.getElementById("e_del").addEventListener("click",()=>{ if(!confirm("Delete this dendrite? Its spines go with it."))return;
@@ -4686,7 +4702,12 @@ function modal(h,opts){ const s=document.getElementById("scrim"); const m=docume
   m.className="modal"+(opts&&opts.center?" modal-center":"")+(opts&&opts.wide?" modal-wide":""); m.innerHTML=h; s.classList.add("open"); return s; }
 function closeModal(){ document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(document.getElementById("modal")); }
 // Modals close only via Cancel / ✕ / Save — NOT by clicking outside, so a stray click never discards an edit.
-document.addEventListener("keydown",e=>{ if(e.key==="Escape"&&document.getElementById("scrim").classList.contains("open"))closeModal(); });
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape")return;
+  // a modal sits above the detail panel, so it gets the key first
+  if(document.getElementById("scrim").classList.contains("open")){ closeModal(); return; }
+  if(document.getElementById("detail").classList.contains("open")) closeDetail();
+});
 // mobile: swipe down on detail panel header to close (when scrolled to top)
 (()=>{ const det=document.getElementById("detail"); let sy=0;
   det.addEventListener("touchstart",e=>{sy=e.touches[0].clientY;},{passive:true});
@@ -4932,23 +4953,18 @@ function editSomaModal(domId,isNew){
   // outline of the plan, and the ordered set of dendrites it carries. It has no
   // dates of its own on purpose — a project's parts run intertwined, so a single
   // start/end for the whole thing would be a number nobody could honestly fill in.
-  modal(`<h3>${isNew?"New soma":"Soma"}</h3>
+  modal(`<h3>${isNew?"New paper":"Paper"}</h3>
     <div class="fld"><label>Name</label><input id="d_name" value="${escAttr(dom.name)}" placeholder="what this project is" autofocus></div>
     <div class="fld"><label>Colour</label><div class="taglist" id="d_pal">${paletteHTML(dom.color)}</div></div>
-    <div class="fld"><label>Outline <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">the plan, in your own words</span></label>
-      <textarea id="d_outline" rows="6" placeholder="what the project is for, what it depends on, how you expect it to go…">${esc(dom.outline||"")}</textarea></div>
-    <div class="fld"><label>Status</label>
-      <div class="seg" id="d_active">
-        <button data-a="1" class="${dom.active?"on":""}" style="${dom.active?"color:var(--mruby)":""}">Active focus</button>
-        <button data-a="0" class="${!dom.active?"on":""}">Background</button>
-      </div>
-      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:6px">Active somata glow in the network. You can mark one or several.</div>
-    </div>
-    <div class="fld"><label>Dendrites <span class="hintlet">the branching structure · click a name to open it · drag in the network to re-branch</span></label>
+    <div class="fld"><label>Abstract</label>
+      <textarea id="d_outline" rows="7">${esc(dom.abstract||"")}</textarea></div>
+    <div class="fld"><label>Shares points with</label>
+      <div id="d_links">${others.length?others.map(o=>`<label class="sharerow"><input type="checkbox" data-id="${o.id}" ${(dom.links||[]).includes(o.id)?"checked":""}> ${esc(o.name||"(unnamed)")}</label>`).join(""):`<div style="font-size:11.5px;color:var(--ink-faint)">No other papers yet.</div>`}</div></div>
+    <div class="fld"><label>Parts</label>
       <div id="d_dends"></div>
       <button class="btn ghost" id="d_adddend" style="margin-top:8px">＋ Dendrite</button></div>
     <div class="drow" style="margin-top:18px;align-items:center">
-      <button class="btn danger" id="d_del">Delete soma</button>
+      <button class="btn danger" id="d_del">Delete paper</button>
       <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${nReads} reading${nReads!==1?"s":""} attached</div>
     </div>
     <div class="actions"><button class="btn accent" id="d_save">Done</button></div>`,{wide:true});
@@ -4972,6 +4988,18 @@ function editSomaModal(domId,isNew){
     host.innerHTML=roots.map(t=>row(t,0)).join("");
   }
   drawDends();
+  document.getElementById("d_links").addEventListener("change",e=>{
+    const cb=e.target.closest("input[type=checkbox]"); if(!cb)return;
+    const other=domById(cb.dataset.id); if(!other)return;
+    dom.links=dom.links||[]; other.links=other.links||[];
+    // an axon is a shared point, which is a fact about both papers — keep both
+    // ends in step so it reads the same whichever one you opened
+    if(cb.checked){ if(!dom.links.includes(other.id))dom.links.push(other.id);
+                    if(!other.links.includes(dom.id))other.links.push(dom.id); }
+    else { dom.links=dom.links.filter(x=>x!==other.id);
+           other.links=other.links.filter(x=>x!==dom.id); }
+    persist();
+  });
   document.getElementById("d_dends").addEventListener("click",e=>{
     const r=e.target.closest(".dend-row"); if(!r)return;
     if(e.target.closest(".dend-add")){
@@ -4987,13 +5015,10 @@ function editSomaModal(domId,isNew){
   let chosen=dom.color;
   document.getElementById("d_pal").addEventListener("click",e=>{const t=e.target.closest(".tag");if(!t)return;chosen=t.dataset.c;
     document.querySelectorAll("#d_pal .tag").forEach(x=>x.style.boxShadow="none");t.style.boxShadow=`0 0 0 2px ${chosen}`;});
-  document.getElementById("d_active").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
-    dom.active=b.dataset.a==="1"; persist();
-    document.querySelectorAll("#d_active button").forEach(x=>{x.classList.toggle("on",x===b);x.style.color=(x===b&&dom.active)?"var(--mruby)":"";});});
 
   function saveSoma(){
     dom.name=document.getElementById("d_name").value.trim();
-    dom.outline=document.getElementById("d_outline").value;
+    dom.abstract=document.getElementById("d_outline").value;
     dom.color=chosen; persist(); render();
   }
   document.getElementById("d_save").addEventListener("click",()=>{
@@ -5013,11 +5038,13 @@ function editSomaModal(domId,isNew){
         DB.tasks.forEach(t=>{ if(t.domainId===domId)t.domainId=to; });
         DB.readings.forEach(r=>{ if(r.domainId===domId)r.domainId=to; });
         DB.domains=DB.domains.filter(d=>d.id!==domId);
+        DB.domains.forEach(d=>d.links=(d.links||[]).filter(x=>x!==domId));
         if(arFocus===domId)arFocus=null;
         persist(); render(); closeModal(); toast("Soma deleted, dendrites reassigned");
       });
     } else if(confirm(`Delete "${dom.name||"this soma"}"?`)){
       DB.domains=DB.domains.filter(d=>d.id!==domId);
+      DB.domains.forEach(d=>d.links=(d.links||[]).filter(x=>x!==domId));
       if(arFocus===domId)arFocus=null;
       persist(); render(); closeModal(); toast("Soma deleted");
     }
