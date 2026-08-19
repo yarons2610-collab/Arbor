@@ -4,16 +4,17 @@
      Palette from the lab's two-photon channels: GCaMP6 green / mRuby2 magenta on 2P-black. -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Arbor Animals</title>
+<title>Arbor</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#080a0f">
 <!-- iOS PWA: standalone launch (no Safari chrome), dark status bar, home-screen icon -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<meta name="apple-mobile-web-app-title" content="Arbor Animals">
+<meta name="apple-mobile-web-app-title" content="Arbor">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" href="icons/favicon-32.png">
 <link href="vendor/fonts.css" rel="stylesheet">
+<script src="vendor/d3.min.js"></script>
 <script src="vendor/three.min.js"></script>
 
 <style>
@@ -61,104 +62,45 @@
   .view{position:absolute;inset:0;overflow:auto}
   .view.hidden{display:none}
 
-  /* ---- projects: shared ---- */
-  /* plain block layout (same shape as the Materials tab): a flex column here
-     would combine with .wrap's `margin:0 auto` to shrink-wrap the body to its
-     content, which the timeline can't measure against since its own width is
-     what it's trying to compute. The .view's own overflow:auto carries the
-     sideways scroll when a wide month board exceeds the viewport. */
-  #ps-body{padding:16px 22px 60px;max-width:1060px;margin:0 auto}
-  .pj-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden}
-  .pj-head{display:flex;align-items:center;gap:9px;padding:11px 13px;flex-wrap:wrap}
-  .pj-head .chip{width:11px;height:11px;border-radius:50%;flex:0 0 auto}
-  .pj-head h3{font-family:var(--disp);font-size:14px;font-weight:600;margin:0}
-  .pj-head .pj-edit{margin-left:auto;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px;cursor:pointer}
-  .pj-status{font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;border:1px solid var(--line2);border-radius:20px;padding:1px 8px;color:var(--ink-dim)}
-  .pj-status.planning{color:#7db4ff;border-color:#2f4a6b}
-  .pj-status.active{color:var(--gcamp);border-color:#2f6b4a}
-  .pj-status.paused{color:var(--amber);border-color:#8a6a2f}
-  .pj-status.completed{color:var(--ink-faint)}
-  .pj-desc{padding:0 13px 9px;font-size:12.5px;color:var(--ink-dim);line-height:1.55}
-  .pj-facts{display:flex;gap:7px;flex-wrap:wrap;padding:0 13px 11px}
-  .pj-fact{font-family:var(--mono);font-size:10px;color:var(--ink-dim);background:var(--panel2);border:1px solid var(--line2);border-radius:20px;padding:2px 9px;display:inline-flex;align-items:center;gap:5px}
-  .pj-fact.met{color:var(--gcamp);border-color:#2f6b4a}
-  .pj-fact.warn{color:var(--overdue);border-color:#6b2f3a}
-  .pj-sec{border-top:1px solid var(--line);padding:9px 13px}
-  .pj-sec h4{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 7px;font-weight:400}
-  .pj-readrow{display:flex;align-items:center;gap:7px;font-size:12px;padding:2px 0;color:var(--ink-dim)}
-  .pj-readrow input{width:auto;margin:0}
-  .pj-readrow .rd{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .pj-readrow .rd.done{color:var(--ink-faint);text-decoration:line-through}
-  /* ---- projects: the network (somata + dendrites + axons) ---- */
-  .pjm-bar{display:flex;align-items:center;gap:8px;margin:14px 0 8px;flex-wrap:wrap}
-  .pjm-btn{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:8px;padding:5px 11px;font-size:11.5px;cursor:pointer}
-  .pjm-btn:hover{border-color:var(--gcamp);color:var(--ink)}
-  .pjm-btn.on{color:var(--gold);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
-  .pjm-hint{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-left:auto}
-  .pjm-stage{position:relative;height:min(70vh,680px);overflow:hidden;border:1px solid var(--line);border-radius:12px;
-    background:radial-gradient(ellipse at 25% 15%,rgba(125,180,255,.055),transparent 62%),
-               radial-gradient(ellipse at 80% 80%,rgba(169,140,255,.045),transparent 60%),var(--bg2);
-    cursor:grab;touch-action:none}
-  .pjm-stage.grabbing{cursor:grabbing}
-  .pjm-world{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
-  .pjm-links{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
-  /* dendrites: fine, tapering, the colour of the neuron they belong to */
-  .pjm-dendlink{fill:none;stroke:var(--line2);pointer-events:stroke;cursor:pointer;stroke-linecap:round}
-  .pjm-dendlink:hover{stroke:var(--mruby)}
-  /* axons: long-range projections between neurons, ending in a bouton */
-  .pjm-axon{fill:none;stroke:var(--gold);stroke-opacity:.75;pointer-events:stroke;cursor:pointer;stroke-linecap:round}
-  .pjm-axon:hover{stroke:var(--mruby);stroke-opacity:1}
-  .pjm-bouton{fill:var(--gold);fill-opacity:.85;pointer-events:none}
-  /* the soma — a cell body, weightier than anything hanging off it */
-  .pjm-soma{position:absolute;box-sizing:border-box;cursor:pointer;user-select:none;touch-action:none;
-    padding:12px 14px;border-radius:26px;border:2px solid var(--c,#667);
-    background:var(--panel2);
-    box-shadow:0 0 34px -10px var(--c),0 10px 26px -16px #000;transition:box-shadow .12s,transform .12s}
-  @supports (background:color-mix(in srgb,red 20%,blue)){
-    .pjm-soma{background:radial-gradient(ellipse at 30% 25%,color-mix(in srgb,var(--c) 22%,var(--panel)),var(--panel) 72%)} }
-  .pjm-soma:hover{box-shadow:0 0 42px -8px var(--c),0 10px 26px -16px #000}
-  .pjm-soma.drag{z-index:6}
-  .pjm-soma.sel{box-shadow:0 0 0 3px rgba(84,224,138,.3),0 0 42px -8px var(--c)}
-  .pjm-soma.linking{border-color:var(--gold);box-shadow:0 0 0 3px rgba(240,200,90,.35)}
-  .pjm-soma .t{font-family:var(--disp);font-size:14.5px;font-weight:600;line-height:1.25;color:var(--ink);overflow-wrap:anywhere}
-  .pjm-soma .m{display:flex;align-items:center;gap:7px;margin-top:6px;font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
-  .pjm-soma .m .ps{text-transform:uppercase;letter-spacing:.05em}
-  .pjm-soma .pr{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px;font-family:var(--mono);font-size:9.5px;color:var(--ink-dim)}
-  .pjm-soma.st-planning{opacity:.82}
-  .pjm-soma.st-paused{opacity:.6;filter:saturate(.5)}
-  .pjm-soma.st-completed{opacity:.5;filter:saturate(.35)}
-  /* dendritic nodes — subtasks, tapering with distance from the soma */
-  .pjm-dend{position:absolute;background:var(--panel);border:1px solid var(--line2);border-left:3px solid var(--c,#667);
-    border-radius:10px;padding:7px 10px;cursor:pointer;box-sizing:border-box;user-select:none;touch-action:none;
-    box-shadow:0 6px 18px -12px #000;transition:border-color .12s,box-shadow .12s}
-  .pjm-dend:hover{border-color:var(--ink-faint)}
-  .pjm-dend.drag{box-shadow:0 14px 30px -12px #000;z-index:5}
-  .pjm-dend.sel{border-color:var(--gcamp);box-shadow:0 0 0 2px rgba(84,224,138,.25),0 6px 18px -12px #000}
-  .pjm-dend.linking{border-color:var(--gold);box-shadow:0 0 0 2px rgba(240,200,90,.3)}
-  .pjm-dend .t{font-size:12.5px;line-height:1.3;color:var(--ink);overflow-wrap:anywhere}
-  .pjm-dend .m{display:flex;align-items:center;gap:5px;margin-top:5px;font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
-  .pjm-dend .m .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;border:1px solid var(--ink-faint)}
-  .pjm-dend .lrn{margin-left:auto;font-size:10px}
-  .pjm-dend.d1 .t{font-size:13px;font-weight:600}
-  .pjm-dend.d3{opacity:.9}
-  .pjm-dend.d3 .t{font-size:11.5px}
-  /* state: planned is an outline, running glows, done goes quiet */
-  .pjm-dend.s-planned{border-style:dashed}
-  .pjm-dend.s-planned .m .dot{background:transparent}
-  .pjm-dend.s-running{box-shadow:0 0 0 1px rgba(84,224,138,.18),0 0 22px -6px var(--gcamp)}
-  .pjm-dend.s-running .m .dot{background:var(--gcamp);border-color:var(--gcamp)}
-  .pjm-dend.s-done{opacity:.6}
-  .pjm-dend.s-done .m .dot{background:var(--ink-faint)}
-  .pjm-dend.s-done .t{text-decoration:line-through;text-decoration-color:var(--ink-faint)}
-  .pjm-plus{position:absolute;right:-11px;top:50%;transform:translateY(-50%);width:22px;height:22px;border-radius:50%;
-    border:1px solid var(--gcamp);background:var(--panel2);color:var(--gcamp);font-size:12px;line-height:1;cursor:pointer;padding:0}
-  .tgt-count,.pj-sub-count{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);background:var(--panel2);border:1px solid var(--line2);border-radius:20px;padding:1px 7px}
-  .tgt-count.met{color:var(--gcamp);border-color:#2f6b4a}
-  .subtask-list{display:flex;flex-direction:column;gap:3px}
-  .subtask-row{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-dim);cursor:pointer}
-  .subtask-row input{width:auto;margin:0}
-  .subtask-row .e_sub_open{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .subtask-row .done{color:var(--ink-faint);text-decoration:line-through}
+  /* arbor */
+  #arbor{inset:0;overflow:hidden}
+  #arbor svg{width:100%;height:100%;display:block}
+  .node-label{font-family:var(--mono);font-size:10px;fill:var(--ink-dim);pointer-events:none}
+  .soma-label{font-family:var(--disp);font-weight:600;font-size:12px;pointer-events:none;letter-spacing:.02em}
+  .book-badge{font-size:11px;pointer-events:none}
+  .legend{position:absolute;left:16px;bottom:14px;background:rgba(13,16,23,.86);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:10px;padding:11px 13px;font-size:11px;color:var(--ink-dim);max-width:240px}
+  .legend b{color:var(--ink);font-family:var(--disp);font-size:11px;letter-spacing:.03em;text-transform:uppercase}
+  .legend .row{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .legend .sw{width:22px;height:0;border-top:2px solid var(--ink-dim)}
+  .legend .sw.dash{border-top:2px dashed var(--mruby)}
+  .legend .dot{width:10px;height:10px;border-radius:50%}
+  .hint{position:absolute;right:16px;bottom:14px;font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
+  /* arbor swimlane board */
+  #arbor{overflow:hidden}
+  #arborBoard{padding:20px 22px 60px;min-width:820px}
+  .board-top{display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap}
+  .board-top .lead{font-family:var(--disp);font-size:14px;color:var(--ink)}
+  .board-top .sub{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
+  .swim-head{display:grid;grid-template-columns:190px repeat(4,1fr);gap:10px;position:sticky;top:0;background:var(--bg);padding-bottom:8px;z-index:2}
+  .swim-head .ch{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);padding:4px 8px;display:flex;align-items:center;gap:7px}
+  .swim-head .ch .n{background:var(--panel2);border:1px solid var(--line);border-radius:20px;padding:0 7px;font-size:10px}
+  .lane{display:grid;grid-template-columns:190px repeat(4,1fr);gap:10px;margin-bottom:10px}
+  .lane-head{display:flex;align-items:flex-start;gap:9px;padding:10px 10px;background:var(--panel);border:1px solid var(--line);border-radius:11px;cursor:pointer}
+  .lane-head .soma{width:13px;height:13px;border-radius:50%;flex:0 0 auto;margin-top:2px}
+  .lane-head .nm{font-family:var(--disp);font-size:13px;font-weight:600;line-height:1.25}
+  .lane-head .bd{font-family:var(--mono);font-size:9.5px;color:var(--gold);margin-top:4px}
+  .lane-head .af{font-family:var(--mono);font-size:9px;color:var(--mruby);border:1px solid var(--mruby);border-radius:20px;padding:0 6px;margin-top:5px;display:inline-block}
+  .cell{background:rgba(255,255,255,.012);border:1px solid var(--line);border-radius:11px;padding:7px;min-height:56px;display:flex;flex-direction:column;gap:6px}
+  .cell.blocked{border-color:#3a2530}
+  .tchip{background:var(--panel);border:1px solid var(--line2);border-left:3px solid var(--c,#667);border-radius:8px;padding:7px 9px;cursor:pointer;transition:.12s}
+  .tchip:hover{border-color:var(--ink-faint);transform:translateY(-1px)}
+  .tchip.hl{box-shadow:0 0 0 2px var(--gcamp)}
+  .tchip.dep{box-shadow:0 0 0 2px var(--mruby)}
+  .tchip .tt{font-size:12.5px;line-height:1.3}
+  .tchip.done .tt{color:var(--ink-faint);text-decoration:line-through}
+  .tchip .sub{display:flex;gap:6px;align-items:center;margin-top:5px;flex-wrap:wrap}
+  .tchip .par{font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
+  .cell .empty-c{color:var(--ink-faint);font-size:11px;font-family:var(--mono);text-align:center;padding:8px 0;opacity:.5}
   /* custom date+time picker */
   .datebtn{width:100%;text-align:left;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:13px;cursor:pointer}
   .datebtn:hover{border-color:var(--gcamp)}
@@ -496,9 +438,9 @@
 
 <div class="app">
   <div class="top">
-    <div class="brand"><h1>Arbor Animals</h1><span class="sub">Segev · Schiller lab</span></div>
+    <div class="brand"><h1>Arbor</h1><span class="sub">Segev · Schiller lab</span></div>
     <div class="tabs" id="tabs">
-      <button class="tab" data-v="projects">Projects</button>
+      <button class="tab" data-v="arbor">Home</button>
       <button class="tab" data-v="timeline">Timeline</button>
       <button class="tab" data-v="materials">Materials</button>
       <button class="tab on" data-v="animals">Animals</button>
@@ -513,9 +455,16 @@
   </div>
 
   <div class="main">
-    <div class="view hidden" id="projects">
-      <div id="ps-body"></div>
+    <div class="view hidden" id="arbor">
+      <svg id="svg"></svg>
+      <div class="arbor-tools">
+        <button id="ar_link" title="Create a dependency by clicking two tasks">＋ Link tasks</button>
+        <button id="ar_deps" class="on">Dependencies: shown</button>
+      </div>
+
+      <div class="hint">drag · scroll to zoom · click a node</div>
     </div>
+    <div class="view hidden wrap" id="outline"></div>
     <div class="view hidden wrap" id="timeline"></div>
     <div class="view hidden" id="materials">
       <div class="mat-subtabs" id="matSubTabs">
@@ -1035,42 +984,6 @@ function migrate(){                       // backfill fields added in later vers
     const dom=domById(c.domainId);
     c.color=dom?dom.color:DOMAIN_PALETTE[i%DOMAIN_PALETTE.length];
   });
-  // domains, reframed as "projects": status replaces the old active-focus
-  // boolean (which only ever drove one highlight in the now-retired graph
-  // view) with a real planning status; description/targetDate/cohortIds are
-  // new. Existing active:true domains become status:"active" so nothing
-  // silently reverts to "planning" on upgrade.
-  DB.domains.forEach(d=>{
-    if(!d.status) d.status=d.active?"active":"planning";
-    if(d.description==null) d.description="";
-    if(d.targetDate===undefined) d.targetDate=null;
-    if(!Array.isArray(d.cohortIds)) d.cohortIds=[];
-    if(d.x===undefined) d.x=null;   // soma position on the shared network canvas
-    if(d.y===undefined) d.y=null;
-    if(!Array.isArray(d.links)) d.links=[];  // axons: projections onto other projects
-  });
-  // Project nodes: a plan is a directed graph, not a tree — work converges as
-  // well as branches. `links` (ids this node leads to) subsumes both the old
-  // parentId ("decomposes into") and deps ("feeds"), which were always the
-  // same edge seen from two directions. The old fields are left in place,
-  // unread, rather than deleted — same safety habit as a.weights elsewhere.
-  if(!DB._nodeLinksMigrated){
-    DB.tasks.forEach(t=>{ if(!Array.isArray(t.links)) t.links=[]; });
-    DB.tasks.forEach(t=>{
-      if(t.parentId){ const p=DB.tasks.find(x=>x.id===t.parentId); if(p&&!p.links.includes(t.id)) p.links.push(t.id); }
-      (t.deps||[]).forEach(d=>{ const dep=DB.tasks.find(x=>x.id===d); if(dep&&!dep.links.includes(t.id)) dep.links.push(t.id); });
-    });
-    DB._nodeLinksMigrated=true;
-  }
-  DB.tasks.forEach(t=>{
-    if(!Array.isArray(t.links)) t.links=[];
-    // "blocked" has no equivalent here: an experiment is planned, running, or
-    // done — being stuck is a fact about its notes, not a fourth state.
-    if(!t.state) t.state={todo:"planned",active:"running",done:"done",blocked:"planned"}[t.status]||"planned";
-    if(t.learned==null) t.learned="";
-    if(t.x===undefined) t.x=null;
-    if(t.y===undefined) t.y=null;
-  });
 }
 const uid=p=>p+Math.random().toString(36).slice(2,8);
 
@@ -1103,25 +1016,11 @@ function taskColor(t){
   if(aid){ const a=DB.animals.find(x=>x.id===aid); const co=a&&cohortByName(a.cohort); if(co&&co.color)return co.color; }
   const dom=domById(t.domainId); return dom?dom.color:"#556";
 }
-// "children" now means "what this node leads to" — follows the graph's links
-// rather than a single parentId, so a node can legitimately be downstream of
-// several others (two experiments jointly feeding one conclusion).
-const childrenOf=id=>{ const t=taskById(id); if(!t)return []; return (t.links||[]).map(taskById).filter(Boolean); };
-const parentsOf=id=>DB.tasks.filter(x=>(x.links||[]).includes(id));
-// Depth from the project root, used only for visual weight. Cycle-guarded:
-// the data model permits a loop even though a sane plan won't have one.
-function nodeDepth(t,seen){
-  seen=seen||new Set();
-  if(seen.has(t.id))return 0;
-  seen.add(t.id);
-  const ps=parentsOf(t.id).filter(p=>p.domainId===t.domainId);
-  if(!ps.length)return 1;                       // hangs straight off the project root
-  return 1+Math.min(...ps.map(p=>nodeDepth(p,new Set(seen))));
-}
+const childrenOf=id=>DB.tasks.filter(x=>x.parentId===id);
 const readingsFor=domId=>DB.readings.filter(r=>r.domainId===domId);
 const unreadMandatory=()=>DB.readings.filter(r=>r.tag==="mandatory"&&r.status!=="read");
 const STAT={todo:"#5b6678",active:"var(--gcamp)",blocked:"var(--overdue)",done:"#3a4252"};
-const PROJECT_STATUSES=[["planning","Planning"],["active","Active"],["paused","Paused"],["completed","Completed"]];
+const STAT_LABEL={todo:"To do",active:"Active",blocked:"Blocked",done:"Done"};
 const PRI_COL={1:"#3a4252",2:"#6d7a92",3:"#f2b756"};
 function whenDate(s){ if(!s)return null; return new Date(s.length<=10? s+"T00:00:00": s); }
 function hasTime(s){ return !!s && s.length>10; }
@@ -1412,6 +1311,7 @@ function offerTubeDecrement(virusName){
 }
 function esc(s){return String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
 function escAttr(s){return String(s??"").replace(/"/g,"&quot;").replace(/</g,"&lt;");}
+function cssStat(s){return{todo:"#8a94a6",active:"#54e08a",blocked:"#ff5f6d",done:"#8a94a6"}[s];}
 
 /* ---------- view switching ---------- */
 let currentView="animals",selectedId=null;
@@ -1425,7 +1325,8 @@ function switchTo(v){
 function render(){
   updateReadNudge();
   updateNotifyNudge();
-  if(currentView==="projects")renderProjects();
+  if(currentView==="arbor")renderArbor();
+  else if(currentView==="outline")renderOutline();
   else if(currentView==="timeline")renderTimeline();
   else if(currentView==="materials")renderMaterials();
   else if(currentView==="reading")renderReading();
@@ -1500,371 +1401,217 @@ function openNotificationsModal(){
 }
 document.getElementById("notifyNudge").addEventListener("click",openNotificationsModal);
 
-/* ---------- PROJECTS ------------------------------------------------------
-   Project planning, built on the domain/task model that has been in the data
-   all along, but wired into the animal/procedure/material/reading systems
-   rather than sitting beside them: every number a project shows about its
-   real-world progress (animals operated, targets met, stock status) is
-   counted live off the actual records, never stored or hand-maintained, so
-   it cannot drift out of date.
+/* ---------- ARBOR — floating somata + branching subtasks (force graph) ----------
+   Domains float as somata; tasks branch from their parent (or the soma) via solid links.
+   Dependencies are dashed prereq→dependent links. Improvements over the first version:
+   (1) create a dependency directly in the graph via "Link tasks" mode;
+   (2) hover any node to isolate its links (declutter);
+   (3) toggle dependency links on/off; (4) click a dashed link to delete it. */
+let arSim=null, arZoomG=null, arLinkMode=false, arShowDeps=true, arLinkSrc=null;
+function taskReady(t){ return (t.deps||[]).every(d=>{ const dt=taskById(d); return !dt||dt.status==="done"; }); }
+function arBanner(){
+  let b=document.querySelector("#arbor .link-banner"); 
+  if(!arLinkMode){ if(b)b.remove(); return; }
+  if(!b){ b=document.createElement("div"); b.className="link-banner"; document.getElementById("arbor").appendChild(b); }
+  b.textContent = arLinkSrc? `Now click the DEPENDENT task (the one that needs "${taskById(arLinkSrc)?.title.slice(0,28)}")` : "Link mode: click the PREREQUISITE task first";
+}
+function renderArbor(){
+  const svg=d3.select("#svg"); svg.selectAll("*").remove();
+  const el=document.getElementById("arbor"),W=el.clientWidth,H=el.clientHeight;
+  // toolbar wiring (static elements; rebind each render)
+  const lb=document.getElementById("ar_link"), db=document.getElementById("ar_deps");
+  lb.classList.toggle("on",arLinkMode); lb.textContent=arLinkMode?"✓ Linking… (click 2 tasks)":"＋ Link tasks";
+  db.classList.toggle("on",arShowDeps); db.textContent=arShowDeps?"Dependencies: shown":"Dependencies: hidden";
+  lb.onclick=()=>{ arLinkMode=!arLinkMode; arLinkSrc=null; arBanner(); renderArbor(); };
+  db.onclick=()=>{ arShowDeps=!arShowDeps; renderArbor(); };
+  arBanner();
 
-   The plan itself is a MAP, not a list: a pannable constellation of nodes
-   joined by "leads to" links. A thesis is one thing with many moving parts,
-   and the shape of that web is the plan — so structure is the primary object
-   here, not a status field hanging off independent tickets. Work converges
-   as readily as it branches (two experiments jointly justifying one
-   conclusion is a normal shape), which is why this is a directed graph and
-   not a tree. A failed experiment keeps its place and its forward links:
-   what it taught is a real input to whatever came next, recorded in its own
-   "what we learned" note rather than encoded as a status.               */
-const PJ_PROC_TYPES=["surgery","perfusion","histology","microscopy"];
-const DAY_MS=864e5;
-const NODE_STATES=[["planned","Planned"],["running","Running"],["done","Done"]];
-// canvas transform (shared across renders so panning survives a repaint)
-let pjPan={x:60,y:40,z:1}, pjConnectFrom=null, pjSelected=null;
+  const defs=svg.append("defs");
+  const f=defs.append("filter").attr("id","glow").attr("x","-60%").attr("y","-60%").attr("width","220%").attr("height","220%");
+  f.append("feGaussianBlur").attr("stdDeviation","3.2").attr("result","b");
+  const mg=f.append("feMerge"); mg.append("feMergeNode").attr("in","b"); mg.append("feMergeNode").attr("in","SourceGraphic");
+  arZoomG=svg.append("g");
+  svg.call(d3.zoom().scaleExtent([0.3,2.4]).on("zoom",ev=>arZoomG.attr("transform",ev.transform)));
+  svg.style("touch-action","none"); // let D3 handle all touch events (enables pinch+drag)
 
-function projectCohorts(p){ return (DB.cohorts||[]).filter(c=>(p.cohortIds||[]).includes(c.id)); }
-function projectAnimals(p){
-  const names=new Set(projectCohorts(p).map(c=>c.name));
-  return names.size?DB.animals.filter(a=>names.has(a.cohort)):[];
-}
-function projectTasks(p){ return DB.tasks.filter(t=>t.domainId===p.id); }
-// live procedure counts across every animal in the project's cohorts —
-// hasProcEntry already defines "done" as a diary entry dated today or earlier
-function projectProcStats(p){
-  const animals=projectAnimals(p); if(!animals.length)return null;
-  return PJ_PROC_TYPES.map(ptype=>({ptype, def:diaryTypeDef(ptype),
-    done:animals.filter(a=>hasProcEntry(a,ptype,true)).length, total:animals.length}));
-}
-function projectMaterials(p){
-  const names=new Set();
-  projectTasks(p).forEach(t=>(t.materials||[]).forEach(m=>names.add(m)));
-  return [...names].map(m=>({name:m, inv:invOf(m)}));
-}
-function dateOnly(s){ const d=whenDate(s); if(!d)return null; d.setHours(0,0,0,0); return d; }
-
-function renderProjects(){
-  const host=document.getElementById("ps-body"); host.innerHTML="";
-  if(!DB.domains.length){
-    const e=document.createElement("div"); e.className="empty"; e.style.padding="34px 0";
-    e.innerHTML=`No projects yet.<div style="margin-top:12px"><button class="btn accent" id="pj_first">＋ New project</button></div>`;
-    host.appendChild(e);
-    e.querySelector("#pj_first").onclick=()=>editProjectModal(null);
-    return;
-  }
-  renderProjectMap(host);
-}
-// The header block shown above a project — the integration payoff: procedure
-// progress, material stock and reading list all pulled live from the systems
-// that already own that data.
-function projectHeaderHTML(p,opts){
-  opts=opts||{};
-  const stats=projectProcStats(p), mats=projectMaterials(p), reads=readingsFor(p.id);
-  const short=v=>v?fmtWhenFull(v).replace(/,.*$/,""):"";
-  const factRows=[];
-  if(stats) factRows.push(stats.map(s=>`<span class="pj-fact ${s.done>=s.total?"met":""}">${s.def.icon} ${s.def.label} ${s.done}/${s.total}</span>`).join(""));
-  const tgtTasks=projectTasks(p).map(t=>targetProgress(t)).filter(Boolean);
-  if(tgtTasks.length) factRows.push(tgtTasks.map(g=>`<span class="pj-fact ${g.want&&g.have>=g.want?"met":""}">🐭 ${esc(g.cohort.name)}${g.tpl?" · "+esc(g.tpl.name):""} ${g.have}/${g.want||"—"}</span>`).join(""));
-  if(p.targetDate) factRows.push(`<span class="pj-fact">🎯 target ${esc(short(p.targetDate))}</span>`);
-  return `<div class="pj-head">
-      <span class="chip" style="background:${p.color}"></span>
-      <h3>${esc(p.name)}</h3>
-      <span class="pj-status ${p.status||"planning"}">${esc((PROJECT_STATUSES.find(s=>s[0]===(p.status||"planning"))||[])[1]||"Planning")}</span>
-      <button class="pj-edit" data-pj="${p.id}">✎ edit</button>
-    </div>
-    ${p.description?`<div class="pj-desc">${esc(p.description)}</div>`:""}
-    ${factRows.length?`<div class="pj-facts">${factRows.join("")}</div>`:""}
-    ${opts.full&&mats.length?`<div class="pj-sec"><h4>Materials</h4><div class="pj-facts" style="padding:0">
-      ${mats.map(m=>`<span class="pj-fact ${m.inv.status==="out"||m.inv.status==="low"?"warn":""}"><span style="width:7px;height:7px;border-radius:50%;background:${STOCK[m.inv.status].color};display:inline-block"></span>${esc(m.name)}</span>`).join("")}
-    </div></div>`:""}
-    ${opts.full?`<div class="pj-sec"><h4>Reading (${reads.filter(r=>r.status==="read").length}/${reads.length})</h4>
-      ${reads.length?reads.map(r=>`<label class="pj-readrow">
-          <input type="checkbox" class="pj-read-chk" data-id="${r.id}" ${r.status==="read"?"checked":""}>
-          <span class="rd ${r.status==="read"?"done":""}">${esc(r.title)}</span>
-          ${r.link?`<a class="rlink" href="${escAttr(r.link)}" target="_blank" rel="noopener">open ↗</a>`:""}
-        </label>`).join(""):`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">nothing yet</div>`}
-      <button class="btn ghost pj-addread" data-pj="${p.id}" style="font-size:11.5px;padding:4px 9px;margin-top:7px">＋ add reading</button></div>`:""}`;
-}
-// shared wiring for whatever project headers a sub-view rendered
-function wireProjectHeaders(host){
-  host.querySelectorAll(".pj-edit").forEach(b=>b.onclick=e=>{ e.stopPropagation(); editProjectModal(b.dataset.pj); });
-  host.querySelectorAll(".pj-read-chk").forEach(cb=>cb.onchange=()=>{
-    const r=DB.readings.find(x=>x.id===cb.dataset.id); if(!r)return;
-    r.status=cb.checked?"read":"unread"; persist(); renderProjects();
+  // nodes: somata (domains) + tasks
+  const nodes=[],links=[];
+  DB.domains.forEach(d=>nodes.push({id:d.id,type:"soma",name:d.name,color:d.color,active:d.active}));
+  DB.tasks.forEach(t=>nodes.push({id:t.id,type:"task",t}));
+  const nById=Object.fromEntries(nodes.map(nd=>[nd.id,nd]));
+  DB.tasks.forEach(t=>{
+    const target=t.parentId&&nById[t.parentId]?t.parentId:t.domainId;
+    if(nById[target])links.push({source:t.id,target,kind:"branch",color:domById(t.domainId)?.color||"#556"});
+    (t.deps||[]).forEach(dep=>{ if(nById[dep])links.push({source:dep,target:t.id,kind:"dep"}); });
   });
-  host.querySelectorAll(".pj-addread").forEach(b=>b.onclick=()=>{
-    addReadingModal();
-    // preselect this project in the existing (unmodified) add-reading modal
-    const sel=document.getElementById("r_dom"); if(sel) sel.value=b.dataset.pj;
-  });
-}
+  const visible=links.filter(l=>l.kind==="branch"||arShowDeps);
 
-function newProjectNode(domainId){
-  return {id:uid("t_"),title:"",domainId,parentId:null,status:"todo",state:"planned",learned:"",
-    priority:2,deadline:null,endDate:null,duration:null,procedureType:null,linkedAnimals:[],
-    autoTitle:false,materials:[],notes:"",deps:[],links:[],target:null,x:null,y:null,created:Date.now()};
-}
-
-/* ---- The network --------------------------------------------------------
-   Every project in the workspace lives on ONE canvas, not a screen each.
-   Each project is a soma; its subtasks are the dendritic tree branching off
-   it and converging back on it; and the long-range links between projects
-   are axons, which is what makes the whole thing a network rather than a
-   set of separate diagrams. Seeing a thesis whole — including the places
-   where one project's output is another's input — is the entire point.
-
-   Rendering: absolutely-positioned HTML cards over one SVG layer, all inside
-   a single CSS-transformed container, so pan/zoom costs one transform and
-   nothing re-lays-out. Deliberately no force simulation — an arrangement the
-   planner recognises next week matters far more than an optimal one, and
-   physics layouts move everything every time they run.                   */
-const SOMA_W=210, DEND_W=[168,152,138], DEND_GAP_X=212, DEND_GAP_Y=62, SOMA_GAP_Y=250;
-function dendW(d){ return DEND_W[Math.min(Math.max(d-1,0),DEND_W.length-1)]; }
-function projectOf(t){ return domById(t.domainId); }
-// Dendrites branch outward from their soma, deeper ones further out. Placed
-// in dependency order by the caller so a node always has a positioned anchor.
-function placeDendrite(n,fromId){
-  const from=fromId?(taskById(fromId)||domById(fromId)):null;
-  if(!from){ n.x=40; n.y=40; return; }
-  const sibs=(childrenOf(fromId).length?childrenOf(fromId)
-              :DB.tasks.filter(t=>t.domainId===n.domainId&&!parentsOf(t.id).length))
-             .filter(s=>s.id!==n.id&&s.y!=null);
-  n.x=(from.x||0)+DEND_GAP_X;
-  n.y=sibs.length? Math.max(...sibs.map(s=>s.y))+DEND_GAP_Y : (from.y||0);
-}
-function renderProjectMap(host){
-  // ── one-time auto-placement so nothing is ever born without coordinates.
-  // Each neuron gets a vertical band tall enough for its own dendritic field,
-  // so a project with twenty subtasks doesn't grow down through the next one.
-  let bandY=60;
-  DB.domains.forEach(p=>{
-    const mine=DB.tasks.filter(t=>t.domainId===p.id);
-    if(p.x==null){ p.x=40; p.y=bandY; }
-    // dendrites in dependency order — a node placed relative to its parent
-    // needs that parent to already have coordinates, which array order alone
-    // doesn't guarantee. Whatever's left after no further progress (a cycle,
-    // or an orphan) hangs straight off the soma so nothing stays unplaced.
-    for(let pass=0;pass<mine.length+1;pass++){
-      let did=false;
-      mine.forEach(n=>{
-        if(n.x!=null)return;
-        const from=parentsOf(n.id).filter(q=>q.domainId===p.id)[0];
-        if(!from){ placeDendrite(n,p.id); did=true; }
-        else if(from.x!=null){ placeDendrite(n,from.id); did=true; }
-      });
-      if(!did)break;
-    }
-    mine.forEach(n=>{ if(n.x==null) placeDendrite(n,p.id); });
-    // next neuron starts below this one's whole dendritic field
-    const bottom=mine.length?Math.max(p.y,...mine.map(t=>t.y)):p.y;
-    bandY=Math.max(bandY+SOMA_GAP_Y, bottom+SOMA_GAP_Y);
-  });
-
-  const bar=document.createElement("div"); bar.className="pjm-bar";
-  bar.innerHTML=`<button class="pjm-btn ${pjConnectFrom?"on":""}" id="pjm_link">${pjConnectFrom?"✓ now pick the target…":"⇢ Connect"}</button>
-    <button class="pjm-btn" id="pjm_addp">＋ Project</button>
-    <button class="pjm-btn" id="pjm_add">＋ Subtask</button>
-    <button class="pjm-btn" id="pjm_fit">⤢ Fit</button>
-    <span class="pjm-hint">soma = project · dendrites = its subtasks · axons = links between projects</span>`;
-  host.appendChild(bar);
-
-  const stage=document.createElement("div"); stage.className="pjm-stage"; host.appendChild(stage);
-  const world=document.createElement("div"); world.className="pjm-world"; stage.appendChild(world);
-  const svg=document.createElementNS("http://www.w3.org/2000/svg","svg"); svg.setAttribute("class","pjm-links"); world.appendChild(svg);
-  function applyTransform(){ world.style.transform=`translate(${pjPan.x}px,${pjPan.y}px) scale(${pjPan.z})`; }
-  applyTransform();
-
-  const els={};
-  // ── somata
-  DB.domains.forEach(p=>{
-    const stats=projectProcStats(p);
-    const el=document.createElement("div");
-    el.className="pjm-soma st-"+(p.status||"planning")+(pjSelected===p.id?" sel":"")+(pjConnectFrom===p.id?" linking":"");
-    el.style.left=p.x+"px"; el.style.top=p.y+"px"; el.style.width=SOMA_W+"px";
-    el.style.setProperty("--c",p.color);
-    const n=DB.tasks.filter(t=>t.domainId===p.id).length;
-    el.innerHTML=`<div class="t">${esc(p.name)}</div>
-      <div class="m"><span class="ps">${esc((PROJECT_STATUSES.find(s=>s[0]===(p.status||"planning"))||[])[1]||"")}</span>
-        <span class="nn">${n} subtask${n!==1?"s":""}</span></div>
-      ${stats?`<div class="pr">${stats.map(s=>`<span title="${escAttr(s.def.label)}">${s.def.icon}${s.done}/${s.total}</span>`).join("")}</div>`:""}`;
-    world.appendChild(el); els[p.id]=el;
-  });
-  // ── dendrites
-  DB.tasks.filter(t=>domById(t.domainId)).forEach(n=>{
-    const p=projectOf(n), d=nodeDepth(n), el=document.createElement("div");
-    el.className="pjm-dend d"+Math.min(d,3)+" s-"+(n.state||"planned")+(pjSelected===n.id?" sel":"")+(pjConnectFrom===n.id?" linking":"");
-    el.style.left=n.x+"px"; el.style.top=n.y+"px"; el.style.width=dendW(d)+"px";
-    el.style.setProperty("--c",p.color);
-    el.innerHTML=`<div class="t">${esc(n.title||"(untitled)")}</div>
-      <div class="m"><span class="dot"></span>${(NODE_STATES.find(s=>s[0]===(n.state||"planned"))||[])[1]}${n.learned?`<span class="lrn" title="${escAttr(n.learned)}">📝</span>`:""}</div>
-      ${pjSelected===n.id?`<button class="pjm-plus" title="branch a subtask off this one">＋</button>`:""}`;
-    world.appendChild(el); els[n.id]=el;
-  });
-
-  function drawLinks(){
-    const seg=[];
-    const curve=(a,b,cls,w,extra,col)=>{
-      if(!a||!b)return;
-      const x1=a.offsetLeft+a.offsetWidth, y1=a.offsetTop+a.offsetHeight/2;
-      const x2=b.offsetLeft,               y2=b.offsetTop+b.offsetHeight/2;
-      const dx=Math.max(38,Math.abs(x2-x1)*0.5);
-      seg.push(`<path class="${cls}" style="stroke-width:${w}${col?`;stroke:${col}`:""}" d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}"${extra||""}/>`);
-      return {x2,y2};
-    };
-    // dendrites: carry their neuron's colour and taper with distance from the
-    // soma, so each project's arbor reads as one structure at a glance
-    DB.domains.forEach(p=>{
-      DB.tasks.filter(t=>t.domainId===p.id&&!parentsOf(t.id).some(q=>q.domainId===p.id))
-        .forEach(n=>curve(els[p.id],els[n.id],"pjm-dendlink",2.6,` data-from="${p.id}" data-to="${n.id}"`,p.color));
+  const link=arZoomG.append("g").selectAll("path").data(visible).join("path")
+    .attr("fill","none")
+    .attr("stroke",d=>d.kind==="dep"?"var(--mruby)":d.color)
+    .attr("stroke-opacity",d=>d.kind==="dep"?0.5:0.3)
+    .attr("stroke-width",d=>d.kind==="dep"?1.5:1.6)
+    .attr("stroke-dasharray",d=>d.kind==="dep"?"5 4":null)
+    .style("cursor",d=>d.kind==="dep"?"pointer":"default")
+    .on("click",(ev,d)=>{ if(d.kind!=="dep")return; ev.stopPropagation();
+      const dependent=taskById(typeof d.target==="object"?d.target.id:d.target), prereq=(typeof d.source==="object"?d.source.id:d.source);
+      if(dependent && confirm(`Remove dependency?\n"${dependent.title}" will no longer wait on its prerequisite.`)){
+        dependent.deps=(dependent.deps||[]).filter(x=>x!==prereq); persist(); renderArbor(); }
     });
-    DB.tasks.forEach(n=>(n.links||[]).forEach(id=>{
-      const to=taskById(id); if(!to||!els[id])return;
-      if(to.domainId!==n.domainId)return;                 // cross-project handled as an axon below
-      const p=projectOf(n);
-      curve(els[n.id],els[id],"pjm-dendlink",Math.max(1.1,2.6-nodeDepth(n)*0.5),` data-from="${n.id}" data-to="${id}"`,p&&p.color);
-    }));
-    // axons: long-range projections between projects, with a terminal bouton
-    DB.domains.forEach(p=>(p.links||[]).forEach(id=>{
-      const q=domById(id); if(!q||!els[id])return;
-      const end=curve(els[p.id],els[id],"pjm-axon",3.4,` data-axon="1" data-from="${p.id}" data-to="${id}"`);
-      if(end) seg.push(`<circle class="pjm-bouton" cx="${end.x2}" cy="${end.y2}" r="5"/>`);
-    }));
-    // a task linking into another project's task is an axon too
-    DB.tasks.forEach(n=>(n.links||[]).forEach(id=>{
-      const to=taskById(id); if(!to||!els[id]||to.domainId===n.domainId)return;
-      const end=curve(els[n.id],els[id],"pjm-axon",2.6,` data-axon="1" data-from="${n.id}" data-to="${id}"`);
-      if(end) seg.push(`<circle class="pjm-bouton" cx="${end.x2}" cy="${end.y2}" r="4"/>`);
-    }));
-    const all=[...DB.domains,...DB.tasks.filter(t=>domById(t.domainId))];
-    svg.setAttribute("width", Math.max(700,...all.map(n=>(n.x||0)+320)));
-    svg.setAttribute("height",Math.max(460,...all.map(n=>(n.y||0)+200)));
-    svg.innerHTML=seg.join("");
-    svg.querySelectorAll("path[data-from]").forEach(pa=>pa.addEventListener("click",ev=>{
-      ev.stopPropagation();
-      const f=pa.dataset.from,t2=pa.dataset.to;
-      const src=taskById(f)||domById(f), dst=taskById(t2)||domById(t2);
-      if(!src||!dst)return;
-      if(!src.links||!src.links.includes(t2)){ toast("That link is implied by the structure"); return; }
-      if(confirm(`Remove the connection "${src.name||src.title||"(untitled)"}" → "${dst.name||dst.title||"(untitled)"}"?`)){
-        src.links=src.links.filter(x=>x!==t2); persist(); renderProjects();
+
+  const node=arZoomG.append("g").selectAll("g").data(nodes).join("g").style("cursor","pointer")
+    .call(d3.drag()
+      .on("start",(ev,d)=>{if(!ev.active)arSim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
+      .on("drag",(ev,d)=>{d.fx=ev.x;d.fy=ev.y;})
+      .on("end",(ev,d)=>{if(!ev.active)arSim.alphaTarget(0);d.fx=null;d.fy=null;}))
+    .on("click",(ev,d)=>{
+      if(arLinkMode && d.type==="task"){
+        if(!arLinkSrc){ arLinkSrc=d.id; arBanner(); highlightNode(d.id); }
+        else if(arLinkSrc===d.id){ arLinkSrc=null; arBanner(); unhighlight(); }
+        else { const dep=taskById(d.id); if(!(dep.deps||[]).includes(arLinkSrc)){ dep.deps=[...(dep.deps||[]),arLinkSrc]; persist(); toast("Dependency created"); }
+               arLinkSrc=null; renderArbor(); }
+        return;
       }
-    }));
-  }
-  drawLinks();
+      if(d.type==="task")openDetail(d.id); else editDomainModal(d.id);
+    })
+    .on("mouseenter",(ev,d)=>{ if(!arLinkMode)highlightNode(d.id); })
+    .on("mouseleave",()=>{ if(!arLinkMode)unhighlight(); });
 
-  // ── interaction
-  function connectTo(id){
-    const from=taskById(pjConnectFrom)||domById(pjConnectFrom);
-    if(!from){ pjConnectFrom=null; renderProjects(); return; }
-    if(from.id===id){ pjConnectFrom=null; renderProjects(); return; }
-    // a soma may only project onto another soma (that's what an axon is); a
-    // dendrite may feed a sibling dendrite, or reach into another project
-    const target=taskById(id)||domById(id);
-    if(domById(from.id)&&!domById(id)){ toast("A project's axon projects onto another project — pick a soma"); return; }
-    from.links=[...new Set([...(from.links||[]),id])];
-    pjConnectFrom=null; persist(); renderProjects();
-    toast(domById(from.id)?"Axon projected":"Linked");
-  }
-  function clicked(id){
-    if(pjConnectFrom){ connectTo(id); return; }
-    pjSelected=id;
-    if(domById(id)){ renderProjects(); showProjectPanel(host,domById(id)); }
-    else { renderProjects(); openDetail(id); }
-  }
-  Object.entries(els).forEach(([id,el])=>{
-    const rec=taskById(id)||domById(id);
-    let sx=0,sy=0,ox=0,oy=0,dragging=false,moved=false;
-    el.addEventListener("pointerdown",ev=>{
-      if(ev.target.classList.contains("pjm-plus"))return;
-      ev.stopPropagation(); dragging=true; moved=false;
-      sx=ev.clientX; sy=ev.clientY; ox=rec.x; oy=rec.y;
-      try{el.setPointerCapture(ev.pointerId);}catch(_){}
-      el.classList.add("drag");
+  // somata
+  const soma=node.filter(d=>d.type==="soma");
+  soma.append("circle").attr("r",16).attr("fill",d=>d.color).attr("fill-opacity",d=>d.active?.28:.16)
+    .attr("stroke",d=>d.color).attr("stroke-width",d=>d.active?3:2).attr("filter",d=>d.active?"url(#glow)":null);
+  soma.append("circle").attr("r",4).attr("fill",d=>d.color);
+  soma.append("text").attr("class","soma-label").attr("x",21).attr("y",4).attr("fill",d=>d.color).text(d=>d.name);
+  soma.append("text").attr("class","book-badge").attr("x",21).attr("y",18).attr("fill","var(--gold)")
+    .text(d=>{ const na=DB.animals.filter(a=>(a.tasks||[]).some(tid=>{const t=taskById(tid);return t&&t.domainId===d.id;})).length;
+      const ur=readingsFor(d.id).filter(r=>r.tag==="mandatory"&&r.status!=="read").length;
+      return [na?`🐁 ${na}`:"",ur?`📖 ${ur}`:""].filter(Boolean).join("  "); });
+
+  // tasks
+  const task=node.filter(d=>d.type==="task");
+  const rOf=t=>6+(t.priority||2)*2.2;
+  task.append("circle").attr("r",d=>rOf(d.t))
+    .attr("fill",d=>domById(d.t.domainId)?.color||"#667")
+    .attr("fill-opacity",d=>d.t.status==="done"?.18:(d.t.status==="active"?.95:.55))
+    .attr("stroke",d=>d.t.status==="active"?"#fff":STAT[d.t.status]).attr("stroke-width",d=>d.t.status==="blocked"?2.6:(d.t.status==="active"?1.6:2))
+    .attr("filter",d=>d.t.status==="active"?"url(#glow)":null);
+  task.append("text").attr("class","node-label").attr("x",d=>rOf(d.t)+5).attr("y",3)
+    .text(d=>{const s=d.t.title; return s.length>26?s.slice(0,25)+"…":s;});
+
+  // hover isolate helpers
+  function touches(l,id){ const s=typeof l.source==="object"?l.source.id:l.source, tg=typeof l.target==="object"?l.target.id:l.target; return s===id||tg===id; }
+  function neighborIds(id){ const set=new Set([id]); visible.forEach(l=>{ if(touches(l,id)){ set.add(typeof l.source==="object"?l.source.id:l.source); set.add(typeof l.target==="object"?l.target.id:l.target);} }); return set; }
+  window.highlightNode=(id)=>{ const keep=neighborIds(id);
+    node.style("opacity",d=>keep.has(d.id)?1:0.18);
+    link.style("opacity",l=>touches(l,id)?1:0.06).style("stroke-width",l=>touches(l,id)?(l.kind==="dep"?2.4:2.2):(l.kind==="dep"?1.5:1.6)); };
+  window.unhighlight=()=>{ node.style("opacity",1); link.style("opacity",null).style("stroke-width",l=>l.kind==="dep"?1.5:1.6); };
+
+  arSim=d3.forceSimulation(nodes)
+    .force("link",d3.forceLink(links).id(d=>d.id).distance(d=>d.kind==="dep"?120:66).strength(d=>d.kind==="dep"?.05:.9))
+    .force("charge",d3.forceManyBody().strength(-300))
+    .force("collide",d3.forceCollide().radius(d=>d.type==="soma"?54:rOf(d.t)+13))
+    .force("center",d3.forceCenter(W/2,H/2))
+    .force("x",d3.forceX(W/2).strength(.02)).force("y",d3.forceY(H/2).strength(.02))
+    .on("tick",()=>{
+      link.attr("d",d=>{ const a=d.source,b=d.target; const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+        return d.kind==="dep"? `M${a.x},${a.y} Q ${mx},${my-30} ${b.x},${b.y}` : `M${a.x},${a.y} L ${b.x},${b.y}`; });
+      node.attr("transform",d=>`translate(${d.x},${d.y})`);
     });
-    el.addEventListener("pointermove",ev=>{
-      if(!dragging)return;
-      const dx=(ev.clientX-sx)/pjPan.z, dy=(ev.clientY-sy)/pjPan.z;
-      if(Math.abs(dx)>3||Math.abs(dy)>3)moved=true;
-      rec.x=Math.round(ox+dx); rec.y=Math.round(oy+dy);
-      el.style.left=rec.x+"px"; el.style.top=rec.y+"px"; drawLinks();
-    });
-    el.addEventListener("pointerup",()=>{
-      if(!dragging)return; dragging=false; el.classList.remove("drag");
-      if(moved)persist(); else clicked(id);
-    });
-    const plus=el.querySelector(".pjm-plus");
-    if(plus) plus.onclick=ev=>{ ev.stopPropagation(); branchFrom(id); };
-  });
-
-  function branchFrom(fromId){
-    const owner=domById(fromId)||projectOf(taskById(fromId));
-    if(!owner){ toast("Pick a project or one of its subtasks first"); return; }
-    const n=newProjectNode(owner.id);
-    placeDendrite(n,fromId);
-    if(!domById(fromId)){ const f=taskById(fromId); if(f) f.links=[...new Set([...(f.links||[]),n.id])]; }
-    DB.tasks.push(n); pjSelected=n.id; persist(); renderProjects(); openDetail(n.id);
-    requestAnimationFrame(()=>{ const tf=document.getElementById("e_title"); if(tf){tf.select();tf.focus();} });
-  }
-
-  let panning=false,px0=0,py0=0,pox=0,poy=0,panMoved=false;
-  stage.addEventListener("pointerdown",ev=>{
-    if(ev.target!==stage&&ev.target!==world&&ev.target!==svg)return;
-    panning=true; panMoved=false; px0=ev.clientX; py0=ev.clientY; pox=pjPan.x; poy=pjPan.y;
-    try{stage.setPointerCapture(ev.pointerId);}catch(_){}
-    stage.classList.add("grabbing");
-  });
-  stage.addEventListener("pointermove",ev=>{
-    if(!panning)return;
-    const dx=ev.clientX-px0, dy=ev.clientY-py0;
-    if(Math.abs(dx)>3||Math.abs(dy)>3)panMoved=true;
-    pjPan.x=pox+dx; pjPan.y=poy+dy; applyTransform();
-  });
-  stage.addEventListener("pointerup",()=>{
-    if(!panning)return; panning=false; stage.classList.remove("grabbing");
-    if(panMoved)return;
-    if(pjConnectFrom){ pjConnectFrom=null; renderProjects(); return; }
-    if(pjSelected){ pjSelected=null; renderProjects(); }
-  });
-  stage.addEventListener("wheel",ev=>{
-    ev.preventDefault();
-    const r=stage.getBoundingClientRect(), mx=ev.clientX-r.left, my=ev.clientY-r.top;
-    const z=Math.max(0.28,Math.min(1.8,pjPan.z*(ev.deltaY<0?1.1:1/1.1)));
-    pjPan.x=mx-(mx-pjPan.x)*(z/pjPan.z); pjPan.y=my-(my-pjPan.y)*(z/pjPan.z);
-    pjPan.z=z; applyTransform();
-  },{passive:false});
-
-  bar.querySelector("#pjm_link").onclick=()=>{
-    if(pjConnectFrom){ pjConnectFrom=null; renderProjects(); return; }
-    if(!pjSelected){ toast("Select the project or subtask the link starts from"); return; }
-    pjConnectFrom=pjSelected; renderProjects();
-  };
-  bar.querySelector("#pjm_addp").onclick=()=>editProjectModal(null);
-  bar.querySelector("#pjm_add").onclick=()=>{
-    const from=pjSelected||(DB.domains[0]||{}).id;
-    if(!from){ toast("Create a project first"); return; }
-    branchFrom(from);
-  };
-  bar.querySelector("#pjm_fit").onclick=()=>{
-    const all=[...DB.domains,...DB.tasks.filter(t=>domById(t.domainId))];
-    if(!all.length)return;
-    const minX=Math.min(...all.map(n=>n.x)), minY=Math.min(...all.map(n=>n.y));
-    const maxX=Math.max(...all.map(n=>n.x+SOMA_W)), maxY=Math.max(...all.map(n=>n.y+110));
-    const r=stage.getBoundingClientRect();
-    pjPan.z=Math.max(0.28,Math.min(1.3,Math.min(r.width/(maxX-minX+90),r.height/(maxY-minY+90))));
-    pjPan.x=40-minX*pjPan.z; pjPan.y=30-minY*pjPan.z; applyTransform();
-  };
-
-  if(pjSelected&&domById(pjSelected)) showProjectPanel(host,domById(pjSelected));
 }
-// The selected project's live detail — procedure counts, animal targets,
-// materials and reading — shown under the network rather than as its own
-// screen, so it never competes with seeing the whole thing at once.
-function showProjectPanel(host,p){
-  host.querySelectorAll(".pj-card").forEach(x=>x.remove());
-  const card=document.createElement("div"); card.className="pj-card"; card.style.marginTop="14px";
-  card.innerHTML=projectHeaderHTML(p,{full:true});
-  host.appendChild(card);
-  wireProjectHeaders(host);
+
+
+/* ---------- OUTLINE ---------- */
+const collapsed=new Set();          // collapsed task subtrees
+const collapsedDomains=new Set();   // collapsed whole domains
+let hideCompleted=false;
+function subtreeAllDone(t){ if(t.status!=="done")return false; return childrenOf(t.id).every(subtreeAllDone); }
+function moveTask(id,dir){
+  const t=taskById(id); if(!t)return;
+  const sibs=DB.tasks.filter(x=> (x.parentId||null)===(t.parentId||null) && (t.parentId? true : x.domainId===t.domainId));
+  const j=sibs.indexOf(t), swap=sibs[j+dir]; if(!swap)return;
+  const iA=DB.tasks.indexOf(t), iB=DB.tasks.indexOf(swap);
+  DB.tasks[iA]=swap; DB.tasks[iB]=t; persist(); renderOutline();
+}
+function duplicateTask(id){
+  const t=taskById(id); if(!t)return; const idMap={};
+  (function clone(orig,newParent){
+    const copy={...orig,id:uid("t_"),parentId:newParent,deps:[...(orig.deps||[])],materials:[...(orig.materials||[])],created:Date.now()};
+    idMap[orig.id]=copy.id; DB.tasks.push(copy);
+    childrenOf(orig.id).filter(c=>!Object.values(idMap).includes(c.id)).forEach(c=>clone(c,copy.id));
+    return copy;
+  })(t,t.parentId);
+  taskById(idMap[t.id]).title=t.title+" (copy)";
+  Object.values(idMap).forEach(nid=>{ const nt=taskById(nid); nt.deps=(nt.deps||[]).map(d=>idMap[d]||d); });
+  persist(); renderOutline(); toast("Task + subtree duplicated");
+}
+function renderOutline(){
+  const host=document.getElementById("outline"); host.innerHTML="";
+  // toolbar
+  const bar=document.createElement("div");
+  bar.style.cssText="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;align-items:center";
+  bar.innerHTML=`<button class="btn ghost" id="ol_expand">⤢ Expand all</button>
+    <button class="btn ghost" id="ol_roots">⇧ Collapse to first level</button>
+    <button class="btn ghost" id="ol_domains">▸ Collapse domains</button>
+    <div class="spacer" style="flex:1"></div>
+    <button class="btn ${hideCompleted?"accent":"ghost"}" id="ol_hide">${hideCompleted?"☑":"☐"} Hide completed</button>`;
+  host.appendChild(bar);
+  bar.querySelector("#ol_expand").onclick=()=>{ collapsed.clear(); collapsedDomains.clear(); renderOutline(); };
+  bar.querySelector("#ol_roots").onclick=()=>{ collapsedDomains.clear(); collapsed.clear();
+    DB.tasks.forEach(t=>{ if(childrenOf(t.id).length) collapsed.add(t.id); }); renderOutline(); };
+  bar.querySelector("#ol_domains").onclick=()=>{ DB.domains.forEach(d=>collapsedDomains.add(d.id)); renderOutline(); };
+  bar.querySelector("#ol_hide").onclick=()=>{ hideCompleted=!hideCompleted; renderOutline(); };
+
+  DB.domains.forEach(dom=>{
+    const roots=DB.tasks.filter(t=>t.domainId===dom.id&&(!t.parentId||!taskById(t.parentId)||taskById(t.parentId).domainId!==dom.id));
+    const all=DB.tasks.filter(t=>t.domainId===dom.id);
+    const unread=readingsFor(dom.id).filter(r=>r.tag==="mandatory"&&r.status!=="read").length;
+    const domOpen=!collapsedDomains.has(dom.id);
+    const block=document.createElement("div"); block.className="domain-block";
+    const head=document.createElement("div"); head.className="domain-head"; head.style.cursor="pointer";
+    head.innerHTML=`<span class="caret" style="width:12px">${domOpen?"▾":"▸"}</span>
+      <span class="chip" style="background:${dom.color}"></span>
+      <h2>${esc(dom.name)}</h2><span class="count">${all.length} task${all.length!==1?"s":""}</span>
+      ${dom.active?`<span class="activeflag">active</span>`:""}
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        ${unread?`<span class="pill read">📖 ${unread} to read</span>`:""}
+        <button class="dom-edit" title="Edit domain" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px">✎ edit</button>
+      </span>`;
+    head.onclick=()=>{ collapsedDomains.has(dom.id)?collapsedDomains.delete(dom.id):collapsedDomains.add(dom.id); renderOutline(); };
+    head.querySelector(".dom-edit").addEventListener("click",e=>{ e.stopPropagation(); editDomainModal(dom.id); });
+    block.appendChild(head);
+    if(domOpen){
+      const ul=document.createElement("ul"); ul.className="tree";
+      roots.forEach(r=>{ const nn=taskNode(r); if(nn)ul.appendChild(nn); }); block.appendChild(ul);
+      if(!ul.children.length){ const e=document.createElement("div"); e.className="empty"; e.style.padding="14px 0"; e.textContent=hideCompleted?"nothing outstanding":"no tasks yet"; block.appendChild(e); }
+    }
+    host.appendChild(block);
+  });
+}
+function taskNode(t){
+  if(hideCompleted && subtreeAllDone(t)) return null;
+  const li=document.createElement("li"); li.className="leaf";
+  const kids=childrenOf(t.id),isOpen=!collapsed.has(t.id),dcls=dueClass(t.deadline,t.status,t.endDate);
+  const row=document.createElement("div"); row.className="task-row"+(t.id===selectedId?" sel":"");
+  row.innerHTML=`<span class="pri" style="background:${PRI_COL[t.priority||2]}"></span>
+    <span class="caret">${kids.length?(isOpen?"▾":"▸"):""}</span>
+    <span class="stat" style="background:${STAT[t.status]}"></span>
+    <span class="ttl ${t.status==="done"?"done":""}">${esc(t.title)}</span>
+    <span class="meta">${(t.materials&&t.materials.length)?`<span class="pill mat">⚙ ${t.materials.length}</span>`:""}
+      ${t.deadline?`<span class="pill due ${dcls}">${fmtDue(t.deadline)}</span>`:""}
+      <span class="rowacts" style="display:inline-flex;gap:3px;opacity:.55">
+        <button class="ra" data-act="up" title="move up" style="border:0;background:transparent;color:var(--ink-dim);cursor:pointer;font-size:11px;padding:1px 3px">▲</button>
+        <button class="ra" data-act="down" title="move down" style="border:0;background:transparent;color:var(--ink-dim);cursor:pointer;font-size:11px;padding:1px 3px">▼</button>
+        <button class="ra" data-act="dup" title="duplicate task + children" style="border:0;background:transparent;color:var(--ink-dim);cursor:pointer;font-size:12px;padding:1px 3px">⧉</button>
+      </span></span>`;
+  row.querySelector(".caret").addEventListener("click",e=>{e.stopPropagation(); collapsed.has(t.id)?collapsed.delete(t.id):collapsed.add(t.id); renderOutline();});
+  row.querySelector(".ttl").addEventListener("click",()=>openDetail(t.id));
+  row.querySelector(".stat").addEventListener("click",e=>{e.stopPropagation();cycleStatus(t.id);});
+  row.querySelectorAll(".ra").forEach(b=>b.addEventListener("click",e=>{ e.stopPropagation();
+    const a=b.dataset.act; if(a==="up")moveTask(t.id,-1); else if(a==="down")moveTask(t.id,1); else duplicateTask(t.id); }));
+  li.appendChild(row);
+  if(kids.length&&isOpen){ const ul=document.createElement("ul"); kids.forEach(k=>{ const nn=taskNode(k); if(nn)ul.appendChild(nn); }); li.appendChild(ul); }
+  return li;
 }
 
 /* ---------- TIMELINE (scheduled times) ---------- */
@@ -3438,6 +3185,7 @@ function animalCard(a){
       btn.textContent = v ? (labels[field]||"")+v : (labels[field]||"")+field+"?";
       btn.style.color = v ? "" : "var(--ink-faint)";
       if(currentView==="timeline") renderTimeline();
+      if(currentView==="outline")  renderOutline();
     }, undefined, field==="dob");
   });
   const bvc=card.querySelector(".am-bv-card");
@@ -4331,9 +4079,6 @@ function procedureSectionHTML(p){
 function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   opts=opts||{};
   let hp=!!initial.headpost, win=!!initial.window;
-  // carried through untouched — records which saved procedure template this
-  // surgery was applied from, so project animal-count targets can match on it
-  const appliedTemplateId=initial.appliedTemplateId||null;
   let winAp=initial.winAp!=null?initial.winAp:"", winMl=initial.winMl!=null?initial.winMl:"", winDiam=initial.winDiam!=null?initial.winDiam:"3";
   const injs=(initial.injections||[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],...x}));
   const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px";
@@ -4516,7 +4261,7 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   paintInjs(); updatePreview();
 
   return {
-    getSnapshot(){ readInjFields(); return {headpost:hp, window:win, winAp, winMl, winDiam, appliedTemplateId, injections:injs.map(x=>({...x}))}; },
+    getSnapshot(){ readInjFields(); return {headpost:hp, window:win, winAp, winMl, winDiam, injections:injs.map(x=>({...x}))}; },
     refresh: updatePreview
   };
 }
@@ -4615,9 +4360,7 @@ function animalModal(id,draft){
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
       dob:vDob, sacrificed:vSac, termination,
-      // stamp which template this came from so a project task's "N animals via
-      // procedure X" target can count real matches later
-      surgeryDetail:{headpost:tpl.headpost,window:tpl.window,winAp:tpl.winAp,winMl:tpl.winMl,winDiam:tpl.winDiam,appliedTemplateId:tpl.id,injections:tpl.injections.map(x=>({...x}))},
+      surgeryDetail:{headpost:tpl.headpost,window:tpl.window,winAp:tpl.winAp,winMl:tpl.winMl,winDiam:tpl.winDiam,injections:tpl.injections.map(x=>({...x}))},
       comments:document.getElementById("am_com").value
     };
     closeModal();
@@ -4638,7 +4381,7 @@ function animalModal(id,draft){
     const name=document.getElementById("am_name").value.trim(); if(!name){toast("Name needed");return;}
     const snap=procEditor.getSnapshot();
     const cleanInjs=snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
-    const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,appliedTemplateId:snap.appliedTemplateId||null,injections:cleanInjs}:null;
+    const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
     const rec={name,cohort:document.getElementById("am_cohort").value,cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
       dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
@@ -4668,133 +4411,39 @@ function openDetail(id){
     <div class="fld"><label>Title</label>
       <input id="e_title" value="${escAttr(t.title)}" list="e_blueprints" autocomplete="off" placeholder="Task title…">
       <datalist id="e_blueprints">${[...new Set(DB.tasks.filter(x=>x.id!==t.id).map(x=>x.title))].sort().map(tt=>`<option value="${escAttr(tt)}">`).join("")}</datalist></div>
-    <div class="fld"><label>State</label><div class="seg" id="e_state">
-      ${NODE_STATES.map(([k,l])=>`<button data-s="${k}" class="${(t.state||"planned")===k?"on":""}">${l}</button>`).join("")}</div></div>
+    <div class="fld"><label>Status</label><div class="seg" id="e_status">
+      ${["todo","done"].map(s=>`<button data-s="${s}" class="${t.status===s?"on":""}" style="${t.status===s?`color:${cssStat(s)}`:""}">${STAT_LABEL[s]}</button>`).join("")}</div></div>
     <div class="drow">
       <div class="fld" style="width:200px"><label>Start (date + hour)</label><button type="button" id="e_due" class="datebtn ${t.deadline?"":"datebtn-empty"}">${t.deadline?fmtWhenFull(t.deadline):"📅  start"}</button></div>
       <div class="fld" style="flex:1"><label>End <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">date + time</span></label>
         <button type="button" id="e_endDate" class="datebtn ${t.endDate?"":"datebtn-empty"}">${t.endDate?fmtWhenFull(t.endDate):"📅  end"}</button></div></div>
     <div class="fld"><label>Notes</label><textarea id="e_notes">${esc(t.notes||"")}</textarea></div>
-    <div class="fld"><label>What we learned <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">an experiment that didn't work still feeds what came next</span></label>
-      <textarea id="e_learned" placeholder="the finding, the reason it failed, what it ruled out…">${esc(t.learned||"")}</textarea></div>
-    ${targetFieldHTML(t)}
-    ${subtaskListHTML(t)}
     ${(() => { const la=DB.animals.filter(a=>(a.tasks||[]).includes(t.id)); return la.length?`<div class="fld"><label>Linked animals (${la.length})</label><div style="font-size:12.5px;line-height:1.7">${la.map(a=>`<div><span class="stat" style="background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};display:inline-block;margin-right:6px"></span>${esc(a.name)} <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${esc(a.cohort)}</span></div>`).join("")}</div><div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:4px">link/unlink from the Animals tab</div></div>`:""; })()}
     <div class="drow" style="margin-top:18px"><button class="btn danger" id="e_del">Delete task</button></div>`;
   wireDetail(t); document.getElementById("detail").classList.add("open");
-}
-/* ── Task targets: "N animals of cohort X (optionally via procedure template Y)".
-   Progress is never stored — it's counted live off the real animal records, so
-   it can't drift out of date the way a manually-updated number would. */
-function targetProgress(t){
-  const tg=t&&t.target; if(!tg||!tg.cohortId)return null;
-  const co=(DB.cohorts||[]).find(c=>c.id===tg.cohortId); if(!co)return null;
-  let animals=DB.animals.filter(a=>a.cohort===co.name);
-  if(tg.procedureTemplateId) animals=animals.filter(a=>a.surgeryDetail&&a.surgeryDetail.appliedTemplateId===tg.procedureTemplateId);
-  const want=+tg.count||0;
-  return {cohort:co, have:animals.length, want, tplId:tg.procedureTemplateId||"",
-          tpl:(DB.config.procedureLib||[]).find(p=>p.id===tg.procedureTemplateId)||null};
-}
-function targetFieldHTML(t){
-  const tg=t.target||{}, tpls=DB.config.procedureLib||[], cohorts=DB.cohorts||[];
-  if(!cohorts.length) return "";
-  const p=targetProgress(t);
-  return `<div class="fld"><label>Animal target <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">optional — counted live from real animal records</span></label>
-    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-      <select id="e_tgt_cohort" style="flex:0 0 auto;min-width:120px"><option value="">— no target —</option>${cohorts.map(c=>`<option value="${c.id}" ${tg.cohortId===c.id?"selected":""}>${esc(c.name)}</option>`).join("")}</select>
-      <input id="e_tgt_count" type="number" min="0" value="${tg.count!=null?tg.count:""}" placeholder="how many" style="flex:0 0 auto;width:100px">
-      ${tpls.length?`<select id="e_tgt_tpl" style="flex:1;min-width:150px"><option value="">any procedure</option>${tpls.map(pl=>`<option value="${pl.id}" ${tg.procedureTemplateId===pl.id?"selected":""}>${esc(pl.name)}</option>`).join("")}</select>`:""}
-    </div>
-    ${p?`<div style="display:flex;gap:8px;align-items:center;margin-top:7px;flex-wrap:wrap">
-      <span class="tgt-count ${p.have>=p.want&&p.want>0?"met":""}">${p.have}/${p.want||"—"} animals</span>
-      <button type="button" class="btn ghost" id="e_tgt_add" style="font-size:11.5px;padding:4px 9px">＋ add animal toward this</button>
-    </div>`:""}
-  </div>`;
-}
-function subtaskListHTML(t){
-  const kids=childrenOf(t.id), ins=parentsOf(t.id);
-  return `${ins.length?`<div class="fld"><label>Fed by</label><div class="subtask-list">${ins.map(k=>`
-      <div class="subtask-row"><span class="e_sub_open ${k.state==="done"?"done":""}" data-id="${k.id}">↳ ${esc(k.title||"(untitled)")}</span></div>`).join("")}</div></div>`:""}
-    <div class="fld"><label>Leads to${kids.length?` (${kids.filter(k=>k.state==="done").length}/${kids.length} done)`:""}</label>
-    ${kids.length?`<div class="subtask-list">${kids.map(k=>`
-      <label class="subtask-row">
-        <input type="checkbox" class="e_sub_chk" data-id="${k.id}" ${k.state==="done"?"checked":""}>
-        <span class="e_sub_open ${k.state==="done"?"done":""}" data-id="${k.id}">${esc(k.title||"(untitled)")}</span>
-      </label>`).join("")}</div>`:`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">nothing yet</div>`}
-    <button type="button" class="btn ghost" id="e_addsub" style="font-size:11.5px;padding:4px 9px;margin-top:7px">＋ Node this leads to</button></div>`;
+  if(currentView==="outline")renderOutline();
 }
 function wireDetail(t){
-  const save=p=>{ Object.assign(t,p); persist(); document.getElementById("dTitleView").textContent=t.title||"New task"; render(); };
-  document.getElementById("e_title").addEventListener("input",e=>{ const v=e.target.value; Object.assign(t,{title:v,autoTitle:false}); persist(); document.getElementById("dTitleView").textContent=v||"New task"; render(); });
+  const save=p=>{ Object.assign(t,p); persist(); document.getElementById("dTitleView").textContent=t.title||"New task"; if(currentView!=="arbor")render(); };
+  document.getElementById("e_title").addEventListener("input",e=>{ const v=e.target.value; Object.assign(t,{title:v,autoTitle:false}); persist(); document.getElementById("dTitleView").textContent=v||"New task"; if(currentView!=="arbor")render(); });
   bindDateButton(document.getElementById("e_due"), ()=>t.deadline||"", v=>save({deadline:v||null}));
   const edEl=document.getElementById("e_endDate"); if(edEl) bindDateButton(edEl, ()=>t.endDate||"", v=>save({endDate:v||null}));
   document.getElementById("e_notes").addEventListener("input",e=>save({notes:e.target.value}));
-  const lrn=document.getElementById("e_learned");
-  if(lrn) lrn.addEventListener("input",e=>save({learned:e.target.value}));
-  document.getElementById("e_state").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
-    save({state:b.dataset.s, status:{planned:"todo",running:"active",done:"done"}[b.dataset.s]});persist();openDetail(t.id);});
-  // ── animal target: cohort + count + optional procedure template
-  const tgtCo=document.getElementById("e_tgt_cohort");
-  if(tgtCo){
-    const readTarget=()=>{
-      const cohortId=tgtCo.value;
-      if(!cohortId){ save({target:null}); openDetail(t.id); return; }
-      const cntEl=document.getElementById("e_tgt_count"), tplEl=document.getElementById("e_tgt_tpl");
-      save({target:{cohortId, count:+((cntEl&&cntEl.value)||0)||0, procedureTemplateId:(tplEl&&tplEl.value)||""}});
-      openDetail(t.id);
-    };
-    tgtCo.addEventListener("change",readTarget);
-    const cntEl=document.getElementById("e_tgt_count"); if(cntEl) cntEl.addEventListener("change",readTarget);
-    const tplEl=document.getElementById("e_tgt_tpl"); if(tplEl) tplEl.addEventListener("change",readTarget);
-    const addBtn=document.getElementById("e_tgt_add");
-    // quick-jump: open a new-animal form already carrying this target's cohort
-    // and (if set) the procedure template's own headpost/window/injections, so
-    // hitting a target is one click rather than re-entering it all by hand.
-    if(addBtn) addBtn.addEventListener("click",()=>{
-      const p=targetProgress(t); if(!p)return;
-      const draft={cohort:p.cohort.name, alive:true, termination:"alive", tasks:[]};
-      if(p.tpl) draft.surgeryDetail={headpost:p.tpl.headpost,window:p.tpl.window,winAp:p.tpl.winAp,winMl:p.tpl.winMl,
-        winDiam:p.tpl.winDiam,appliedTemplateId:p.tpl.id,injections:(p.tpl.injections||[]).map(x=>({...x}))};
-      closeDetail(); switchTo("animals"); animalModal(null,draft);
-    });
-  }
-  // ── downstream nodes (the same records — "leads to" is just a link)
-  const addSub=document.getElementById("e_addsub");
-  if(addSub) addSub.addEventListener("click",()=>{
-    const n=newProjectNode(t.domainId);
-    placeNode(n,t.id);
-    t.links=[...new Set([...(t.links||[]),n.id])];
-    DB.tasks.push(n); pjSelected=n.id; persist(); render(); openDetail(n.id);
-    requestAnimationFrame(()=>{ const tf=document.getElementById("e_title"); if(tf){tf.select();tf.focus();} });
-  });
-  document.querySelectorAll("#dBody .e_sub_chk").forEach(cb=>cb.addEventListener("change",()=>{
-    const k=taskById(cb.dataset.id); if(!k)return;
-    k.state=cb.checked?"done":"planned"; k.status=cb.checked?"done":"todo";
-    persist(); render(); openDetail(t.id);
-  }));
-  document.querySelectorAll("#dBody .e_sub_open").forEach(sp=>sp.addEventListener("click",()=>openDetail(sp.dataset.id)));
-  document.getElementById("e_del").addEventListener("click",()=>{ if(!confirm("Delete this node?"))return;
-    // bridge across the gap: whatever fed this node now feeds what it led to,
-    // so deleting a step doesn't silently sever the chain through it
-    const ins=parentsOf(t.id), outs=(t.links||[]).slice();
-    ins.forEach(pn=>{
-      pn.links=(pn.links||[]).filter(x=>x!==t.id);
-      outs.forEach(o=>{ if(o!==pn.id&&!pn.links.includes(o)) pn.links.push(o); });
-    });
-    DB.tasks.forEach(x=>{ x.deps=(x.deps||[]).filter(d=>d!==t.id); x.links=(x.links||[]).filter(d=>d!==t.id); });
-    DB.tasks=DB.tasks.filter(x=>x.id!==t.id);
-    if(pjSelected===t.id)pjSelected=null;
-    persist(); closeDetail(); render(); toast("Node deleted"); });
+  document.getElementById("e_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;save({status:b.dataset.s});persist();openDetail(t.id);});
+  document.getElementById("e_del").addEventListener("click",()=>{ if(!confirm("Delete this task?"))return;
+    childrenOf(t.id).forEach(k=>k.parentId=t.parentId);
+    DB.tasks.forEach(x=>x.deps=(x.deps||[]).filter(d=>d!==t.id));
+    DB.tasks=DB.tasks.filter(x=>x.id!==t.id); persist(); closeDetail(); render(); toast("Task deleted"); });
 }
 function closeDetail(){
-  if(selectedId){ const t=taskById(selectedId);
-    if(t&&!t.title){ // discard a never-named node, and any link pointing at it
-      DB.tasks.forEach(x=>{ x.links=(x.links||[]).filter(d=>d!==selectedId); });
-      DB.tasks=DB.tasks.filter(x=>x.id!==selectedId);
-      if(pjSelected===selectedId)pjSelected=null;
-      persist(); } }
+  if(selectedId){ const t=taskById(selectedId); if(t&&!t.title){ DB.tasks=DB.tasks.filter(x=>x.id!==selectedId); persist(); } }
   document.getElementById("detail").classList.remove("open"); selectedId=null;
-  render();
+  // only re-render the active view — full render() was causing outline toolbar to misplace
+  if(currentView==="outline") renderOutline();
+  else if(currentView==="timeline") renderTimeline();
+  else if(currentView==="animals") renderAnimals();
+  else if(currentView==="arbor") renderArbor();
+  else render();
 }
 document.getElementById("dClose").addEventListener("click",closeDetail);
 function isDescendant(c,of){ let n=taskById(c); while(n&&n.parentId){ if(n.parentId===of)return true; n=taskById(n.parentId);} return false; }
@@ -4900,9 +4549,9 @@ function createAndOpenTask(opts){
   opts=opts||{};
   const domId=opts.domainId||(DB.domains.find(d=>d.active)||DB.domains[0]||{}).id||"";
   const nt={id:uid("t_"),title:"",domainId:domId,parentId:opts.parentId||null,
-    status:opts.status||"todo",priority:2,deadline:opts.deadline||null,endDate:opts.endDate||null,
+    status:"todo",priority:2,deadline:opts.deadline||null,endDate:opts.endDate||null,
     duration:null,procedureType:null,linkedAnimals:[],autoTitle:false,
-    materials:[],notes:"",deps:[],target:null,created:Date.now()};
+    materials:[],notes:"",deps:[],created:Date.now()};
   DB.tasks.push(nt); persist(); render();
   // open the detail panel on the new task
   openDetail(nt.id);
@@ -5033,86 +4682,50 @@ function openTimelineCreateModal(prefillDeadline){
 }
 function paletteHTML(sel){ return DOMAIN_PALETTE.map(c=>`<span class="tag" data-c="${c}" style="cursor:pointer;border-color:${c};${c===sel?`box-shadow:0 0 0 2px ${c}`:""}"><span style="width:12px;height:12px;border-radius:3px;background:${c};display:inline-block"></span></span>`).join(""); }
 
-// Removing a neuron has to remove the axons other neurons project onto it,
-// or the map keeps drawing connections to something that no longer exists.
-function dropProject(id){
-  DB.domains=DB.domains.filter(d=>d.id!==id);
-  DB.domains.forEach(d=>{ d.links=(d.links||[]).filter(x=>x!==id); });
-  if(pjSelected===id)pjSelected=null;
-  if(pjConnectFrom===id)pjConnectFrom=null;
-}
-/* Project editor. `DB.domains` is still the underlying store (renaming the
-   field would break every existing save); only the user-facing wording is
-   "project". Passing null creates one, same shape as cohortModal(null). */
-function editProjectModal(domId){
-  const creating=!domId;
-  const dom=creating
-    ? {id:uid("dm_"),name:"",color:DOMAIN_PALETTE[(DB.domains||[]).length%DOMAIN_PALETTE.length],
-       status:"planning",description:"",targetDate:null,cohortIds:[]}
-    : domById(domId);
-  if(!dom)return;
-  const nTasks=DB.tasks.filter(t=>t.domainId===dom.id).length;
-  const nReads=DB.readings.filter(r=>r.domainId===dom.id).length;
-  const others=DB.domains.filter(d=>d.id!==dom.id);
-  modal(`<h3>${creating?"New":"Edit"} project</h3>
-    <div class="fld"><label>Name</label><input id="d_name" value="${escAttr(dom.name)}" placeholder="e.g. M1→SNr projection mapping" autofocus></div>
-    <div class="fld"><label>Goal / description</label><textarea id="d_desc" placeholder="what this project is for">${esc(dom.description||"")}</textarea></div>
-    <div class="drow">
-      <div class="fld" style="flex:1"><label>Status</label>
-        <div class="seg" id="d_status">${PROJECT_STATUSES.map(([k,l])=>`<button data-s="${k}" class="${(dom.status||"planning")===k?"on":""}">${l}</button>`).join("")}</div></div>
-      <div class="fld" style="width:190px"><label>Target date</label>
-        <button type="button" id="d_target" class="datebtn datebtn-sm ${dom.targetDate?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${dom.targetDate?fmtWhenFull(dom.targetDate):"set date"}</button></div>
-    </div>
+function editDomainModal(domId){
+  const dom=domById(domId); if(!dom)return;
+  const nTasks=DB.tasks.filter(t=>t.domainId===domId).length;
+  const nReads=DB.readings.filter(r=>r.domainId===domId).length;
+  const others=DB.domains.filter(d=>d.id!==domId);
+  modal(`<h3>Edit domain</h3>
+    <div class="fld"><label>Name</label><input id="d_name" value="${escAttr(dom.name)}" autofocus></div>
     <div class="fld"><label>Colour</label><div class="taglist" id="d_pal">${paletteHTML(dom.color)}</div></div>
-    <div class="fld"><label>Cohorts <span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">procedure progress is counted live from these animals</span></label>
-      ${(DB.cohorts||[]).length?`<div class="taglist" id="d_cohorts">${(DB.cohorts||[]).map(c=>`
-        <label class="tag" style="cursor:pointer;gap:6px;${(dom.cohortIds||[]).includes(c.id)?`box-shadow:0 0 0 2px ${c.color}`:""}">
-          <input type="checkbox" class="d_co" data-id="${c.id}" ${(dom.cohortIds||[]).includes(c.id)?"checked":""} style="width:auto;margin:0">
-          <span style="width:9px;height:9px;border-radius:50%;background:${c.color};display:inline-block"></span>${esc(c.name)}</label>`).join("")}</div>`
-        :`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">no cohorts yet — create one in the Animals tab</div>`}</div>
-    <div class="drow" style="margin-top:18px;align-items:center">
-      ${creating?"":`<button class="btn danger" id="d_del">Delete project</button>
-      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${nTasks} task${nTasks!==1?"s":""} · ${nReads} reading${nReads!==1?"s":""} attached</div>`}
+    <div class="fld"><label>Status</label>
+      <div class="seg" id="d_active">
+        <button data-a="1" class="${dom.active?"on":""}" style="${dom.active?"color:var(--mruby)":""}">Active focus</button>
+        <button data-a="0" class="${!dom.active?"on":""}">Background</button>
+      </div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:6px">Active domains glow in the Arbor and carry the "active" flag. You can mark one or several.</div>
     </div>
-    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="d_save">${creating?"Create":"Done"}</button></div>`,{wide:true});
-  let chosen=dom.color, vTarget=dom.targetDate||"";
+    <div class="drow" style="margin-top:18px;align-items:center">
+      <button class="btn danger" id="d_del">Delete domain</button>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${nTasks} task${nTasks!==1?"s":""} · ${nReads} reading${nReads!==1?"s":""} attached</div>
+    </div>
+    <div class="actions"><button class="btn accent" id="d_save">Done</button></div>`);
+  let chosen=dom.color;
   document.getElementById("d_pal").addEventListener("click",e=>{const t=e.target.closest(".tag");if(!t)return;chosen=t.dataset.c;
     document.querySelectorAll("#d_pal .tag").forEach(x=>x.style.boxShadow="none");t.style.boxShadow=`0 0 0 2px ${chosen}`;});
-  let chosenStatus=dom.status||"planning";
-  document.getElementById("d_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
-    chosenStatus=b.dataset.s; document.querySelectorAll("#d_status button").forEach(x=>x.classList.toggle("on",x===b));});
-  const tBtn=document.getElementById("d_target");
-  tBtn.onclick=()=>openCalendar(tBtn, vTarget, v=>{ vTarget=v||"";
-    tBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${vTarget?fmtWhenFull(vTarget):"set date"}`;
-    tBtn.classList.toggle("datebtn-empty",!vTarget); }, undefined, true);
-  document.getElementById("d_save").addEventListener("click",()=>{
-    const name=document.getElementById("d_name").value.trim();
-    if(!name){toast("Name can't be empty");return;}
-    Object.assign(dom,{name, color:chosen, status:chosenStatus, targetDate:vTarget||null,
-      description:document.getElementById("d_desc").value.trim(),
-      cohortIds:[...document.querySelectorAll(".d_co")].filter(c=>c.checked).map(c=>c.dataset.id)});
-    if(creating){ DB.domains.push(dom); pjSelected=dom.id; }
-    persist(); render(); closeModal(); toast(creating?"Project created":"Project saved");
-  });
-  const delBtn=document.getElementById("d_del");
-  if(delBtn) delBtn.addEventListener("click",()=>{
+  document.getElementById("d_active").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+    dom.active=b.dataset.a==="1"; persist();
+    document.querySelectorAll("#d_active button").forEach(x=>{x.classList.toggle("on",x===b);x.style.color=(x===b&&dom.active)?"var(--mruby)":"";});});
+  document.getElementById("d_save").addEventListener("click",()=>{ const name=document.getElementById("d_name").value.trim();
+    if(!name){toast("Name can't be empty");return;} dom.name=name; dom.color=chosen; persist(); render(); closeModal(); });
+  document.getElementById("d_del").addEventListener("click",()=>{
+    if(DB.domains.length<=1){ toast("Can't delete the last domain"); return; }
     if(nTasks||nReads){
-      if(!others.length){ toast("Nothing to reassign its tasks to — delete or move them first"); return; }
       const opts=others.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("");
       modal(`<h3>Delete "${esc(dom.name)}"</h3>
-        <p style="color:var(--ink-dim);font-size:13px;line-height:1.5;margin-top:0">It has ${nTasks} task${nTasks!==1?"s":""} and ${nReads} reading${nReads!==1?"s":""}. Move them to another project, then delete.</p>
+        <p style="color:var(--ink-dim);font-size:13px;line-height:1.5;margin-top:0">It has ${nTasks} task${nTasks!==1?"s":""} and ${nReads} reading${nReads!==1?"s":""}. Move them to another domain, then delete.</p>
         <div class="fld"><label>Reassign to</label><select id="d_reassign">${opts}</select></div>
-        <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn danger" id="d_delconfirm">Move &amp; delete</button></div>`);
+        <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn danger" id="d_delconfirm">Move & delete</button></div>`);
       document.getElementById("d_delconfirm").addEventListener("click",()=>{
         const to=document.getElementById("d_reassign").value;
-        DB.tasks.forEach(t=>{ if(t.domainId===dom.id)t.domainId=to; });
-        DB.readings.forEach(r=>{ if(r.domainId===dom.id)r.domainId=to; });
-        dropProject(dom.id);
-        persist(); render(); closeModal(); toast("Project deleted, items reassigned");
+        DB.tasks.forEach(t=>{ if(t.domainId===domId)t.domainId=to; });
+        DB.readings.forEach(r=>{ if(r.domainId===domId)r.domainId=to; });
+        DB.domains=DB.domains.filter(d=>d.id!==domId); persist(); render(); closeModal(); toast("Domain deleted, items reassigned");
       });
     } else if(confirm(`Delete "${dom.name}"?`)){
-      dropProject(dom.id);
-      persist(); render(); closeModal(); toast("Project deleted");
+      DB.domains=DB.domains.filter(d=>d.id!==domId); persist(); render(); closeModal(); toast("Domain deleted");
     }
   });
 }
@@ -5368,9 +4981,7 @@ function exportFullDatabaseExcel(){
     {name:"Inventory",rows:invRows},
   ]);
 }
-// the Projects timeline lays bars out in px against a measured container
-// width, so it has to be recomputed when that width changes
-window.addEventListener("resize",()=>{ if(currentView==="projects")renderProjects(); });
+window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); });
 (async function(){
   // top-level try/catch: an exception anywhere in boot (loadDB/seed/migrate/render)
   // used to be an unhandled promise rejection that silently killed the entire boot
