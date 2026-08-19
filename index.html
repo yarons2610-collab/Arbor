@@ -498,6 +498,7 @@
       <div class="arbor-tools">
         <button id="ar_add" title="A new soma — one paper, pre-seeded with its dendrites">＋ Soma</button>
         <button id="ar_fit" class="hidden" title="Zoom back out to the whole network">⤢ Whole network</button>
+        <button id="ar_tidy" title="Release every node you have placed and lay the network out afresh">✧ Tidy</button>
       </div>
 
       <div class="hint">click a soma to open it · drag a dendrite onto another to re-branch</div>
@@ -507,6 +508,7 @@
     <div class="view hidden" id="materials">
       <div class="mat-subtabs" id="matSubTabs">
         <button class="mat-stab on" data-ms="viruses">Viruses</button>
+        <button class="mat-stab" data-ms="inventory">Inventory</button>
         <button class="mat-stab" data-ms="sites">Injection Sites</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
         <button class="mat-stab" data-ms="diarytypes">Entry Types</button>
@@ -1035,6 +1037,9 @@ function migrate(){                       // backfill fields added in later vers
   // and not on the soma. Any older soma-to-soma link lands on the receiver's
   // References dendrite if it has one, so nothing is silently dropped.
   DB.tasks.forEach(t=>{ if(!Array.isArray(t.refs)) t.refs=[]; });
+  // a node you have placed by hand keeps its place
+  DB.domains.forEach(d=>{ if(d.x===undefined)d.x=null; if(d.y===undefined)d.y=null; });
+  DB.tasks.forEach(t=>{ if(t.x===undefined)t.x=null; if(t.y===undefined)t.y=null; });
   if(!DB._axonsOnDendrites){
     DB.domains.forEach(d=>{
       (d.links||[]).forEach(other=>{
@@ -1573,6 +1578,14 @@ function arSetup(){
   arSvg=svg;
   document.getElementById("ar_add").onclick=addSoma;
   document.getElementById("ar_fit").onclick=clearFocus;
+  const tidy=document.getElementById("ar_tidy");
+  tidy.classList.toggle("hidden",arMode!=="network");
+  tidy.onclick=()=>{
+    if(!confirm("Release every node you've placed and lay the network out from scratch?"))return;
+    DB.domains.forEach(d=>{d.x=null;d.y=null;});
+    DB.tasks.forEach(t=>{t.x=null;t.y=null;});
+    persist(); renderArbor(); toast("Network laid out afresh");
+  };
   document.getElementById("ar_fit").classList.toggle("hidden",arMode!=="cell");
   const defs=svg.append("defs");
   const f=defs.append("filter").attr("id","glow").attr("x","-60%").attr("y","-60%").attr("width","220%").attr("height","220%");
@@ -1589,8 +1602,12 @@ function renderNetwork(){
   const svg=arSetup();
   const el=document.getElementById("arbor"),W=el.clientWidth,H=el.clientHeight;
   const nodes=[],branches=[];
-  DB.domains.forEach(d=>nodes.push({id:d.id,type:"soma",name:d.name,color:d.color}));
-  DB.tasks.forEach(t=>nodes.push({id:t.id,type:"dendrite",t}));
+  // Seed from the saved position and pin it: a node that has been placed stays
+  // placed, through re-renders and reloads. Anything never dragged is left free
+  // for the layout to arrange.
+  const seed=(n,rec)=>{ if(rec.x!=null&&rec.y!=null){ n.x=rec.x; n.y=rec.y; n.fx=rec.x; n.fy=rec.y; } return n; };
+  DB.domains.forEach(d=>nodes.push(seed({id:d.id,type:"soma",name:d.name,color:d.color,rec:d},d)));
+  DB.tasks.forEach(t=>nodes.push(seed({id:t.id,type:"dendrite",t,rec:t},t)));
   const byId=Object.fromEntries(nodes.map(n=>[n.id,n]));
   DB.tasks.forEach(t=>{
     const par=parentDend(t), tgt=par?par.id:t.domainId;
@@ -1614,7 +1631,10 @@ function renderNetwork(){
     .call(d3.drag()
       .on("start",(ev,d)=>{if(!ev.active)arSim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
       .on("drag",(ev,d)=>{d.fx=ev.x;d.fy=ev.y;})
-      .on("end",(ev,d)=>{if(!ev.active)arSim.alphaTarget(0);d.fx=null;d.fy=null;}))
+      .on("end",(ev,d)=>{ if(!ev.active)arSim.alphaTarget(0);
+        // stay put — releasing used to null fx/fy, which handed the node
+        // straight back to the simulation
+        d.fx=d.x; d.fy=d.y; d.rec.x=d.x; d.rec.y=d.y; persist(); }))
     .on("click",(ev,d)=>{ ev.stopPropagation();
       focusCell(d.type==="soma"?d.id:d.t.domainId);
       if(d.type==="dendrite")openDetail(d.id); });
@@ -1636,9 +1656,15 @@ function renderNetwork(){
   arSim=d3.forceSimulation(nodes)
     .force("branch",d3.forceLink(branches).id(d=>d.id).distance(64).strength(.9))
     .force("axon",d3.forceLink(axons).id(d=>d.id).distance(320).strength(.04))
-    .force("charge",d3.forceManyBody().strength(-320))
+    // Charge with no distanceMax repels every node from every other at any
+    // range, and forceCenter only recentres the centroid — it exerts nothing on
+    // individual nodes. Unlinked somata therefore pushed each other off-screen
+    // forever. Cap the repulsion's reach and add a weak pull toward the middle.
+    .force("charge",d3.forceManyBody().strength(-260).distanceMax(340))
     .force("collide",d3.forceCollide().radius(d=>d.type==="soma"?52:rOf(d)+13))
     .force("center",d3.forceCenter(W/2,H/2))
+    .force("x",d3.forceX(W/2).strength(.035))
+    .force("y",d3.forceY(H/2).strength(.035))
     .on("tick",()=>{
       branchSel.attr("d",l=>`M${l.source.x},${l.source.y} L ${l.target.x},${l.target.y}`);
       axonSel.attr("d",l=>{const mx=(l.source.x+l.target.x)/2,my=(l.source.y+l.target.y)/2-60;
@@ -4741,7 +4767,7 @@ function openDetail(id){
 // without anything being copied. The label is looked up, never stored.
 function linkLabel(l){
   if(l.kind==="animal"){ const a=DB.animals.find(x=>x.id===l.id); return a?`🐁 ${a.name}`:"🐁 (deleted animal)"; }
-  if(l.kind==="material") return `🧪 ${l.id}`;
+  if(l.kind==="material") return `${{virus:"🦠",site:"📍"}[l.cat]||"🧪"} ${l.id}`;
   if(l.kind==="procedure"){ const a=DB.animals.find(x=>x.id===l.animalId);
     const def=diaryTypeDef(l.type); return `${def.icon} ${a?a.name:"?"} — ${def.label}${l.date?" · "+l.date:""}`; }
   return `🔗 ${l.url||""}`;
@@ -4760,10 +4786,11 @@ function spineWhen(sp){
 function openLinked(l){
   if(l.kind==="animal"){ closeDetail(); switchTo("animals"); animalModal(l.id); return; }
   if(l.kind==="material"){ closeDetail(); switchTo("materials");
-    // set the sub-tab directly — clicking the button races the tab's own render
-    matSubTab="inventory";
-    document.querySelectorAll("#matSubTabs button").forEach(b=>b.classList.toggle("on",b.dataset.ms==="inventory"));
-    document.querySelectorAll(".mat-subview").forEach(v=>v.classList.toggle("hidden",v.id!=="ms-inventory"));
+    // land on the library the material actually lives in. Set the sub-tab
+    // directly — clicking the button races the tab's own render.
+    matSubTab={virus:"viruses",site:"sites"}[l.cat]||"inventory";
+    document.querySelectorAll("#matSubTabs button").forEach(b=>b.classList.toggle("on",b.dataset.ms===matSubTab));
+    document.querySelectorAll(".mat-subview").forEach(v=>v.classList.toggle("hidden",v.id!=="ms-"+matSubTab));
     renderMaterials(); return; }
   if(l.kind==="procedure"){ const a=DB.animals.find(x=>x.id===l.animalId); if(!a)return;
     closeDetail(); animalSearch=a.name; DB.config.animalFilters.search=a.name; persist(); switchTo("animals"); return; }
@@ -4771,7 +4798,12 @@ function openLinked(l){
 }
 function addLinkModal(sp,after){
   const animals=[...DB.animals].sort((x,y)=>x.name.localeCompare(y.name));
-  const mats=Object.keys(DB.inventory||{}).sort();
+  // materials come from three places, not one
+  const mats=[
+    {cat:"virus", label:"Viruses",         items:(activeViruses()||[]).map(v=>v.name)},
+    {cat:"site",  label:"Injection sites", items:(DB.config.siteLib||[]).map(x=>x.name)},
+    {cat:"inv",   label:"Inventory",       items:Object.keys(DB.inventory||{})}
+  ].filter(g=>g.items.length);
   const procs=[];
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>procs.push({animalId:a.id,name:a.name,type:e.type,date:e.date})));
   procs.sort((x,y)=>(y.date||"").localeCompare(x.date||""));
@@ -4779,7 +4811,8 @@ function addLinkModal(sp,after){
     <div class="fld"><label>Animal</label><select id="lk_animal"><option value="">—</option>
       ${animals.map(a=>`<option value="${a.id}">${esc(a.name)} · ${esc(a.cohort||"")}</option>`).join("")}</select></div>
     <div class="fld"><label>Material</label><select id="lk_mat"><option value="">—</option>
-      ${mats.map(m=>`<option value="${escAttr(m)}">${esc(m)}</option>`).join("")}</select></div>
+      ${mats.map(g=>`<optgroup label="${escAttr(g.label)}">${g.items.sort().map(n=>
+        `<option value="${escAttr(g.cat+"::"+n)}">${esc(n)}</option>`).join("")}</optgroup>`).join("")}</select></div>
     <div class="fld"><label>Procedure</label><select id="lk_proc"><option value="">—</option>
       ${procs.slice(0,300).map((x,i)=>`<option value="${i}">${esc(x.name)} — ${esc(diaryTypeDef(x.type).label)} · ${esc(x.date||"")}</option>`).join("")}</select></div>
     <div class="fld"><label>External</label><input id="lk_url" placeholder="URL, DOI, or a path on the lab drive"></div>
@@ -4790,7 +4823,7 @@ function addLinkModal(sp,after){
           pv=document.getElementById("lk_proc").value, uv=document.getElementById("lk_url").value.trim();
     sp.links=sp.links||[];
     if(av)sp.links.push({kind:"animal",id:av});
-    if(mv)sp.links.push({kind:"material",id:mv});
+    if(mv){ const i=mv.indexOf("::"); sp.links.push({kind:"material",cat:mv.slice(0,i),id:mv.slice(i+2)}); }
     if(pv!==""){ const x=procs[+pv]; sp.links.push({kind:"procedure",animalId:x.animalId,type:x.type,date:x.date}); }
     if(uv)sp.links.push({kind:"url",url:uv});
     persist(); closeModal(); after();
