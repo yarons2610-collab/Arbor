@@ -195,6 +195,14 @@
   .spine-ref{width:100%;margin-top:4px;font-family:var(--mono);font-size:10.5px;background:transparent;border:1px solid transparent;border-radius:6px;padding:2px 5px;color:var(--ink-faint)}
   .spine-ref:focus{border-color:var(--line2);background:var(--panel2);color:var(--ink);outline:none}
   .sharerow{display:flex;align-items:center;gap:7px;font-size:12.5px;padding:3px 0;cursor:pointer}
+  .linklist{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;align-items:center}
+  .linkchip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line2);background:var(--panel2);border-radius:20px;padding:2px 4px 2px 9px;font-size:11px;max-width:100%}
+  .lk-open{cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}
+  .lk-open:hover{color:var(--ink);text-decoration:underline}
+  .lk-del{border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:10px;padding:0 3px}
+  .lk-del:hover{color:var(--overdue)}
+  .lk-add{border:1px dashed var(--line2);background:transparent;color:var(--ink-faint);border-radius:20px;padding:2px 10px;font-size:11px;cursor:pointer}
+  .lk-add:hover{color:var(--ink);border-color:var(--ink-faint)}
   .spine-name{flex:1;min-width:0;font-size:12.5px;background:transparent;border:1px solid transparent;border-radius:6px;padding:3px 5px;color:var(--ink)}
   .spine-name:focus{border-color:var(--line2);background:var(--panel2);outline:none}
   .spine-when{flex:0 0 auto;font-size:11px!important;padding:3px 8px!important}
@@ -241,7 +249,15 @@
   .cal-outer{display:flex;flex-direction:column;height:100%;overflow:hidden;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
   .cal-allday-zone{flex-shrink:0;border-bottom:2px solid var(--line2);background:var(--bg)}
   .cal-grid-wrap{flex:1;overflow:auto;padding:0}
-  .week-grid{display:grid;grid-template-columns:52px repeat(7,minmax(0,1fr));min-width:640px}
+  .week-grid{display:grid;grid-template-columns:52px repeat(var(--cal-cols,7),minmax(0,1fr));min-width:min(640px,100%)}
+  .cal-mode{margin-left:auto}
+  .cal-mode button{text-transform:none;font-size:11.5px;padding:3px 10px}
+  .month-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+  .month-cell{background:var(--panel);min-height:96px;padding:4px 5px;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+  .month-cell.out{opacity:.38}
+  .month-cell.today{box-shadow:inset 0 0 0 2px var(--amber)}
+  .mc-num{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
+  .month-cell.today .mc-num{color:var(--amber)}
   /* day headers */
   .cal-day-hdr{padding:6px 4px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--ink-dim);border-bottom:1px solid var(--line);border-right:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
   .cal-day-hdr.today{color:var(--gcamp)}
@@ -435,7 +451,8 @@
     /* timeline: shrink to fit the screen width instead of scrolling sideways —
        a narrower gutter plus minmax(0,1fr) day columns let all 7 days compress
        to fit any phone width; vertical scroll through the hours is unaffected */
-    .week-grid{min-width:0;width:100%;grid-template-columns:34px repeat(7,minmax(0,1fr))}
+    .week-grid{min-width:0;width:100%;grid-template-columns:34px repeat(var(--cal-cols,7),minmax(0,1fr))}
+    .month-cell{min-height:64px}
     .cal-grid-wrap{overflow-x:hidden}
     .cal-hour-gutter{font-size:8px;padding:0 2px}
     .cal-day-hdr{padding:4px 1px}
@@ -479,11 +496,11 @@
     <div class="view hidden" id="arbor">
       <svg id="svg"></svg>
       <div class="arbor-tools">
-        <button id="ar_add" title="Start a new paper, pre-seeded with its parts">＋ Paper</button>
+        <button id="ar_add" title="A new soma — one paper, pre-seeded with its dendrites">＋ Soma</button>
         <button id="ar_fit" class="hidden" title="Zoom back out to the whole network">⤢ Whole network</button>
       </div>
 
-      <div class="hint">click a paper to open it · drag a part onto another to re-branch</div>
+      <div class="hint">click a soma to open it · drag a dendrite onto another to re-branch</div>
     </div>
     <div class="view hidden wrap" id="outline"></div>
     <div class="view hidden wrap" id="timeline"></div>
@@ -1013,6 +1030,23 @@ function migrate(){                       // backfill fields added in later vers
     if(d.abstract==null) d.abstract=d.outline||"";
     if(!Array.isArray(d.links)) d.links=[];
   });
+  // An axon projects from a soma onto one dendrite of another: the receiving
+  // dendrite is where the reference actually sits, which is why it lives here
+  // and not on the soma. Any older soma-to-soma link lands on the receiver's
+  // References dendrite if it has one, so nothing is silently dropped.
+  DB.tasks.forEach(t=>{ if(!Array.isArray(t.refs)) t.refs=[]; });
+  if(!DB._axonsOnDendrites){
+    DB.domains.forEach(d=>{
+      (d.links||[]).forEach(other=>{
+        const land=DB.tasks.find(t=>t.domainId===d.id&&/^referen/i.test(t.title||""))
+                 ||DB.tasks.find(t=>t.domainId===d.id);
+        if(land&&!land.refs.includes(other)) land.refs.push(other);
+      });
+      d.links=[];
+    });
+    DB._axonsOnDendrites=true;
+  }
+  DB.tasks.forEach(t=>{ t.refs=t.refs.filter(id=>domById(id)&&id!==t.domainId); });
   // A dendrite is a part of the paper, so it has one body of text rather than a
   // notes field and a findings field. Fold any existing findings into the text
   // instead of leaving them stranded in a record nothing renders.
@@ -1040,7 +1074,11 @@ function migrate(){                       // backfill fields added in later vers
     DB._spinesMigrated=true;
   }
   // a spine whose dendrite was deleted has nowhere to hang
-  DB.spines.forEach(sp=>{ if(sp.ref==null) sp.ref=""; });   // link/citation for the datum
+  // A datum is what it points at. Fold the old free-text ref into a link, and
+  // drop the date it used to carry — the record it points at holds the when.
+  DB.spines.forEach(sp=>{
+    if(!Array.isArray(sp.links)) sp.links = sp.ref ? [{kind:"url",url:sp.ref}] : [];
+  });
   DB.spines=DB.spines.filter(sp=>DB.tasks.some(t=>t.id===sp.dendriteId));
 }
 const uid=p=>p+Math.random().toString(36).slice(2,8);
@@ -1418,9 +1456,7 @@ function addDays(dateStr,n){ const d=new Date(dateStr+"T00:00:00"); d.setDate(d.
 function upcomingNotifications(){
   const today=todayDateStr();
   const taskHorizon=addDays(today,NOTIFY_TASK_LOOKAHEAD_DAYS);
-  const tasks=DB.spines.filter(t=>t.deadline&&t.status!=="done"&&t.deadline.slice(0,10)<=taskHorizon&&taskById(t.dendriteId))
-    .map(t=>({t,overdue:dueClass(t.deadline,t.status,t.endDate)==="overdue"}))
-    .sort((x,y)=>x.t.deadline.localeCompare(y.t.deadline));
+  const tasks=[];   // nothing on the paper side is dated any more
   const diaryHorizon=addDays(today,NOTIFY_DIARY_LOOKAHEAD_DAYS);
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(d=>d.timeline).map(d=>d.key));
   const diaryItems=[];
@@ -1480,6 +1516,7 @@ document.getElementById("notifyNudge").addEventListener("click",openNotification
 let arSim=null, arZoomG=null, arZoom=null, arSvg=null, arNodeSel=null, arLinkSel=null;
 let arFocus=null;                         // soma whose cell is open, or null
 let arMode="network";                     // "network" = the somata | "cell" = one tree
+let arFitted=null;                        // cell we have already fitted the view to
 const somaOf=n=>n.type==="soma"?n.id:(n.t?n.t.domainId:null);
 const dendritesOf=domId=>DB.tasks.filter(t=>t.domainId===domId);
 // A dendrite whose parent is missing (or sits in another soma after a move)
@@ -1525,8 +1562,8 @@ function addSoma(){
   persist(); focusCell(d.id); editSomaModal(d.id,true);
 }
 
-function clearFocus(){ arMode="network"; arFocus=null; renderArbor(); }
-function focusCell(domId){ arMode="cell"; arFocus=domId; renderArbor(); }
+function clearFocus(){ arMode="network"; arFocus=null; arFitted=null; renderArbor(); }
+function focusCell(domId){ if(arFocus!==domId)arFitted=null; arMode="cell"; arFocus=domId; renderArbor(); }
 function renderArbor(){
   if(arMode==="cell"&&arFocus&&domById(arFocus)) renderCellTree(arFocus);
   else renderNetwork();
@@ -1547,40 +1584,66 @@ function arSetup(){
   return svg;
 }
 
-/* ---- network mode: just the somata ---- */
-// Dendrites don't appear here on purpose — a soma is a paper, and the overview
-// is the set of papers, not their innards. Click one to go inside it.
+/* ---- network mode: every soma with its whole branching, plus the axons ---- */
 function renderNetwork(){
   const svg=arSetup();
   const el=document.getElementById("arbor"),W=el.clientWidth,H=el.clientHeight;
-  const nodes=DB.domains.map(d=>({id:d.id,name:d.name,color:d.color}));
+  const nodes=[],branches=[];
+  DB.domains.forEach(d=>nodes.push({id:d.id,type:"soma",name:d.name,color:d.color}));
+  DB.tasks.forEach(t=>nodes.push({id:t.id,type:"dendrite",t}));
   const byId=Object.fromEntries(nodes.map(n=>[n.id,n]));
-  // axons: a shared point between two papers. Stored on both ends, so de-dupe
-  // by id order or every link would be drawn twice.
+  DB.tasks.forEach(t=>{
+    const par=parentDend(t), tgt=par?par.id:t.domainId;
+    if(byId[tgt])branches.push({source:t.id,target:tgt,depth:dendDepth(t),
+      color:domById(t.domainId)?.color||"#556"});
+  });
+  // an axon: projecting soma → the dendrite that references it
   const axons=[];
-  DB.domains.forEach(d=>(d.links||[]).forEach(o=>{ if(d.id<o&&byId[o])axons.push({source:d.id,target:o}); }));
+  DB.tasks.forEach(t=>(t.refs||[]).forEach(src=>{ if(byId[src])axons.push({source:src,target:t.id}); }));
+
+  const branchSel=arZoomG.append("g").selectAll("path").data(branches).join("path")
+    .attr("fill","none").attr("stroke",d=>d.color).attr("stroke-opacity",.3)
+    .attr("stroke-width",d=>Math.max(.7,2.1-d.depth*.42));
   const axonSel=arZoomG.append("g").selectAll("path").data(axons).join("path")
-    .attr("fill","none").attr("stroke","var(--gold)").attr("stroke-opacity",.4).attr("stroke-width",1.6);
+    .attr("fill","none").attr("stroke","var(--gold)").attr("stroke-opacity",.45)
+    .attr("stroke-width",1.4).attr("stroke-dasharray","6 4");
+  const boutonSel=arZoomG.append("g").selectAll("circle").data(axons).join("circle")
+    .attr("r",3).attr("fill","var(--gold)").attr("fill-opacity",.8);
+
   const node=arZoomG.append("g").selectAll("g").data(nodes).join("g").style("cursor","pointer")
     .call(d3.drag()
       .on("start",(ev,d)=>{if(!ev.active)arSim.alphaTarget(.3).restart();d.fx=d.x;d.fy=d.y;})
       .on("drag",(ev,d)=>{d.fx=ev.x;d.fy=ev.y;})
       .on("end",(ev,d)=>{if(!ev.active)arSim.alphaTarget(0);d.fx=null;d.fy=null;}))
-    .on("click",(ev,d)=>{ ev.stopPropagation(); arMode="cell"; arFocus=d.id; renderArbor(); });
-  node.append("circle").attr("r",18).attr("fill",d=>d.color).attr("fill-opacity",.18)
-    .attr("stroke",d=>d.color).attr("stroke-width",2);
-  node.append("circle").attr("r",4.5).attr("fill",d=>d.color);
-  node.append("text").attr("class","soma-label").attr("x",24).attr("y",4).attr("fill",d=>d.color)
+    .on("click",(ev,d)=>{ ev.stopPropagation();
+      focusCell(d.type==="soma"?d.id:d.t.domainId);
+      if(d.type==="dendrite")openDetail(d.id); });
+
+  const soma=node.filter(d=>d.type==="soma");
+  soma.append("circle").attr("r",17).attr("fill",d=>d.color).attr("fill-opacity",.2)
+    .attr("stroke",d=>d.color).attr("stroke-width",2.5).attr("filter","url(#glow)");
+  soma.append("circle").attr("r",4.5).attr("fill",d=>d.color);
+  soma.append("text").attr("class","soma-label").attr("x",23).attr("y",4).attr("fill",d=>d.color)
     .text(d=>d.name||"(unnamed soma)");
-  node.append("text").attr("class","book-badge").attr("x",24).attr("y",18).attr("fill","var(--ink-faint)")
-    .text(d=>{const n=dendritesOf(d.id).length; return n?`${n} part${n!==1?"s":""}`:"empty";});
+
+  const dend=node.filter(d=>d.type==="dendrite");
+  const rOf=n=>Math.max(4.6,10.4-dendDepth(n.t)*1.7);
+  dend.append("circle").attr("r",rOf).attr("fill",d=>domById(d.t.domainId)?.color||"#667")
+    .attr("fill-opacity",.5).attr("stroke",d=>domById(d.t.domainId)?.color||"#667").attr("stroke-width",1.8);
+  dend.append("text").attr("class","node-label").attr("x",d=>rOf(d)+5).attr("y",3)
+    .text(d=>{let x=d.t.title||"(unnamed)"; return x.length>24?x.slice(0,23)+"…":x;});
+
   arSim=d3.forceSimulation(nodes)
-    .force("charge",d3.forceManyBody().strength(-420))
-    .force("collide",d3.forceCollide().radius(70))
+    .force("branch",d3.forceLink(branches).id(d=>d.id).distance(64).strength(.9))
+    .force("axon",d3.forceLink(axons).id(d=>d.id).distance(320).strength(.04))
+    .force("charge",d3.forceManyBody().strength(-320))
+    .force("collide",d3.forceCollide().radius(d=>d.type==="soma"?52:rOf(d)+13))
     .force("center",d3.forceCenter(W/2,H/2))
-    .force("link",d3.forceLink(axons).id(d=>d.id).distance(240).strength(.25))
     .on("tick",()=>{
-      axonSel.attr("d",l=>`M${l.source.x},${l.source.y} L ${l.target.x},${l.target.y}`);
+      branchSel.attr("d",l=>`M${l.source.x},${l.source.y} L ${l.target.x},${l.target.y}`);
+      axonSel.attr("d",l=>{const mx=(l.source.x+l.target.x)/2,my=(l.source.y+l.target.y)/2-60;
+        return `M${l.source.x},${l.source.y} Q ${mx},${my} ${l.target.x},${l.target.y}`;});
+      boutonSel.attr("cx",l=>l.target.x).attr("cy",l=>l.target.y);
       node.attr("transform",d=>`translate(${d.x},${d.y})`);
     });
   arNodeSel=null; arLinkSel=null;
@@ -1636,7 +1699,8 @@ function renderCellTree(domId){
     // draw at. Without an explicit subject, d3.drag computes its grab offset
     // against that transposed pair and the node flies off at right angles.
     .subject((ev,n)=>({x:n.px,y:n.py}))
-    .on("start",(ev,n)=>{ if(!n.data.t)return; dragging=n; moved=false; dropTarget=null; })
+    .on("start",(ev,n)=>{ if(!n.data.t)return; dragging=n; moved=false; dropTarget=null;
+      n.__px=n.px; n.__py=n.py; })                 // where the layout put it, to snap back to
     .on("drag",(ev,n)=>{ if(!dragging)return;
       moved=true;
       n.px=ev.x; n.py=ev.y;
@@ -1648,9 +1712,15 @@ function renderCellTree(domId){
       const tgt=dropTarget; dragging=null; dropTarget=null;
       if(moved&&tgt){
         const msg=reparentDendrite(n.data.t.id,tgt.data.t?tgt.data.t.id:domId,!tgt.data.t);
-        if(msg)toast(msg);
+        if(msg){ toast(msg); renderArbor(); return; }   // structure changed: re-lay it out
       }
-      renderArbor();                       // always re-layout: the tree is the truth
+      // Nothing changed, so DON'T re-render. A click arrives as mousedown →
+      // mouseup → click, and a re-render here replaces the very node the click
+      // is about to land on, so the click silently goes nowhere.
+      paintRing();
+      if(moved){ n.px=n.__px; n.py=n.__py;
+        nodeSel.filter(v=>v===n).attr("transform",`translate(${n.px},${n.py})`); }
+      nodeSel.filter(v=>v===n).style("opacity",1);
     }))
     .on("click",(ev,n)=>{ ev.stopPropagation();
       if(moved){ moved=false; return; }
@@ -1681,7 +1751,10 @@ function renderCellTree(domId){
     .text(n=>{const c=spinesOf(n.data.t.id).length; let x=n.data.t.title||"(unnamed)";
       if(x.length>28)x=x.slice(0,27)+"…"; return c?`${x}  ·  ${c}`:x;});
 
-  // one deliberate fit when the cell opens, then the view stays put
+  // Fit once, when this cell is opened. Re-rendering after an edit must leave
+  // the view exactly where the user left it.
+  if(arFitted===domId) return;
+  arFitted=domId;
   const xs=all.map(n=>n.px), ys=all.map(n=>n.py);
   const x0=Math.min(...xs)-90,x1=Math.max(...xs)+250,y0=Math.min(...ys)-70,y1=Math.max(...ys)+70;
   const k=Math.max(.25,Math.min(1.4,.95*Math.min(W/(x1-x0),H/(y1-y0))));
@@ -1793,10 +1866,75 @@ function weekStart(offset){
   return d;
 }
 
+let calMode="week";                       // "day" | "week" | "month"
+function calSpan(){
+  // day and week share one grid; only how many columns it has differs
+  if(calMode==="day"){ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+calWeekOffset); return {start:d,n:1}; }
+  return {start:weekStart(calWeekOffset),n:7};
+}
+function calModeSegHTML(){
+  return `<div class="seg cal-mode" id="cal_mode">${["day","week","month"]
+    .map(m=>`<button type="button" data-m="${m}" class="${calMode===m?"on":""}">${m[0].toUpperCase()+m.slice(1)}</button>`).join("")}</div>`;
+}
+function wireCalModeSeg(root){
+  const seg=root.querySelector("#cal_mode"); if(!seg)return;
+  seg.addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
+    if(b.dataset.m===calMode)return;
+    calMode=b.dataset.m; calWeekOffset=0; renderTimeline(); });
+}
+// Month is its own renderer: an hour grid makes no sense at this zoom, so it is
+// a plain day matrix with the diary entries listed in each cell.
+function renderMonthView(host){
+  const base=new Date(); base.setDate(1); base.setHours(0,0,0,0);
+  base.setMonth(base.getMonth()+calWeekOffset);
+  const today=new Date(); today.setHours(0,0,0,0);
+  const outer=document.createElement("div"); outer.className="cal-outer"; host.appendChild(outer);
+  const nav=document.createElement("div"); nav.className="cal-nav-bar"; outer.appendChild(nav);
+  nav.innerHTML=`<button class="cal-nav-btn" id="cal_prev">‹</button>
+    <button class="cal-nav-btn today" id="cal_today">Today</button>
+    <button class="cal-nav-btn" id="cal_next">›</button>
+    <h2>${base.toLocaleDateString(undefined,{month:"long",year:"numeric"})}</h2>
+    ${calModeSegHTML()}`;
+  nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
+  nav.querySelector("#cal_next").onclick=()=>{calWeekOffset++;renderTimeline();};
+  nav.querySelector("#cal_today").onclick=()=>{calWeekOffset=0;renderTimeline();};
+  wireCalModeSeg(nav);
+
+  const gridStart=new Date(base); gridStart.setDate(1-base.getDay());
+  const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const grid=document.createElement("div"); grid.className="month-grid"; outer.appendChild(grid);
+  DAYS.forEach(d=>grid.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",innerHTML:`<div class="dow">${d}</div>`})));
+
+  const keys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
+  const byDay={};
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
+    if(!keys.has(e.type))return; (byDay[e.date]=byDay[e.date]||[]).push({a,e}); }));
+  const today0=todayDateStr();
+  for(let i=0;i<42;i++){
+    const day=new Date(gridStart); day.setDate(gridStart.getDate()+i);
+    const pad=n=>String(n).padStart(2,"0");
+    const key=`${day.getFullYear()}-${pad(day.getMonth()+1)}-${pad(day.getDate())}`;
+    const cell=document.createElement("div");
+    cell.className="month-cell"+(day.getMonth()!==base.getMonth()?" out":"")+(day.getTime()===today.getTime()?" today":"");
+    cell.innerHTML=`<div class="mc-num">${day.getDate()}</div>`;
+    (byDay[key]||[]).forEach(({a,e})=>{
+      const def=diaryTypeDef(e.type);
+      const chip=document.createElement("div"); chip.className="cal-evt";
+      chip.style.cssText=`background:${def.color}22;border-left:3px solid ${def.color};color:${def.color}`;
+      chip.innerHTML=`<div class="et">${def.icon} ${esc(a.name)}${e.date>today0?" (planned)":""}</div>`;
+      chip.title=`${def.label} — ${a.name} — ${e.date}`;
+      chip.onclick=()=>{ animalSearch=a.name; DB.config.animalFilters.search=a.name; persist(); switchTo("animals"); };
+      cell.appendChild(chip);
+    });
+    grid.appendChild(cell);
+  }
+}
 function renderTimeline(){
   const host=document.getElementById("timeline"); host.innerHTML="";
-  const ws=weekStart(calWeekOffset);
-  const we=new Date(ws); we.setDate(ws.getDate()+6);
+  if(calMode==="month") return renderMonthView(host);
+  const span=calSpan(), NCOL=span.n;
+  const ws=span.start;
+  const we=new Date(ws); we.setDate(ws.getDate()+NCOL-1);
   const today=new Date(); today.setHours(0,0,0,0);
 
   // ── Nav bar ────────────────────────────────────────────────────────────────
@@ -1807,14 +1945,18 @@ function renderTimeline(){
   nav.innerHTML=`<button class="cal-nav-btn" id="cal_prev">‹</button>
     <button class="cal-nav-btn today" id="cal_today">Today</button>
     <button class="cal-nav-btn" id="cal_next">›</button>
-    <h2>${fmt(ws)} – ${fmt(we)}, ${fmtY(we)}</h2>`;
+    <h2>${NCOL===1?ws.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric",year:"numeric"})
+                  :`${fmt(ws)} – ${fmt(we)}, ${fmtY(we)}`}</h2>
+    ${calModeSegHTML()}`;
+  wireCalModeSeg(nav);
   nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
   nav.querySelector("#cal_next").onclick=()=>{calWeekOffset++;renderTimeline();};
   nav.querySelector("#cal_today").onclick=()=>{calWeekOffset=0;renderTimeline();};
 
   // ── Collect tasks for this week ───────────────────────────────────────────
-  // the calendar shows spines — dendrites themselves have no dates
-  const allTasks=DB.spines.filter(t=>t.deadline&&taskById(t.dendriteId));
+  // A datum has no date of its own — whatever it points at holds the when —
+  // so everything on this calendar comes from the animal diary below.
+  const allTasks=[];
   // returns true if task touches any day in [ws, we]
   function touchesWeek(t){
     const start=whenDate(t.deadline); start.setHours(0,0,0,0);
@@ -1843,11 +1985,12 @@ function renderTimeline(){
   alldayZone.style.overflow="hidden";
   wrap.addEventListener("scroll",()=>{ alldayGrid.style.transform=`translateX(${-wrap.scrollLeft}px)`; });
   const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  document.documentElement.style.setProperty("--cal-cols",NCOL);
   const HOURS=Array.from({length:24},(_,i)=>i); // 0–23
 
   // day headers + all-day row go into the sticky alldayGrid (not the scrolling grid)
   alldayGrid.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",style:"border-right:1px solid var(--line)"}));
-  for(let d=0;d<7;d++){
+  for(let d=0;d<NCOL;d++){
     const day=new Date(ws); day.setDate(ws.getDate()+d);
     const isToday=day.getTime()===today.getTime();
     const hdr=document.createElement("div"); hdr.className="cal-day-hdr"+(isToday?" today":"");
@@ -1857,13 +2000,13 @@ function renderTimeline(){
   // all-day row in the sticky zone
   alldayGrid.appendChild(Object.assign(document.createElement("div"),{className:"cal-allday-gutter",textContent:"all-day"}));
   const alldayCells=[];
-  for(let d=0;d<7;d++){
+  for(let d=0;d<NCOL;d++){
     const cell=document.createElement("div"); cell.className="cal-allday-cell";
     alldayGrid.appendChild(cell); alldayCells.push(cell);
   }
   // scrolling grid gets a gutter spacer to align with the allday zone
   grid.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",style:"visibility:hidden;border-right:1px solid var(--line)"}));
-  for(let d=0;d<7;d++) grid.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",style:"visibility:hidden"}));
+  for(let d=0;d<NCOL;d++) grid.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",style:"visibility:hidden"}));
   // place all-day and multi-day tasks
   weekTasks.forEach(t=>{
     const tStart=new Date(whenDate(t.deadline).setHours(0,0,0,0));
@@ -1873,7 +2016,7 @@ function renderTimeline(){
     if(hasTime(t.deadline)&&tEnd.getTime()===tStart.getTime()) return;
     const col=spineColor(t);
     const overdue=dueClass(t.deadline,t.status,t.endDate)==="overdue";
-    for(let d=0;d<7;d++){
+    for(let d=0;d<NCOL;d++){
       const day=new Date(ws); day.setDate(ws.getDate()+d);
       if(day<tStart||day>tEnd) continue;
       const isFirst=day.getTime()===Math.max(tStart.getTime(),ws.getTime());
@@ -1903,7 +2046,7 @@ function renderTimeline(){
       if(!timelineTypeKeys.has(e.type))return;
       const day=new Date(e.date+"T00:00:00");
       const d=Math.round((day-ws)/864e5);
-      if(d<0||d>6)return;
+      if(d<0||d>=NCOL)return;
       const def=diaryTypeDef(e.type);
       const isFuture=e.date>today0;
       if(e.time){ diaryTimedEvents.push({an,e,def,isFuture,dayIdx:d}); return; }
@@ -1927,7 +2070,7 @@ function renderTimeline(){
   // overlap (directly, or transitively through a chain of overlaps) share a
   // cluster and split that cluster's width evenly into side-by-side columns.
   const timedLayout=new Map(); // task.id -> {col, totalCols}
-  for(let d=0;d<7;d++){
+  for(let d=0;d<NCOL;d++){
     const day=new Date(ws); day.setDate(ws.getDate()+d); day.setHours(0,0,0,0);
     const dayEvents=weekTasks.filter(t=>{
       if(!hasTime(t.deadline)) return false;
@@ -1964,7 +2107,7 @@ function renderTimeline(){
   // a diary entry at the same hour don't need to know about each other's
   // layout - each source packs its own overlaps independently).
   const diaryTimedLayout=new Map(); // entry.id -> {col, totalCols}
-  for(let d=0;d<7;d++){
+  for(let d=0;d<NCOL;d++){
     const dayEvents=diaryTimedEvents.filter(x=>x.dayIdx===d).map(x=>{
       const [hh,mm]=x.e.time.split(":").map(Number);
       const startMin=hh*60+(mm||0);
@@ -2000,7 +2143,7 @@ function renderTimeline(){
     label.textContent=h===0?"":h<12?`${h} am`:h===12?"12 pm":`${h-12} pm`;
     grid.appendChild(label);
     const hourCells=[];
-    for(let d=0;d<7;d++){
+    for(let d=0;d<NCOL;d++){
       const day=new Date(ws); day.setDate(ws.getDate()+d);
       const isToday=day.getTime()===today.getTime();
       const cell=document.createElement("div"); cell.className="cal-hour-cell"+(isToday?" today":"");
@@ -4578,98 +4721,139 @@ function openDetail(id){
   selectedId=id; const t=taskById(id); if(!t)return;
   document.getElementById("dDomTag").innerHTML=taskTagHTML(t);
   document.getElementById("dTitleView").textContent=t.title||"New dendrite";
-  const la=DB.animals.filter(a=>(a.tasks||[]).includes(t.id));
   document.getElementById("dBody").innerHTML=`
     <div class="fld"><label>Name</label>
       <input id="e_title" value="${escAttr(t.title)}" list="e_blueprints" autocomplete="off" placeholder="Dendrite name…">
       <datalist id="e_blueprints">${[...new Set(DB.tasks.filter(x=>x.id!==t.id).map(x=>x.title))].sort().map(tt=>`<option value="${escAttr(tt)}">`).join("")}</datalist></div>
     <div class="fld"><label>Text</label>
       <textarea id="e_notes" rows="9">${esc(t.notes||"")}</textarea></div>
-
     <div class="fld"><label>Data</label>
       <div id="e_spines"></div>
       <button class="btn ghost" id="e_addspine" style="margin-top:8px">＋ Datum</button></div>
-
-    <div class="fld"><label>Reading</label>
-      <div id="e_reads"></div></div>
-
-    ${la.length?`<div class="fld"><label>Linked animals (${la.length})</label><div style="font-size:12.5px;line-height:1.7">${la.map(a=>`<div><span class="stat" style="background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};display:inline-block;margin-right:6px"></span>${esc(a.name)} <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${esc(a.cohort)}</span></div>`).join("")}</div><div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:4px">link/unlink from the Animals tab</div></div>`:""}
-    ${(()=>{ const rows=dendriteProcRollup(t); return rows.length?`<div class="fld"><label>Procedures run</label>
-      <div style="font-size:12.5px;line-height:1.8">${rows.map(r=>`<div>${r.icon} ${esc(r.label)} <span style="font-family:var(--mono);color:var(--ink-faint)">× ${r.n}</span></div>`).join("")}</div></div>`:""; })()}
-
+    <div class="fld"><label>References</label>
+      <div id="e_refs"></div></div>
     <div class="drow" style="margin-top:18px"><button class="btn danger" id="e_del">Delete dendrite</button></div>`;
   wireDetail(t); document.getElementById("detail").classList.add("open");
   if(currentView==="outline")renderOutline();
 }
-// Every procedure logged in the diary of any animal linked to this dendrite,
-// tallied by type. Derived, never stored — so it can't drift from the diary.
-function dendriteProcRollup(t){
-  const la=DB.animals.filter(a=>(a.tasks||[]).includes(t.id));
-  const keys=new Set(diaryTypeDefs().filter(d=>d.timeline).map(d=>d.key));
-  const n={};
-  la.forEach(a=>(a.diary||[]).forEach(e=>{ if(keys.has(e.type)) n[e.type]=(n[e.type]||0)+1; }));
-  return Object.entries(n).map(([k,v])=>{ const def=diaryTypeDef(k); return {icon:def.icon,label:def.label,n:v}; })
-    .sort((x,y)=>y.n-x.n);
+/* ---- what a datum can point at ---- */
+// Internal links resolve live, so a renamed animal or virus reads correctly here
+// without anything being copied. The label is looked up, never stored.
+function linkLabel(l){
+  if(l.kind==="animal"){ const a=DB.animals.find(x=>x.id===l.id); return a?`🐁 ${a.name}`:"🐁 (deleted animal)"; }
+  if(l.kind==="material") return `🧪 ${l.id}`;
+  if(l.kind==="procedure"){ const a=DB.animals.find(x=>x.id===l.animalId);
+    const def=diaryTypeDef(l.type); return `${def.icon} ${a?a.name:"?"} — ${def.label}${l.date?" · "+l.date:""}`; }
+  return `🔗 ${l.url||""}`;
+}
+// The "when" is not the datum's to hold: whatever it points at already knows.
+function linkDate(l){
+  if(l.kind==="procedure") return l.date||"";
+  if(l.kind==="animal"){ const a=DB.animals.find(x=>x.id===l.id); return a&&a.dob?`b. ${a.dob.slice(0,10)}`:""; }
+  return "";
+}
+function spineWhen(sp){
+  const ds=(sp.links||[]).map(linkDate).filter(Boolean);
+  return ds.length?ds.join(" · "):"";
+}
+// Editing the thing itself, from here — the link goes both ways.
+function openLinked(l){
+  if(l.kind==="animal"){ closeDetail(); switchTo("animals"); animalModal(l.id); return; }
+  if(l.kind==="material"){ closeDetail(); switchTo("materials");
+    // set the sub-tab directly — clicking the button races the tab's own render
+    matSubTab="inventory";
+    document.querySelectorAll("#matSubTabs button").forEach(b=>b.classList.toggle("on",b.dataset.ms==="inventory"));
+    document.querySelectorAll(".mat-subview").forEach(v=>v.classList.toggle("hidden",v.id!=="ms-inventory"));
+    renderMaterials(); return; }
+  if(l.kind==="procedure"){ const a=DB.animals.find(x=>x.id===l.animalId); if(!a)return;
+    closeDetail(); animalSearch=a.name; DB.config.animalFilters.search=a.name; persist(); switchTo("animals"); return; }
+  if(l.url) window.open(/^https?:\/\//i.test(l.url)?l.url:"https://"+l.url,"_blank","noopener");
+}
+function addLinkModal(sp,after){
+  const animals=[...DB.animals].sort((x,y)=>x.name.localeCompare(y.name));
+  const mats=Object.keys(DB.inventory||{}).sort();
+  const procs=[];
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>procs.push({animalId:a.id,name:a.name,type:e.type,date:e.date})));
+  procs.sort((x,y)=>(y.date||"").localeCompare(x.date||""));
+  modal(`<h3>Link this datum to…</h3>
+    <div class="fld"><label>Animal</label><select id="lk_animal"><option value="">—</option>
+      ${animals.map(a=>`<option value="${a.id}">${esc(a.name)} · ${esc(a.cohort||"")}</option>`).join("")}</select></div>
+    <div class="fld"><label>Material</label><select id="lk_mat"><option value="">—</option>
+      ${mats.map(m=>`<option value="${escAttr(m)}">${esc(m)}</option>`).join("")}</select></div>
+    <div class="fld"><label>Procedure</label><select id="lk_proc"><option value="">—</option>
+      ${procs.slice(0,300).map((x,i)=>`<option value="${i}">${esc(x.name)} — ${esc(diaryTypeDef(x.type).label)} · ${esc(x.date||"")}</option>`).join("")}</select></div>
+    <div class="fld"><label>External</label><input id="lk_url" placeholder="URL, DOI, or a path on the lab drive"></div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn accent" id="lk_go">Add</button></div>`);
+  document.getElementById("lk_go").onclick=()=>{
+    const av=document.getElementById("lk_animal").value, mv=document.getElementById("lk_mat").value,
+          pv=document.getElementById("lk_proc").value, uv=document.getElementById("lk_url").value.trim();
+    sp.links=sp.links||[];
+    if(av)sp.links.push({kind:"animal",id:av});
+    if(mv)sp.links.push({kind:"material",id:mv});
+    if(pv!==""){ const x=procs[+pv]; sp.links.push({kind:"procedure",animalId:x.animalId,type:x.type,date:x.date}); }
+    if(uv)sp.links.push({kind:"url",url:uv});
+    persist(); closeModal(); after();
+  };
 }
 function drawSpines(t){
   const host=document.getElementById("e_spines"); if(!host)return;
   const sps=spinesOf(t.id);
-  if(!sps.length){ host.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint);padding:4px 0">No data on this part yet.</div>`; return; }
+  if(!sps.length){ host.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint);padding:4px 0">No data on this dendrite yet.</div>`; return; }
   host.innerHTML=sps.map(sp=>{
-    const dc=dueClass(sp.deadline,sp.status,sp.endDate);
+    const when=spineWhen(sp);
     return `<div class="spine-block${sp.id===spineFocus?" sel":""}" data-id="${sp.id}">
       <div class="spine-row">
-        <button class="spine-done" title="${sp.status==="done"?"Collected":"Not collected yet"}">${sp.status==="done"?"✓":"○"}</button>
         <input class="spine-name" value="${escAttr(sp.title)}" placeholder="what the datum is">
-        <button type="button" class="datebtn spine-when ${sp.deadline?"":"datebtn-empty"}">${sp.deadline?fmtWhenFull(sp.deadline):"📅 when"}</button>
-        <span class="spine-due" style="color:${dc==="overdue"?"var(--overdue)":dc==="soon"?"var(--amber)":"var(--ink-faint)"}">${sp.deadline?fmtDue(sp.deadline):""}</span>
+        ${when?`<span class="spine-due">${esc(when)}</span>`:""}
         <button class="spine-del" title="Delete this datum">✕</button>
       </div>
-      <input class="spine-ref" value="${escAttr(sp.ref||"")}" placeholder="link or reference — where the data lives">
+      <div class="linklist">${(sp.links||[]).map((l,i)=>`<span class="linkchip" data-i="${i}">
+        <span class="lk-open">${esc(linkLabel(l))}</span><button class="lk-del" title="Unlink">✕</button></span>`).join("")}
+        <button class="lk-add">＋ link</button></div>
     </div>`;
   }).join("");
   host.querySelectorAll(".spine-block").forEach(row=>{
     const sp=spineById(row.dataset.id); if(!sp)return;
-    row.querySelector(".spine-ref").addEventListener("input",e=>{ sp.ref=e.target.value; persist(); });
-    row.querySelector(".spine-name").addEventListener("input",e=>{ sp.title=e.target.value; persist(); if(currentView==="timeline")renderTimeline(); });
-    row.querySelector(".spine-done").addEventListener("click",()=>{ sp.status=sp.status==="done"?"todo":"done"; persist(); drawSpines(t); render(); });
-    bindDateButton(row.querySelector(".spine-when"), ()=>sp.deadline||"", v=>{ sp.deadline=v||null; persist(); drawSpines(t); render(); });
+    row.querySelector(".spine-name").addEventListener("input",e=>{ sp.title=e.target.value; persist(); });
     row.querySelector(".spine-del").addEventListener("click",()=>{
       if(!confirm(`Delete "${sp.title||"(unnamed datum)"}"?`))return;
       DB.spines=DB.spines.filter(x=>x.id!==sp.id); persist(); drawSpines(t); render(); });
+    row.querySelector(".lk-add").addEventListener("click",()=>addLinkModal(sp,()=>drawSpines(t)));
+    row.querySelectorAll(".linkchip").forEach(chip=>{
+      const i=+chip.dataset.i;
+      chip.querySelector(".lk-open").addEventListener("click",()=>openLinked(sp.links[i]));
+      chip.querySelector(".lk-del").addEventListener("click",()=>{
+        sp.links.splice(i,1); persist(); drawSpines(t); });
+    });
   });
 }
-// Readings are filed against a soma already; this narrows one to a dendrite.
-function drawDendReadings(t){
-  const host=document.getElementById("e_reads"); if(!host)return;
-  const mine=DB.readings.filter(r=>r.dendriteId===t.id);
-  const free=DB.readings.filter(r=>!r.dendriteId&&r.domainId===t.domainId);
-  host.innerHTML=`${mine.map(r=>`<div class="spine-row" data-r="${r.id}">
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px">${esc(r.title)}</span>
-      <span style="font-family:var(--mono);font-size:9.5px;color:${r.status==="read"?"var(--ink-faint)":"var(--amber)"}">${r.status==="read"?"read":"unread"}</span>
-      <button class="spine-del" title="Unfile from this dendrite">✕</button>
-    </div>`).join("")||`<div style="font-size:11.5px;color:var(--ink-faint);padding:4px 0">No papers filed here yet.</div>`}
-    ${free.length?`<select id="e_addread" style="margin-top:8px"><option value="">＋ file a paper from this soma…</option>${free.map(r=>`<option value="${r.id}">${esc(r.title)}</option>`).join("")}</select>`:""}`;
-  host.querySelectorAll("[data-r]").forEach(row=>{
-    row.querySelector(".spine-del").addEventListener("click",()=>{
-      const r=DB.readings.find(x=>x.id===row.dataset.r); if(!r)return;
-      r.dendriteId=null; persist(); drawDendReadings(t); });
-  });
-  const sel=document.getElementById("e_addread");
-  if(sel)sel.addEventListener("change",e=>{ if(!e.target.value)return;
-    const r=DB.readings.find(x=>x.id===e.target.value); if(r){ r.dendriteId=t.id; persist(); }
-    drawDendReadings(t); });
+// References = the axons landing on this dendrite. Ticking a soma here draws a
+// projection from it onto this dendrite, so the citation lives where it's used.
+function drawRefs(t){
+  const host=document.getElementById("e_refs"); if(!host)return;
+  const others=DB.domains.filter(d=>d.id!==t.domainId);
+  host.innerHTML=others.length
+    ? others.map(o=>`<label class="sharerow"><input type="checkbox" data-id="${o.id}" ${(t.refs||[]).includes(o.id)?"checked":""}>
+        <span class="chip" style="background:${o.color}"></span> ${esc(o.name||"(unnamed soma)")}</label>`).join("")
+    : `<div style="font-size:11.5px;color:var(--ink-faint)">No other somata to reference yet.</div>`;
+  host.addEventListener("change",e=>{
+    const cb=e.target.closest("input[type=checkbox]"); if(!cb)return;
+    t.refs=t.refs||[];
+    if(cb.checked){ if(!t.refs.includes(cb.dataset.id))t.refs.push(cb.dataset.id); }
+    else t.refs=t.refs.filter(x=>x!==cb.dataset.id);
+    persist();
+  },{once:false});
 }
 function wireDetail(t){
   const save=p=>{ Object.assign(t,p); persist(); document.getElementById("dTitleView").textContent=t.title||"New dendrite"; if(currentView!=="arbor")render(); };
   document.getElementById("e_title").addEventListener("input",e=>{ const v=e.target.value; Object.assign(t,{title:v,autoTitle:false}); persist(); document.getElementById("dTitleView").textContent=v||"New dendrite"; if(currentView!=="arbor")render(); });
   document.getElementById("e_notes").addEventListener("input",e=>save({notes:e.target.value}));
-  document.getElementById("e_addspine").addEventListener("click",()=>{ addSpine(t.id,{}); drawSpines(t); render(); });
-  drawSpines(t); drawDendReadings(t);
-  document.getElementById("e_del").addEventListener("click",()=>{ if(!confirm("Delete this dendrite? Its spines go with it."))return;
+  document.getElementById("e_addspine").addEventListener("click",()=>{ addSpine(t.id,{}); drawSpines(t); });
+  drawSpines(t); drawRefs(t);
+  document.getElementById("e_del").addEventListener("click",()=>{ if(!confirm("Delete this dendrite? Its data goes with it."))return;
     childrenOf(t.id).forEach(k=>k.parentId=t.parentId);
     DB.spines=DB.spines.filter(x=>x.dendriteId!==t.id);
-    DB.readings.forEach(r=>{ if(r.dendriteId===t.id)r.dendriteId=null; });
     DB.tasks=DB.tasks.filter(x=>x.id!==t.id); persist(); closeDetail(); render(); toast("Dendrite deleted"); });
 }
 function closeDetail(){
@@ -4821,8 +5005,7 @@ function openNewTaskModal(prefillDeadline){
   };
 }
 function addSpine(dendriteId,init){
-  const sp={id:uid("sp_"),dendriteId,title:"",deadline:null,endDate:null,duration:null,
-            status:"todo",notes:"",created:Date.now(),...(init||{})};
+  const sp={id:uid("sp_"),dendriteId,title:"",links:[],notes:"",created:Date.now(),...(init||{})};
   DB.spines.push(sp); persist(); return sp;
 }
 // Clicking an empty Timeline slot used to always create a plain task — the
@@ -4839,8 +5022,7 @@ function openTimelineCreateModal(prefillDeadline){
   modal(`<h3>New timeline item</h3>
     <div class="fld"><label>Kind</label>
       <div class="seg" id="tc_kind">
-        <button type="button" data-v="task" class="on">General task</button>
-        <button type="button" data-v="diary" ${animals.length?"":"disabled"}>Animal diary entry</button>
+        <button type="button" data-v="diary" class="on" ${animals.length?"":"disabled"}>Animal diary entry</button>
       </div></div>
     <div id="tc_body" class="dg-form"></div>`,{wide:true});
   const body=document.getElementById("tc_body");
@@ -4953,18 +5135,16 @@ function editSomaModal(domId,isNew){
   // outline of the plan, and the ordered set of dendrites it carries. It has no
   // dates of its own on purpose — a project's parts run intertwined, so a single
   // start/end for the whole thing would be a number nobody could honestly fill in.
-  modal(`<h3>${isNew?"New paper":"Paper"}</h3>
+  modal(`<h3>${isNew?"New soma":"Soma"}</h3>
     <div class="fld"><label>Name</label><input id="d_name" value="${escAttr(dom.name)}" placeholder="what this project is" autofocus></div>
     <div class="fld"><label>Colour</label><div class="taglist" id="d_pal">${paletteHTML(dom.color)}</div></div>
     <div class="fld"><label>Abstract</label>
       <textarea id="d_outline" rows="7">${esc(dom.abstract||"")}</textarea></div>
-    <div class="fld"><label>Shares points with</label>
-      <div id="d_links">${others.length?others.map(o=>`<label class="sharerow"><input type="checkbox" data-id="${o.id}" ${(dom.links||[]).includes(o.id)?"checked":""}> ${esc(o.name||"(unnamed)")}</label>`).join(""):`<div style="font-size:11.5px;color:var(--ink-faint)">No other papers yet.</div>`}</div></div>
-    <div class="fld"><label>Parts</label>
+    <div class="fld"><label>Dendrites</label>
       <div id="d_dends"></div>
       <button class="btn ghost" id="d_adddend" style="margin-top:8px">＋ Dendrite</button></div>
     <div class="drow" style="margin-top:18px;align-items:center">
-      <button class="btn danger" id="d_del">Delete paper</button>
+      <button class="btn danger" id="d_del">Delete soma</button>
       <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${nReads} reading${nReads!==1?"s":""} attached</div>
     </div>
     <div class="actions"><button class="btn accent" id="d_save">Done</button></div>`,{wide:true});
@@ -4988,18 +5168,6 @@ function editSomaModal(domId,isNew){
     host.innerHTML=roots.map(t=>row(t,0)).join("");
   }
   drawDends();
-  document.getElementById("d_links").addEventListener("change",e=>{
-    const cb=e.target.closest("input[type=checkbox]"); if(!cb)return;
-    const other=domById(cb.dataset.id); if(!other)return;
-    dom.links=dom.links||[]; other.links=other.links||[];
-    // an axon is a shared point, which is a fact about both papers — keep both
-    // ends in step so it reads the same whichever one you opened
-    if(cb.checked){ if(!dom.links.includes(other.id))dom.links.push(other.id);
-                    if(!other.links.includes(dom.id))other.links.push(dom.id); }
-    else { dom.links=dom.links.filter(x=>x!==other.id);
-           other.links=other.links.filter(x=>x!==dom.id); }
-    persist();
-  });
   document.getElementById("d_dends").addEventListener("click",e=>{
     const r=e.target.closest(".dend-row"); if(!r)return;
     if(e.target.closest(".dend-add")){
@@ -5057,7 +5225,7 @@ function editSomaModal(domId,isNew){
 // used to only read DB.tasks, which went stale the moment procedures moved
 // into the diary, so the .ics export silently dropped every procedure.
 document.getElementById("expCal").addEventListener("click",()=>{
-  const due=DB.spines.filter(t=>t.deadline&&t.status!=="done"&&taskById(t.dendriteId));
+  const due=[];     // diary entries below are the only dated things left
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
   const diaryEvents=[];
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{ if(timelineTypeKeys.has(e.type)) diaryEvents.push({a,e}); }));
