@@ -4906,11 +4906,24 @@ function wireDetail(t){
   document.getElementById("e_del").addEventListener("click",()=>{ if(!confirm("Delete this dendrite? Its data goes with it."))return;
     childrenOf(t.id).forEach(k=>k.parentId=t.parentId);
     DB.spines=DB.spines.filter(x=>x.dendriteId!==t.id);
-    DB.tasks=DB.tasks.filter(x=>x.id!==t.id); persist(); closeDetail(); render(); toast("Dendrite deleted"); });
+    DB.tasks=DB.tasks.filter(x=>x.id!==t.id);
+    DB.tasks.forEach(x=>{ if(x.refs)x.refs=x.refs.filter(r=>r!==t.id); });
+    DB.animals.forEach(a=>{ if(a.tasks)a.tasks=a.tasks.filter(id=>id!==t.id); });
+    persist();
+    render();                       // redraw while the panel is still stationary
+    closeDetail({norender:true});    // then let it slide away
+    toast("Dendrite deleted"); });
 }
-function closeDetail(){
+// opts.norender: the caller has already redrawn the view and only wants the
+// panel dismissed. Rebuilding a large SVG in the same tick that .detail starts
+// its transform transition leaves the compositor with a stale layer — the view
+// goes blank until some input event forces an invalidation — so a caller that
+// changes the graph should redraw FIRST, while the panel is still stationary,
+// and dismiss afterwards.
+function closeDetail(opts){
   if(selectedId){ const t=taskById(selectedId); if(t&&!t.title){ DB.tasks=DB.tasks.filter(x=>x.id!==selectedId); persist(); } }
   document.getElementById("detail").classList.remove("open"); selectedId=null; spineFocus=null;
+  if(opts&&opts.norender) return;
   // only re-render the active view — full render() was causing outline toolbar to misplace
   if(currentView==="outline") renderOutline();
   else if(currentView==="timeline") renderTimeline();
@@ -5250,9 +5263,20 @@ function editSomaModal(domId,isNew){
     if(nTasks||nReads){
       const opts=others.map(d=>`<option value="${d.id}">${esc(d.name||"(unnamed soma)")}</option>`).join("");
       modal(`<h3>Delete "${esc(dom.name||"(unnamed soma)")}"</h3>
-        <p style="color:var(--ink-dim);font-size:13px;line-height:1.5;margin-top:0">It carries ${nTasks} dendrite${nTasks!==1?"s":""} and ${nReads} reading${nReads!==1?"s":""}. Move them to another soma, then delete.</p>
+        <p style="color:var(--ink-dim);font-size:13px;line-height:1.5;margin-top:0">It carries ${nTasks} dendrite${nTasks!==1?"s":""} and ${nReads} reading${nReads!==1?"s":""}. Move them to another soma, or delete the lot.</p>
         <div class="fld"><label>Reassign to</label><select id="d_reassign">${opts}</select></div>
-        <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn danger" id="d_delconfirm">Move & delete</button></div>`);
+        <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+          <button class="btn danger" id="d_delall">Delete all of it</button>
+          <button class="btn danger" id="d_delconfirm">Move & delete</button></div>`);
+      document.getElementById("d_delall").addEventListener("click",()=>{
+        const kids=dendritesOf(domId);
+        const nSp=DB.spines.filter(sp=>kids.some(k=>k.id===sp.dendriteId)).length;
+        if(!confirm(`Delete "${dom.name||"this soma"}" and everything on it?\n\n`
+          +`${nTasks} dendrite${nTasks!==1?"s":""}, ${nSp} ${nSp===1?"datum":"data"} and `
+          +`${nReads} reading${nReads!==1?"s":""} will be deleted too.\n\nThis cannot be undone.`))return;
+        deleteSomaEverything(domId);
+        closeModal(); toast("Soma deleted with everything on it");
+      });
       document.getElementById("d_delconfirm").addEventListener("click",()=>{
         const to=document.getElementById("d_reassign").value;
         DB.tasks.forEach(t=>{ if(t.domainId===domId)t.domainId=to; });
@@ -5263,12 +5287,26 @@ function editSomaModal(domId,isNew){
         persist(); render(); closeModal(); toast("Soma deleted, dendrites reassigned");
       });
     } else if(confirm(`Delete "${dom.name||"this soma"}"?`)){
-      DB.domains=DB.domains.filter(d=>d.id!==domId);
-      DB.domains.forEach(d=>d.links=(d.links||[]).filter(x=>x!==domId));
-      if(arFocus===domId)arFocus=null;
-      persist(); render(); closeModal(); toast("Soma deleted");
+      deleteSomaEverything(domId);
+      closeModal(); toast("Soma deleted");
     }
   });
+}
+// Remove a soma and every thing that only existed because of it. Anything
+// pointing AT it — axons from other dendrites, an open focus — is severed too,
+// otherwise the graph keeps drawing edges to a soma that is no longer there.
+function deleteSomaEverything(domId){
+  const kids=dendritesOf(domId).map(t=>t.id);
+  DB.spines=DB.spines.filter(sp=>!kids.includes(sp.dendriteId));
+  DB.tasks=DB.tasks.filter(t=>t.domainId!==domId);
+  DB.readings=DB.readings.filter(r=>r.domainId!==domId);
+  DB.readings.forEach(r=>{ if(kids.includes(r.dendriteId))r.dendriteId=null; });
+  DB.tasks.forEach(t=>{ if(t.refs)t.refs=t.refs.filter(x=>x!==domId); });
+  DB.animals.forEach(a=>{ if(a.tasks)a.tasks=a.tasks.filter(id=>!kids.includes(id)); });
+  DB.domains=DB.domains.filter(d=>d.id!==domId);
+  DB.domains.forEach(d=>d.links=(d.links||[]).filter(x=>x!==domId));
+  if(arFocus===domId){ arFocus=null; arMode="network"; arFitted=null; }
+  persist(); render();
 }
 
 /* ---------- CALENDAR (.ics) ---------- */
