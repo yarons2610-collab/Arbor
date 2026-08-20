@@ -195,7 +195,7 @@
   .spine-ref{width:100%;margin-top:4px;font-family:var(--mono);font-size:10.5px;background:transparent;border:1px solid transparent;border-radius:6px;padding:2px 5px;color:var(--ink-faint)}
   .spine-ref:focus{border-color:var(--line2);background:var(--panel2);color:var(--ink);outline:none}
   .sharerow{display:flex;align-items:center;gap:7px;font-size:12.5px;padding:3px 0;cursor:pointer}
-  .proj-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+  .proj-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;align-items:start}
   .proj-card{display:flex;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:.12s}
   .proj-card:hover{border-color:var(--line2);transform:translateY(-1px)}
   .pc-bar{width:4px;flex:0 0 auto}
@@ -205,6 +205,22 @@
   .pc-counts{display:flex;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
   .pj-group{margin-bottom:10px}
   .pj-gtitle{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--ink-faint);margin-bottom:4px}
+  .pc-head{display:flex;align-items:center;gap:8px}
+  .pc-head .pc-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:0}
+  .pc-edit{border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:13px;padding:0 2px;flex:0 0 auto}
+  .pc-edit:hover{color:var(--ink)}
+  .pc-cat{border-top:1px solid var(--line)}
+  .pc-cathead{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:var(--ink-dim);cursor:pointer;padding:6px 0;text-align:left;font-size:12px}
+  .pc-cathead:hover{color:var(--ink)}
+  .pc-caret{font-size:9px;width:9px;flex:0 0 auto;color:var(--ink-faint)}
+  .pc-cicon{flex:0 0 auto}
+  .pc-clabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pc-ccount{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);flex:0 0 auto}
+  .pc-items{padding:0 0 6px 16px;display:flex;flex-direction:column;gap:4px}
+  .pc-item{display:flex;flex-direction:column;gap:1px;padding:4px 7px;border-radius:6px;cursor:pointer;background:var(--panel2)}
+  .pc-item:hover{background:rgba(255,255,255,.05)}
+  .pc-iname{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pc-idet{font-family:var(--mono);font-size:9.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .linklist{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;align-items:center}
   .linkchip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line2);background:var(--panel2);border-radius:20px;padding:2px 4px 2px 9px;font-size:11px;max-width:100%}
   .lk-open{cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}
@@ -1564,10 +1580,82 @@ const LINK_GROUPS=[
   {kind:"reading",  icon:"📖", label:"Literature"},
   {kind:"url",      icon:"🔗", label:"External"}
 ];
-function projCounts(pr){
-  const n={};
-  (pr.links||[]).forEach(l=>{ n[l.kind]=(n[l.kind]||0)+1; });
-  return LINK_GROUPS.filter(g=>n[g.kind]).map(g=>`${g.icon} ${n[g.kind]}`);
+const TERM_LABEL={alive:"alive",sacrificed:"sacrificed",early_death:"early death",excluded:"excluded"};
+const TERM_COLOR={alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"};
+// Read live off the source record every time, so a card can never show a state
+// the thing itself has moved on from.
+function linkDetail(l){
+  if(l.kind==="animal"){
+    const a=DB.animals.find(x=>x.id===l.id); if(!a)return {text:"deleted",color:"var(--overdue)"};
+    const w=latestWeight(a);
+    return {text:[a.cohort,TERM_LABEL[a.termination]||a.termination,w!=null?w+"g":null].filter(Boolean).join(" · "),
+            color:TERM_COLOR[a.termination]||"var(--ink-faint)"};
+  }
+  if(l.kind==="cohort"){
+    const n=DB.animals.filter(a=>a.cohort===l.id).length;
+    const alive=DB.animals.filter(a=>a.cohort===l.id&&a.termination==="alive").length;
+    return {text:`${n} animal${n!==1?"s":""} · ${alive} alive`};
+  }
+  if(l.kind==="material"){
+    if(l.cat==="inv"){ const inv=(DB.inventory||{})[l.id];
+      return {text:inv?[inv.status,inv.note].filter(Boolean).join(" · ")||"in inventory":"not in inventory"}; }
+    if(l.cat==="site"){ const st=(DB.config.siteLib||[]).find(x=>x.name===l.id);
+      return {text:st?`AP ${st.ap} · ML ${st.ml} · DV ${st.dv}`:"not in the site library"}; }
+    const v=(activeViruses()||[]).find(x=>x.name===l.id);
+    return {text:v?[v.type,v.promoter,v.titer].filter(Boolean).join(" · ")||"in the virus library":"not in the virus library"};
+  }
+  if(l.kind==="template"){
+    const pr=(DB.config.procedureLib||[]).find(x=>x.id===l.id); if(!pr)return {text:"deleted"};
+    const bits=[]; if(pr.headpost)bits.push("head-post"); if(pr.window)bits.push("window");
+    const n=(pr.injections||[]).length; if(n)bits.push(`${n} injection${n!==1?"s":""}`);
+    return {text:bits.join(" · ")||"empty template"};
+  }
+  if(l.kind==="procedure"){
+    const a=DB.animals.find(x=>x.id===l.animalId);
+    return {text:[a?a.name:"deleted animal",l.date].filter(Boolean).join(" · ")};
+  }
+  if(l.kind==="reading"){
+    const r=DB.readings.find(x=>x.id===l.id); if(!r)return {text:"deleted"};
+    return {text:[r.authors,r.tag,r.status].filter(Boolean).join(" · "),
+            color:r.status==="read"?"var(--ink-faint)":"var(--amber)"};
+  }
+  return {text:""};   // an external link is its own label
+}
+// The primary label alone, without the icon and without the secondary facts —
+// linkLabel() packs animal+date into one string, which read as a duplicate once
+// the detail line sat underneath it.
+function linkName(l){
+  if(l.kind==="animal"){ const x=DB.animals.find(v=>v.id===l.id); return x?x.name:"(deleted animal)"; }
+  if(l.kind==="template"){ const x=(DB.config.procedureLib||[]).find(v=>v.id===l.id); return x?(x.name||"(unnamed)"):"(deleted)"; }
+  if(l.kind==="procedure") return diaryTypeDef(l.type).label;
+  if(l.kind==="reading"){ const x=DB.readings.find(v=>v.id===l.id); return x?x.title:"(deleted paper)"; }
+  if(l.kind==="url") return l.url||"";
+  return l.id||"";
+}
+// which category rows are open, per project — survives a re-render
+const projOpen=new Set();
+function projCatsHTML(pr){
+  const by={};
+  (pr.links||[]).forEach((l,i)=>{ (by[l.kind]=by[l.kind]||[]).push({l,i}); });
+  const groups=LINK_GROUPS.filter(g=>by[g.kind]);
+  if(!groups.length)return `<div class="pc-counts"><span style="color:var(--ink-faint)">nothing linked yet</span></div>`;
+  return groups.map(g=>{
+    const items=by[g.kind], key=pr.id+":"+g.kind, open=projOpen.has(key);
+    return `<div class="pc-cat">
+      <button class="pc-cathead" data-key="${escAttr(key)}">
+        <span class="pc-caret">${open?"▾":"▸"}</span>
+        <span class="pc-cicon">${g.icon}</span>
+        <span class="pc-clabel">${g.label}</span>
+        <span class="pc-ccount">${items.length}</span>
+      </button>
+      ${open?`<div class="pc-items">${items.map(({l,i})=>{
+        const d=linkDetail(l);
+        return `<div class="pc-item" data-i="${i}">
+          <span class="pc-iname">${esc(linkName(l))}</span>
+          ${d.text?`<span class="pc-idet" style="color:${d.color||"var(--ink-faint)"}">${esc(d.text)}</span>`:""}
+        </div>`; }).join("")}</div>`:""}
+    </div>`;
+  }).join("");
 }
 function addProject(){
   const pr={id:uid("pj_"),name:"",color:DOMAIN_PALETTE[DB.projects.length%DOMAIN_PALETTE.length],
@@ -1578,9 +1666,7 @@ function renderProjects(){
   const host=document.getElementById("projects"); host.innerHTML="";
   const top=document.createElement("div");
   top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap";
-  top.innerHTML=`<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
-      A project gathers what already exists elsewhere — nothing here is a second copy.</span>
-    <button id="pj_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ Project</button>`;
+  top.innerHTML=`<button id="pj_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ Project</button>`;
   host.appendChild(top);
   top.querySelector("#pj_add").onclick=addProject;
 
@@ -1592,14 +1678,24 @@ function renderProjects(){
   const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
   DB.projects.forEach(pr=>{
     const card=document.createElement("div"); card.className="proj-card"; card.dataset.id=pr.id;
-    const counts=projCounts(pr);
     card.innerHTML=`<div class="pc-bar" style="background:${pr.color}"></div>
       <div class="pc-body">
-        <div class="pc-name">${esc(pr.name||"(unnamed project)")}</div>
+        <div class="pc-head"><span class="pc-name">${esc(pr.name||"(unnamed project)")}</span>
+          <button class="pc-edit" title="Edit this project">✎</button></div>
         ${pr.notes?`<div class="pc-note">${esc(pr.notes)}</div>`:""}
-        <div class="pc-counts">${counts.length?counts.map(c=>`<span>${c}</span>`).join(""):`<span style="color:var(--ink-faint)">nothing linked yet</span>`}</div>
+        ${projCatsHTML(pr)}
       </div>`;
-    card.onclick=()=>editProjectModal(pr.id);
+    card.querySelector(".pc-edit").onclick=e=>{ e.stopPropagation(); editProjectModal(pr.id); };
+    card.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=e=>{
+      e.stopPropagation();
+      const k=b.dataset.key;
+      projOpen.has(k)?projOpen.delete(k):projOpen.add(k);
+      renderProjects();
+    });
+    // an item opens the record it names, at its source
+    card.querySelectorAll(".pc-item").forEach(row=>row.onclick=e=>{
+      e.stopPropagation(); openLinked(pr.links[+row.dataset.i]);
+    });
     grid.appendChild(card);
   });
 }
