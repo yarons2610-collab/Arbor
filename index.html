@@ -5259,15 +5259,15 @@ function editSomaModal(domId,isNew){
     saveSoma(); closeModal(); });
   document.getElementById("d_del").addEventListener("click",()=>{
     const nTasks=dendritesOf(domId).length;
-    if(DB.domains.length<=1){ toast("Can't delete the last soma"); return; }
     if(nTasks||nReads){
       const opts=others.map(d=>`<option value="${d.id}">${esc(d.name||"(unnamed soma)")}</option>`).join("");
+      const canMove=others.length>0;
       modal(`<h3>Delete "${esc(dom.name||"(unnamed soma)")}"</h3>
         <p style="color:var(--ink-dim);font-size:13px;line-height:1.5;margin-top:0">It carries ${nTasks} dendrite${nTasks!==1?"s":""} and ${nReads} reading${nReads!==1?"s":""}. Move them to another soma, or delete the lot.</p>
-        <div class="fld"><label>Reassign to</label><select id="d_reassign">${opts}</select></div>
+${canMove?`<div class="fld"><label>Reassign to</label><select id="d_reassign">${opts}</select></div>`:""}
         <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
           <button class="btn danger" id="d_delall">Delete all of it</button>
-          <button class="btn danger" id="d_delconfirm">Move & delete</button></div>`);
+          ${canMove?`<button class="btn danger" id="d_delconfirm">Move & delete</button>`:""}</div>`);
       document.getElementById("d_delall").addEventListener("click",()=>{
         const kids=dendritesOf(domId);
         const nSp=DB.spines.filter(sp=>kids.some(k=>k.id===sp.dendriteId)).length;
@@ -5277,7 +5277,7 @@ function editSomaModal(domId,isNew){
         deleteSomaEverything(domId);
         closeModal(); toast("Soma deleted with everything on it");
       });
-      document.getElementById("d_delconfirm").addEventListener("click",()=>{
+      if(canMove) document.getElementById("d_delconfirm").addEventListener("click",()=>{
         const to=document.getElementById("d_reassign").value;
         DB.tasks.forEach(t=>{ if(t.domainId===domId)t.domainId=to; });
         DB.readings.forEach(r=>{ if(r.domainId===domId)r.domainId=to; });
