@@ -920,7 +920,25 @@ function migrate(){                       // backfill fields added in later vers
     // leaving them stuck non-deletable from an earlier save. A type a user
     // added themselves (no key match in the seeded set) is left untouched.
     else{ const coreByKey=new Map(DEFAULT_CONFIG.diaryTypes.map(t=>[t.key,!!t.core]));
-      DB.config.diaryTypes.forEach(t=>{ if(coreByKey.has(t.key))t.core=coreByKey.get(t.key); }); }
+      DB.config.diaryTypes.forEach(t=>{ if(coreByKey.has(t.key))t.core=coreByKey.get(t.key); });
+      // Restore any CORE seeded type that isn't in the saved list. The code
+      // references these by key directly (weight drives the whole weight chart,
+      // the calendar readout and the % change), and diaryTypeDef()'s fallback
+      // quietly hands back fields:[] instead — which is how a weight entry ended
+      // up with no grams field to type into. Only core types are restored: a
+      // non-core seeded type the user deleted on purpose stays deleted.
+      const have=new Set(DB.config.diaryTypes.map(t=>t.key));
+      DEFAULT_CONFIG.diaryTypes.forEach(t=>{
+        if(t.core&&!have.has(t.key))
+          DB.config.diaryTypes.push({...t,fields:t.fields.map(f=>({...f}))});
+      });
+      // A core type that survived but lost its fields is equally unusable —
+      // give the seeded fields back when it has none of its own.
+      DB.config.diaryTypes.forEach(t=>{
+        const seed=DEFAULT_CONFIG.diaryTypes.find(x=>x.key===t.key);
+        if(seed&&seed.fields.length&&!(t.fields||[]).length)
+          t.fields=seed.fields.map(f=>({...f}));
+      }); }
   }
   // pull the persisted animal filter selections into the live module-level state —
   // runs on boot and after every JSON import so filters travel with the workspace
@@ -3816,7 +3834,8 @@ function paintDiary(container,a){
       }
       const otherTypes=[...new Set(dayEntries.filter(e=>e.type!=="weight"&&visibleTypes.has(e.type)).map(e=>e.type))];
       const dots=otherTypes.map(t=>`<span class="dg-dot" style="background:${diaryTypeDef(t).color}" title="${diaryTypeDef(t).label}"></span>`).join("");
-      const wv=(wEntry&&visibleTypes.has("weight"))?`<span class="wv">${wEntry.data.grams}${trend}</span>`:"";
+      const wg=wEntry&&wEntry.data?wEntry.data.grams:null;
+      const wv=(wEntry&&visibleTypes.has("weight")&&wg!=null&&wg!=="")?`<span class="wv">${wg}${trend}</span>`:"";
       cells+=`<div class="${cls.join(" ")}" data-date="${ds}" title="${dayEntries.length?dayEntries.length+" entr"+(dayEntries.length===1?"y":"ies"):"click to add an entry"}">
         <span class="dn">${d}</span>${wv}${dots?`<span class="dg-dots">${dots}</span>`:""}</div>`;
     }
