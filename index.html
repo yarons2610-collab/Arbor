@@ -221,6 +221,14 @@
   .pc-item:hover{background:rgba(255,255,255,.05)}
   .pc-iname{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pc-idet{font-family:var(--mono);font-size:9.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lit-list{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .lit-row{display:flex;align-items:center;gap:8px;background:var(--panel);padding:9px 12px}
+  .lit-main{flex:1;min-width:0}
+  .lit-title{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lit-link{font-family:var(--mono);font-size:10px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lit-row button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;flex:0 0 auto}
+  .lit-row button:hover{color:var(--ink)}
+  .lit-row .lit-del:hover{color:var(--overdue)}
   .linklist{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;align-items:center}
   .linkchip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line2);background:var(--panel2);border-radius:20px;padding:2px 4px 2px 9px;font-size:11px;max-width:100%}
   .lk-open{cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}
@@ -534,19 +542,19 @@
     <div class="view hidden wrap" id="timeline"></div>
     <div class="view hidden" id="materials">
       <div class="mat-subtabs" id="matSubTabs">
-        <button class="mat-stab on" data-ms="viruses">Viruses</button>
+        <button class="mat-stab on" data-ms="diarytypes">Entry Types</button>
+        <button class="mat-stab" data-ms="sites">Injection Sites</button>
         <button class="mat-stab" data-ms="inventory">Inventory</button>
         <button class="mat-stab" data-ms="literature">Literature</button>
-        <button class="mat-stab" data-ms="sites">Injection Sites</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
-        <button class="mat-stab" data-ms="diarytypes">Entry Types</button>
+        <button class="mat-stab" data-ms="viruses">Viruses</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview hidden" id="ms-literature"></div>
-      <div class="wrap mat-subview" id="ms-viruses"></div>
+      <div class="wrap mat-subview hidden" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-procedures"></div>
-      <div class="wrap mat-subview hidden" id="ms-diarytypes"></div>
+      <div class="wrap mat-subview" id="ms-diarytypes"></div>
     </div>
     <div class="view hidden wrap" id="reading"></div>
     <div class="view wrap" id="animals"></div>
@@ -1497,9 +1505,9 @@ function render(){
   else if(currentView==="animals")renderAnimals();
 }
 function updateReadNudge(){
-  const n=unreadMandatory().length; const btn=document.getElementById("readNudge");
+  const n=0; const btn=document.getElementById("readNudge");   // literature has no read state any more
   document.getElementById("readCnt").textContent=n; btn.classList.toggle("due",n>0);
-  btn.title=n>0?`${n} mandatory paper${n>1?"s":""} still unread`:"All mandatory reading done";
+  btn.style.display="none";
 }
 document.getElementById("readNudge").addEventListener("click",()=>switchTo("reading"));
 
@@ -1616,8 +1624,7 @@ function linkDetail(l){
   }
   if(l.kind==="reading"){
     const r=DB.readings.find(x=>x.id===l.id); if(!r)return {text:"deleted"};
-    return {text:[r.authors,r.tag,r.status].filter(Boolean).join(" · "),
-            color:r.status==="read"?"var(--ink-faint)":"var(--amber)"};
+    return {text:r.link||""};
   }
   return {text:""};   // an external link is its own label
 }
@@ -2614,7 +2621,7 @@ function addMaterial(name){ name=(name||"").trim(); if(!name)return false; if(!D
 function linkMaterialTask(name,taskId){ const t=taskById(taskId); if(!t)return; t.materials=[...new Set([...(t.materials||[]),name])]; persist(); }
 function unlinkMaterialTask(name,taskId){ const t=taskById(taskId); if(t&&t.materials)t.materials=t.materials.filter(m=>m!==name); persist(); }
 /* ---------- MATERIALS — sub-tabbed: Inventory / Viruses / Injection Sites ---------- */
-let matSubTab = "viruses";
+let matSubTab = "diarytypes";
 let matExpanded = new Set();
 
 // materialNames: ONLY items referenced by tasks or explicitly added to inventory.
@@ -3330,109 +3337,59 @@ function renderDiaryTypesLib(){
 /* ---------- READING (two-track: core canon + capped frontier) ---------- */
 const daysSince=ts=>ts?Math.floor((Date.now()-ts)/864e5):0;
 const frontierQueue=()=>DB.readings.filter(r=>r.track==="frontier"&&r.status!=="read");
+// Literature is a list of links and nothing else. The old version carried tags,
+// a read/unread state, a "frontier cap" and a per-soma filing field; none of it
+// was doing work. Existing records keep those fields untouched in storage — they
+// are simply no longer read or shown.
 function renderReading(hostId){
   const host=document.getElementById(hostId||"reading"); host.innerHTML="";
-  const cfg=DB.config||DEFAULT_CONFIG;
-
-  // header: add button + config line
   const top=document.createElement("div");
-  top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap";
-  top.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">
-      frontier cap ${cfg.frontierCap} · refresh ${esc(cfg.cadence)} · pull-based, no backlog by design</div>
-    <div class="spacer" style="flex:1"></div>
-    <button class="btn accent" id="addReading">＋ Add reading</button>`;
+  top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px";
+  top.innerHTML=`<button class="btn accent" id="addReading" style="margin-left:auto;font-size:12px">＋ Paper</button>`;
   host.appendChild(top);
-  top.querySelector("#addReading").onclick=addReadingModal;
+  top.querySelector("#addReading").onclick=()=>readingModal();
 
-  // keyword panel — drives the frontier searches
-  const kw=document.createElement("div");
-  kw.style.cssText="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:13px 15px;margin-bottom:24px";
-  kw.innerHTML=`<div style="font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:9px">Frontier keywords · define what gets surfaced</div>
-    <div class="taglist" id="kwlist">${(cfg.keywords||[]).map((k,i)=>`<span class="tag">${esc(k)}<button data-i="${i}">✕</button></span>`).join("")}</div>
-    <input id="kwadd" placeholder="add keyword + Enter" style="margin-top:9px;width:100%;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:8px;padding:7px 10px;font-family:inherit;font-size:12.5px">`;
-  host.appendChild(kw);
-  kw.querySelector("#kwlist").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;cfg.keywords.splice(+b.dataset.i,1);persist();renderReading();});
-  kw.querySelector("#kwadd").addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.value.trim()){cfg.keywords.push(e.target.value.trim());persist();renderReading();}});
-
-  // ---- FRONTIER ----
-  const q=frontierQueue(), full=q.length>=cfg.frontierCap;
-  const fSec=document.createElement("div"); fSec.className="read-sec";
-  fSec.innerHTML=`<h3 style="color:var(--cyan)">⇢ Frontier
-      <span style="font-family:var(--mono);font-size:12px;font-weight:600;color:${full?"var(--overdue)":"var(--ink-faint)"}">queue ${q.length}/${cfg.frontierCap}${full?" · full":""}</span></h3>
-    <p class="sub">Recent papers, pulled in as slots free. ${full?"Queue is full — mark one read to open a slot.":"Mark one read and the next can be added."} Claude refills this from a live literature search when you supply the JSON.</p>`;
-  const frontierAll=DB.readings.filter(r=>r.track==="frontier");
-  if(!frontierAll.length){ const e=document.createElement("div"); e.className="empty"; e.style.padding="18px 0"; e.textContent="frontier empty — bring the JSON and ask for a refresh"; fSec.appendChild(e); }
-  frontierAll.filter(r=>r.status!=="read").forEach(r=>fSec.appendChild(readingCard(r,cfg)));
-  const fRead=frontierAll.filter(r=>r.status==="read");
-  if(fRead.length){ const h=document.createElement("div"); h.style.cssText="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:10px 0 8px"; h.textContent=`cleared (${fRead.length})`; fSec.appendChild(h); fRead.forEach(r=>fSec.appendChild(readingCard(r,cfg))); }
-  host.appendChild(fSec);
-
-  // ---- CORE / CANON ----
-  const core=DB.readings.filter(r=>r.track==="core");
-  const cWrap=document.createElement("div"); cWrap.className="read-sec";
-  cWrap.innerHTML=`<h3 style="color:var(--gold)">★ Core canon
-      <span style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);font-weight:400">(${core.filter(r=>r.status==="read").length}/${core.length} read)</span></h3>
-    <p class="sub">The stable foundation per aim — kept as reference even once read. Grows rarely and deliberately.</p>`;
-  [["mandatory","Mandatory"],["supplementary","Supplementary"]].forEach(([tag,label])=>{
-    const list=core.filter(r=>r.tag===tag); if(!list.length)return;
-    const sub=document.createElement("div"); sub.style.cssText="font-family:var(--mono);font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-faint);margin:14px 0 8px";
-    sub.textContent=label; cWrap.appendChild(sub);
-    list.forEach(r=>cWrap.appendChild(readingCard(r,cfg)));
-  });
-  host.appendChild(cWrap);
-}
-function readingCard(r,cfg){
-  cfg=cfg||DB.config||DEFAULT_CONFIG;
-  const dom=domById(r.domainId);
-  const stale=r.track==="frontier"&&r.status==="unread"&&daysSince(r.added)>cfg.staleDays;
-  const card=document.createElement("div"); card.className=`rcard ${r.tag==="mandatory"?"mand":""} ${r.status==="read"?"read":""}`;
-  const nextStat={unread:"reading",reading:"read",read:"unread"};
-  card.innerHTML=`
-    <div class="rstat"><button class="rcyc ${r.status}">${r.status}</button></div>
-    <div class="rbody">
-      <div class="rt">${esc(r.title)}</div>
-      <div class="rmeta">${esc(r.authors||"")}${r.year?" · "+r.year:""}${r.venue?" · "+esc(r.venue):""}</div>
-      ${r.note?`<div class="rnote">${esc(r.note)}</div>`:""}
-      <div class="rtags">
-        <span class="rtag">${r.tag==="mandatory"?"mandatory":"supplementary"}</span>
-        ${dom?`<span class="rtag" style="border-color:${dom.color};color:${dom.color}">${esc(dom.name)}</span>`:""}
-        ${r.track==="frontier"?`<span class="rtag" style="border-color:var(--cyan);color:var(--cyan)">added ${daysSince(r.added)}d ago</span>`:""}
-        ${stale?`<span class="rtag" style="border-color:var(--overdue);color:var(--overdue)">stale · prune?</span>`:""}
-        ${r.link?`<a class="rlink" href="${escAttr(r.link)}" target="_blank" rel="noopener">open ↗</a>`:""}
+  if(!DB.readings.length){
+    host.appendChild(Object.assign(document.createElement("div"),
+      {className:"empty",textContent:"Nothing here yet. Add a paper with a link to wherever it lives."}));
+    return;
+  }
+  const list=document.createElement("div"); list.className="lit-list"; host.appendChild(list);
+  [...DB.readings].sort((a,b)=>(a.title||"").localeCompare(b.title||"")).forEach(r=>{
+    const row=document.createElement("div"); row.className="lit-row";
+    row.innerHTML=`<div class="lit-main">
+        <div class="lit-title">${esc(r.title||"(untitled)")}</div>
+        ${r.link?`<div class="lit-link">${esc(r.link)}</div>`:""}
       </div>
-    </div>
-    <span class="rx" title="remove">✕</span>`;
-  card.querySelector(".rcyc").addEventListener("click",()=>{ r.status=nextStat[r.status]; persist(); render(); });
-  card.querySelector(".rx").addEventListener("click",()=>{ if(confirm("Remove this reading?")){ DB.readings=DB.readings.filter(x=>x.id!==r.id); persist(); render(); } });
-  return card;
-}
-function addReadingModal(){
-  const cfg=DB.config||DEFAULT_CONFIG;
-  modal(`<h3>Add reading</h3>
-    <div class="fld"><label>Title</label><input id="r_title" autofocus></div>
-    <div class="fld"><label>Authors</label><input id="r_auth" placeholder="e.g. Otor et al."></div>
-    <div class="drow"><div class="fld" style="width:110px"><label>Year</label><input id="r_year" type="number"></div>
-      <div class="fld" style="flex:1"><label>Venue</label><input id="r_venue" placeholder="Journal vol:pp"></div></div>
-    <div class="fld"><label>Link / DOI</label><input id="r_link" placeholder="https://doi.org/…"></div>
-    <div class="drow">
-      <div class="fld" style="flex:1"><label>Track</label>
-        <select id="r_track"><option value="core" selected>Core (reference shelf)</option><option value="frontier">Frontier (capped queue)</option></select></div>
-      <div class="fld" style="flex:1"><label>Priority</label>
-        <select id="r_tag"><option value="mandatory">Mandatory</option><option value="supplementary" selected>Supplementary</option></select></div></div>
-    <div class="fld"><label>Relates to (aim)</label>
-      <select id="r_dom"><option value="">—</option>${DB.domains.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("")}</select></div>
-    <div class="fld"><label>Why it matters (note)</label><textarea id="r_note"></textarea></div>
-    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="r_create">Add</button></div>`);
-  document.getElementById("r_create").addEventListener("click",()=>{
-    const title=document.getElementById("r_title").value.trim(); if(!title){toast("Title needed");return;}
-    const track=document.getElementById("r_track").value;
-    if(track==="frontier"&&frontierQueue().length>=cfg.frontierCap){ toast(`Frontier queue full (${cfg.frontierCap}) — clear one first`); return; }
-    DB.readings.push({id:uid("r_"),title,authors:document.getElementById("r_auth").value.trim(),
-      year:+document.getElementById("r_year").value||"",venue:document.getElementById("r_venue").value.trim(),
-      link:document.getElementById("r_link").value.trim(),tag:document.getElementById("r_tag").value,track,added:Date.now(),
-      domainId:document.getElementById("r_dom").value||null,status:"unread",note:document.getElementById("r_note").value.trim()});
-    persist(); closeModal(); render(); toast("Reading added");
+      ${r.link?`<button class="lit-open" title="Open the link">↗</button>`:""}
+      <button class="lit-edit" title="Edit">✎</button>
+      <button class="lit-del" title="Delete">✕</button>`;
+    const open=row.querySelector(".lit-open");
+    if(open)open.onclick=()=>window.open(/^https?:\/\//i.test(r.link)?r.link:"https://"+r.link,"_blank","noopener");
+    row.querySelector(".lit-edit").onclick=()=>readingModal(r.id);
+    row.querySelector(".lit-del").onclick=()=>{
+      if(!confirm(`Delete "${r.title||"this paper"}"?`))return;
+      DB.readings=DB.readings.filter(x=>x.id!==r.id); persist(); renderReading(hostId); toast("Paper deleted"); };
+    list.appendChild(row);
   });
+}
+function readingModal(id){
+  const r=id?DB.readings.find(x=>x.id===id):null;
+  modal(`<h3>${r?"Paper":"New paper"}</h3>
+    <div class="fld"><label>Title</label><input id="r_title" value="${escAttr(r?r.title:"")}" autofocus></div>
+    <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(r?r.link:"")}" placeholder="URL, DOI, or a path on the lab drive"></div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn accent" id="r_save">Save</button></div>`);
+  document.getElementById("r_save").onclick=()=>{
+    const title=document.getElementById("r_title").value.trim();
+    if(!title){ toast("Title can't be empty"); return; }
+    const link=document.getElementById("r_link").value.trim();
+    if(r){ r.title=title; r.link=link; }
+    else DB.readings.push({id:uid("r_"),title,link,added:Date.now()});
+    persist(); closeModal();
+    if(currentView==="materials")renderMaterials(); else renderReading();
+    toast(r?"Paper updated":"Paper added");
+  };
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
