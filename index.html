@@ -233,10 +233,15 @@
   .plan-title{font-family:var(--disp);font-size:19px;margin:0}
   .pc-steps{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);padding:2px 0 6px}
   .step-row{display:flex;align-items:center;gap:6px;padding:3px 0}
-  .step-caret,.step-state,.step-add,.step-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:1px 6px;font-size:11px;cursor:pointer;flex:0 0 auto}
+  .step-caret,.step-edit,.step-add,.step-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:1px 6px;font-size:11px;cursor:pointer;flex:0 0 auto}
+  .step-tick{color:var(--gcamp);font-size:11px;flex:0 0 auto}
+  .grp-plan{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:6px 0}
+  .gp-lab{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--ink-faint)}
+  .gp-n{width:62px;font-size:11.5px;padding:2px 6px}
+  .gp-type{flex:1;min-width:130px;font-size:11.5px;padding:2px 6px}
+  .grp-need{font-family:var(--mono);font-size:11px;color:var(--amber)}
+  .grp-need.ok{color:var(--gcamp)}
   .step-caret:disabled{opacity:.3;cursor:default;border-color:transparent;background:transparent}
-  .step-state.st-running{color:var(--amber);border-color:var(--amber)}
-  .step-state.st-done{color:var(--gcamp);border-color:var(--gcamp)}
   .step-name{flex:1;min-width:0;font-size:12.5px;background:transparent;border:1px solid transparent;border-radius:6px;padding:3px 5px;color:var(--ink)}
   .step-name:focus{border-color:var(--line2);background:var(--panel2);outline:none}
   .step-when{flex:0 0 auto;font-size:11px!important;padding:3px 8px!important}
@@ -1118,12 +1123,16 @@ function migrate(){                       // backfill fields added in later vers
     if(!Array.isArray(pr.links)) pr.links=[];
     if(pr.notes==null)pr.notes="";
     if(pr.question==null)pr.question="";
+    if(pr.hypothesis==null)pr.hypothesis="";
+    if(pr.exclusions==null)pr.exclusions="";
+    if(!pr.groupPlan||typeof pr.groupPlan!=="object")pr.groupPlan={};
     if(!Array.isArray(pr.steps))pr.steps=[];
     // projectId is carried on the step so the calendar can colour it and jump
     // back to its plan without walking every project to find its owner
     pr.steps.forEach(st=>{ st.projectId=pr.id;
       if(!Array.isArray(st.links))st.links=[];
-      if(!st.status)st.status="planned"; });
+      if(st.expected==null)st.expected="";
+      if(st.outcome==null)st.outcome=""; });
   });
   // experiment/control lives on the animal: it is a fact about the mouse, and it
   // shows up wherever the mouse does rather than only inside one project
@@ -1559,8 +1568,8 @@ function upcomingNotifications(){
   const today=todayDateStr();
   const taskHorizon=addDays(today,NOTIFY_TASK_LOOKAHEAD_DAYS);
   const tasks=allSteps()
-    .filter(x=>x.deadline&&x.status!=="done"&&x.deadline.slice(0,10)<=taskHorizon&&projById(x.projectId))
-    .map(t=>({t,overdue:dueClass(t.deadline,t.status,t.endDate)==="overdue"}))
+    .filter(x=>x.deadline&&!stepDone(x)&&x.deadline.slice(0,10)<=taskHorizon&&projById(x.projectId))
+    .map(t=>({t,overdue:dueClass(t.deadline,stepDone(t)?"done":"",t.endDate)==="overdue"}))
     .sort((x,y)=>x.t.deadline.localeCompare(y.t.deadline));
   const diaryHorizon=addDays(today,NOTIFY_DIARY_LOOKAHEAD_DAYS);
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(d=>d.timeline).map(d=>d.key));
@@ -1704,11 +1713,18 @@ function projCatsHTML(pr){
     </div>`;
   }).join("");
 }
-const STEP_STATES=[["planned","Planned"],["running","Running"],["done","Done"]];
+// No status field. A step is finished when you have written down what happened —
+// which is the thing worth recording anyway, and means nothing has to be ticked
+// twice. Everything downstream (overdue styling, the badge, the .ics export)
+// reads this instead of a state.
+const stepDone=st=>!!String(st.outcome||"").trim();
+// the controls people actually run in this work; the field stays free text
+const CONTROL_TYPES=["fluorophore-only (e.g. GFP)","no-virus","vehicle / saline","CNO in non-DREADD",
+  "sham stimulation","light-off","contralateral hemisphere","littermate","scrambled / non-targeting"];
 const stepsUnder=(pr,parentId)=>(pr.steps||[]).filter(x=>(x.parentId||null)===(parentId||null));
 function addStep(pr,parentId){
-  const st={id:uid("st_"),projectId:pr.id,parentId:parentId||null,title:"",detail:"",
-            status:"planned",deadline:null,endDate:null,duration:null,links:[]};
+  const st={id:uid("st_"),projectId:pr.id,parentId:parentId||null,title:"",
+            expected:"",outcome:"",deadline:null,endDate:null,duration:null,links:[]};
   (pr.steps=pr.steps||[]).push(st); persist(); return st;
 }
 function deleteStep(pr,id){
@@ -1722,8 +1738,37 @@ function stepById(id){ return allSteps().find(x=>x.id===id); }
 function stepColor(st){ const pr=projById(st.projectId); return pr?pr.color:"#556"; }
 function addProject(){
   const pr={id:uid("pj_"),name:"",color:DOMAIN_PALETTE[DB.projects.length%DOMAIN_PALETTE.length],
-            notes:"",question:"",links:[],steps:[],created:Date.now()};
+            notes:"",question:"",hypothesis:"",exclusions:"",groupPlan:{},links:[],steps:[],created:Date.now()};
   DB.projects.push(pr); persist(); editProjectModal(pr.id,true);
+}
+// a step's span, shown on its date button
+function stepWhenLabel(st){
+  if(!st.deadline)return "📅 when";
+  const a=fmtWhenFull(st.deadline);
+  return st.endDate?`${a} → ${fmtWhenFull(st.endDate)}`:a;
+}
+function stepModal(pr,st,after){
+  modal(`<h3>Step</h3>
+    <div class="fld"><label>Name</label><input id="sm_name" value="${escAttr(st.title)}" autofocus></div>
+    <div class="drow">
+      <div class="fld" style="flex:1"><label>Start</label>
+        <button type="button" id="sm_start" class="datebtn ${st.deadline?"":"datebtn-empty"}">${st.deadline?fmtWhenFull(st.deadline):"📅 start"}</button></div>
+      <div class="fld" style="flex:1"><label>End</label>
+        <button type="button" id="sm_end" class="datebtn ${st.endDate?"":"datebtn-empty"}">${st.endDate?fmtWhenFull(st.endDate):"📅 end"}</button></div>
+    </div>
+    <div class="fld"><label>Expected result</label>
+      <textarea id="sm_exp" rows="3" placeholder="what you expect to see, and what would tell you the hypothesis is wrong">${esc(st.expected||"")}</textarea></div>
+    <div class="fld"><label>What happened</label>
+      <textarea id="sm_out" rows="3" placeholder="the result, including a negative one — writing this marks the step finished">${esc(st.outcome||"")}</textarea></div>
+    <div class="actions"><button class="btn accent" id="sm_save">Done</button></div>`,{wide:true});
+  bindDateButton(document.getElementById("sm_start"), ()=>st.deadline||"", v=>{ st.deadline=v||null; persist(); });
+  bindDateButton(document.getElementById("sm_end"),   ()=>st.endDate||"",  v=>{ st.endDate=v||null;  persist(); });
+  document.getElementById("sm_save").onclick=()=>{
+    st.title=document.getElementById("sm_name").value;
+    st.expected=document.getElementById("sm_exp").value;
+    st.outcome=document.getElementById("sm_out").value;
+    persist(); closeModal(); if(after)after();
+  };
 }
 let projOpenId=null;                 // project whose plan is open, or null
 const openSteps=new Set();           // which step subtrees are expanded
@@ -1742,8 +1787,14 @@ function renderProjectPlan(id){
 
   const q=document.createElement("div"); q.className="fld"; host.appendChild(q);
   q.innerHTML=`<label>Research question</label>
-    <textarea id="pl_q" rows="3" placeholder="the question this project is built to answer">${esc(pr.question||"")}</textarea>`;
+    <textarea id="pl_q" rows="2" placeholder="the question this project is built to answer">${esc(pr.question||"")}</textarea>
+    <label style="margin-top:12px">Hypothesis</label>
+    <textarea id="pl_h" rows="2" placeholder="what you expect to find, and what would refute it">${esc(pr.hypothesis||"")}</textarea>
+    <label style="margin-top:12px">Exclusion criteria</label>
+    <textarea id="pl_x" rows="2" placeholder="what makes an animal or a session unusable — decided now, not after the data">${esc(pr.exclusions||"")}</textarea>`;
   q.querySelector("#pl_q").addEventListener("input",e=>{ pr.question=e.target.value; persist(); });
+  q.querySelector("#pl_h").addEventListener("input",e=>{ pr.hypothesis=e.target.value; persist(); });
+  q.querySelector("#pl_x").addEventListener("input",e=>{ pr.exclusions=e.target.value; persist(); });
 
   // ---- steps ----
   const sw=document.createElement("div"); sw.className="fld"; host.appendChild(sw);
@@ -1759,9 +1810,10 @@ function renderProjectPlan(id){
       const kids=stepsUnder(pr,st.id), open=openSteps.has(st.id);
       return `<div class="step-row" data-id="${st.id}" style="margin-left:${depth*18}px">
         <button class="step-caret" ${kids.length?"":"disabled"}>${kids.length?(open?"▾":"▸"):"·"}</button>
-        <button class="step-state st-${st.status}" title="${st.status}">${{planned:"○",running:"◐",done:"●"}[st.status]}</button>
         <input class="step-name" value="${escAttr(st.title)}" placeholder="what happens in this step">
-        <button type="button" class="datebtn step-when ${st.deadline?"":"datebtn-empty"}">${st.deadline?fmtWhenFull(st.deadline):"📅 when"}</button>
+        ${stepDone(st)?`<span class="step-tick" title="has an outcome">✓</span>`:""}
+        <button type="button" class="datebtn step-when ${st.deadline?"":"datebtn-empty"}">${st.deadline?stepWhenLabel(st):"📅 when"}</button>
+        <button class="step-edit" title="Expected result, outcome, end date">✎</button>
         <button class="step-add" title="Add a nested step">＋</button>
         <button class="step-del" title="Delete this step">✕</button>
       </div>
@@ -1776,9 +1828,7 @@ function renderProjectPlan(id){
       const st=(pr.steps||[]).find(x=>x.id===r.dataset.id); if(!st)return;
       r.querySelector(".step-name").addEventListener("input",e=>{ st.title=e.target.value; persist(); });
       r.querySelector(".step-caret").onclick=()=>{ openSteps.has(st.id)?openSteps.delete(st.id):openSteps.add(st.id); drawSteps(); };
-      r.querySelector(".step-state").onclick=()=>{
-        const i=STEP_STATES.findIndex(x=>x[0]===st.status);
-        st.status=STEP_STATES[(i+1)%STEP_STATES.length][0]; persist(); drawSteps(); };
+      r.querySelector(".step-edit").onclick=()=>stepModal(pr,st,()=>renderProjectPlan(id));
       bindDateButton(r.querySelector(".step-when"), ()=>st.deadline||"", v=>{ st.deadline=v||null; persist(); drawSteps(); });
       r.querySelector(".step-add").onclick=()=>{ addStep(pr,st.id); openSteps.add(st.id); drawSteps(); };
       r.querySelector(".step-del").onclick=()=>{
@@ -1802,13 +1852,23 @@ function renderProjectPlan(id){
   if(!cohorts.length){
     gw.innerHTML=`<label>Groups</label><div style="font-size:11.5px;color:var(--ink-faint)">Link a cohort to this project to split it into experiment and control.</div>`;
   }else{
-    gw.innerHTML=`<label>Groups</label><div id="pl_groups"></div>`;
+    gw.innerHTML=`<label>Groups</label><div id="pl_groups"></div>
+      <datalist id="pl_ctltypes">${CONTROL_TYPES.map(t=>`<option value="${escAttr(t)}">`).join("")}</datalist>`;
     const drawGroups=()=>{
       document.getElementById("pl_groups").innerHTML=cohorts.map(cn=>{
         const animals=DB.animals.filter(a=>a.cohort===cn);
         const nExp=animals.filter(a=>a.group==="experiment").length, nCtl=animals.filter(a=>a.group==="control").length;
+        const gp=pr.groupPlan[cn]||{};
+        const need=(planned,actual)=>planned?`<span class="grp-need ${actual>=planned?"ok":""}">${actual}/${planned}</span>`:`<span class="grp-need">${actual}</span>`;
         return `<div class="grp-block"><div class="grp-head">${esc(cn)}
-            <span class="grp-tally">${nExp} exp · ${nCtl} ctrl · ${animals.length-nExp-nCtl} unassigned</span></div>
+            <span class="grp-tally">${animals.length-nExp-nCtl} unassigned</span></div>
+          <div class="grp-plan" data-c="${escAttr(cn)}">
+            <span class="gp-lab">Experiment</span>${need(+gp.nExp||0,nExp)}
+            <input class="gp-n" data-g="nExp" type="number" min="0" placeholder="planned" value="${gp.nExp!=null?gp.nExp:""}">
+            <span class="gp-lab">Control</span>${need(+gp.nCtl||0,nCtl)}
+            <input class="gp-n" data-g="nCtl" type="number" min="0" placeholder="planned" value="${gp.nCtl!=null?gp.nCtl:""}">
+            <input class="gp-type" list="pl_ctltypes" placeholder="kind of control" value="${escAttr(gp.controlType||"")}">
+          </div>
           ${animals.map(a=>`<div class="grp-row" data-a="${a.id}">
             <span class="grp-name">${esc(a.name)}</span>
             <div class="seg grp-seg">${[["experiment","Exp"],["control","Ctrl"],["","—"]].map(([v,l])=>
@@ -1816,6 +1876,13 @@ function renderProjectPlan(id){
           </div>`).join("")||`<div style="font-size:11.5px;color:var(--ink-faint)">No animals in this cohort yet.</div>`}
         </div>`;
       }).join("");
+      document.getElementById("pl_groups").querySelectorAll(".grp-plan").forEach(pl=>{
+        const cn=pl.dataset.c;
+        const store=()=>{ pr.groupPlan[cn]=pr.groupPlan[cn]||{}; return pr.groupPlan[cn]; };
+        pl.querySelectorAll(".gp-n").forEach(inp=>inp.addEventListener("change",e=>{
+          store()[inp.dataset.g]=e.target.value===""?null:Math.max(0,+e.target.value); persist(); drawGroups(); }));
+        pl.querySelector(".gp-type").addEventListener("input",e=>{ store().controlType=e.target.value; persist(); });
+      });
       document.getElementById("pl_groups").querySelectorAll(".grp-row").forEach(r=>{
         r.querySelectorAll(".grp-seg button").forEach(b=>b.onclick=()=>{
           const a=DB.animals.find(x=>x.id===r.dataset.a); if(!a)return;
@@ -1856,8 +1923,8 @@ function renderProjects(){
         <div class="pc-head"><span class="pc-name">${esc(pr.name||"(unnamed project)")}</span>
           <button class="pc-edit" title="Edit this project">✎</button></div>
         ${pr.question?`<div class="pc-note">${esc(pr.question)}</div>`:(pr.notes?`<div class="pc-note">${esc(pr.notes)}</div>`:"")}
-        ${(()=>{const n=(pr.steps||[]).length,d=(pr.steps||[]).filter(x=>x.status==="done").length;
-          return n?`<div class="pc-steps">${d}/${n} steps done</div>`:"";})()}
+        ${(()=>{const n=(pr.steps||[]).length,d=(pr.steps||[]).filter(stepDone).length;
+          return n?`<div class="pc-steps">${n} step${n!==1?"s":""}${d?` · ${d} with an outcome`:""}</div>`:"";})()}
         ${projCatsHTML(pr)}
       </div>`;
     card.querySelector(".pc-edit").onclick=e=>{ e.stopPropagation(); editProjectModal(pr.id); };
@@ -2349,6 +2416,18 @@ function renderMonthView(host){
   const byDay={};
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
     if(!keys.has(e.type))return; (byDay[e.date]=byDay[e.date]||[]).push({a,e}); }));
+  // project steps belong here too — a month is exactly the scale at which you
+  // plan them, and a step that spans days shows on every day it covers
+  allSteps().forEach(st=>{
+    if(!st.deadline||!projById(st.projectId))return;
+    const d0=whenDate(st.deadline); d0.setHours(0,0,0,0);
+    const d1=st.endDate?new Date(whenDate(st.endDate).setHours(0,0,0,0)):new Date(d0);
+    const pad=n=>String(n).padStart(2,"0");
+    for(let d=new Date(d0); d<=d1; d.setDate(d.getDate()+1)){
+      const k=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+      (byDay[k]=byDay[k]||[]).push({st});
+    }
+  });
   const today0=todayDateStr();
   for(let i=0;i<42;i++){
     const day=new Date(gridStart); day.setDate(gridStart.getDate()+i);
@@ -2357,7 +2436,16 @@ function renderMonthView(host){
     const cell=document.createElement("div");
     cell.className="month-cell"+(day.getMonth()!==base.getMonth()?" out":"")+(day.getTime()===today.getTime()?" today":"");
     cell.innerHTML=`<div class="mc-num">${day.getDate()}</div>`;
-    (byDay[key]||[]).forEach(({a,e})=>{
+    (byDay[key]||[]).forEach(({a,e,st})=>{
+      if(st){
+        const col=stepColor(st);
+        const chip=document.createElement("div"); chip.className="cal-evt";
+        chip.style.cssText=`background:${col}22;border-left:3px solid ${col};color:${col}`;
+        chip.innerHTML=`<div class="et">${esc(st.title||"(unnamed step)")}</div>`;
+        chip.title=`${(projById(st.projectId)||{}).name||""} — ${st.title||""}`;
+        chip.onclick=()=>openStepInPlan(st.id);
+        cell.appendChild(chip); return;
+      }
       const def=diaryTypeDef(e.type);
       const chip=document.createElement("div"); chip.className="cal-evt";
       chip.style.cssText=`background:${def.color}22;border-left:3px solid ${def.color};color:${def.color}`;
@@ -2455,7 +2543,7 @@ function renderTimeline(){
     // a timed task whose endDate falls on a different day is a genuine multi-day span, so it still gets a banner chip.
     if(hasTime(t.deadline)&&tEnd.getTime()===tStart.getTime()) return;
     const col=stepColor(t);
-    const overdue=dueClass(t.deadline,t.status,t.endDate)==="overdue";
+    const overdue=dueClass(t.deadline,stepDone(t)?"done":"",t.endDate)==="overdue";
     for(let d=0;d<NCOL;d++){
       const day=new Date(ws); day.setDate(ws.getDate()+d);
       if(day<tStart||day>tEnd) continue;
@@ -2599,7 +2687,7 @@ function renderTimeline(){
       const di=[0,1,2,3,4,5,6].find(d=>{ const wd=new Date(ws); wd.setDate(ws.getDate()+d); return wd.getTime()===day.getTime(); });
       if(di===undefined) return;
       const col=stepColor(t);
-      const overdue=dueClass(t.deadline,t.status,t.endDate)==="overdue";
+      const overdue=dueClass(t.deadline,stepDone(t)?"done":"",t.endDate)==="overdue";
       const mins=dt.getMinutes(); const topPct=(mins/60)*100;
       // duration: use t.duration (minutes) if set, else endDate span, else 60 min default
       let durationMins=t.duration||60;
@@ -5684,7 +5772,7 @@ function deleteSomaEverything(domId){
 // used to only read DB.tasks, which went stale the moment procedures moved
 // into the diary, so the .ics export silently dropped every procedure.
 document.getElementById("expCal").addEventListener("click",()=>{
-  const due=allSteps().filter(x=>x.deadline&&x.status!=="done"&&projById(x.projectId));
+  const due=allSteps().filter(x=>x.deadline&&!stepDone(x)&&projById(x.projectId));
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
   const diaryEvents=[];
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{ if(timelineTypeKeys.has(e.type)) diaryEvents.push({a,e}); }));
