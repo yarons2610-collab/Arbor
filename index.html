@@ -241,6 +241,27 @@
   .gp-type{flex:1;min-width:130px;font-size:11.5px;padding:2px 6px}
   .grp-need{font-family:var(--mono);font-size:11px;color:var(--amber)}
   .grp-need.ok{color:var(--gcamp)}
+  .pc-empty{font-size:11.5px;color:var(--ink-faint);padding:5px 0}
+  .pc-stats{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--ink-dim);padding:6px 0}
+  .pc-stats b{font-family:var(--mono);color:var(--ink);font-weight:600}
+  .pc-next{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);padding:0 0 8px}
+  .pc-next span{color:var(--amber)}
+  .exp-card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:8px}
+  .exp-card.done{opacity:.72}
+  .exp-top{display:flex;align-items:center;gap:8px}
+  .exp-caret{border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:10px;padding:0 2px;flex:0 0 auto}
+  .exp-caret:disabled{opacity:.35;cursor:default}
+  .exp-name{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+  .exp-name:hover{color:var(--ink)}
+  .exp-tick{color:var(--gcamp);font-size:11px;flex:0 0 auto}
+  .exp-open,.exp-sub{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);border-radius:6px;padding:2px 9px;font-size:11px;cursor:pointer;flex:0 0 auto}
+  .exp-open:hover,.exp-sub:hover{color:var(--ink)}
+  .exp-desc{font-size:12px;color:var(--ink-dim);line-height:1.45;margin-top:5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .exp-meta{display:flex;flex-wrap:wrap;gap:10px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:6px}
+  .exp-meta .em-date{color:var(--ink-dim)}
+  .exp-meta .em-arms{color:var(--amber)}
+  .exp-meta .em-arms.ok{color:var(--gcamp)}
+  .grp-sub{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto}
   .step-caret:disabled{opacity:.3;cursor:default;border-color:transparent;background:transparent}
   .step-name{flex:1;min-width:0;font-size:12.5px;background:transparent;border:1px solid transparent;border-radius:6px;padding:3px 5px;color:var(--ink)}
   .step-name:focus{border-color:var(--line2);background:var(--panel2);outline:none}
@@ -1123,16 +1144,28 @@ function migrate(){                       // backfill fields added in later vers
     if(!Array.isArray(pr.links)) pr.links=[];
     if(pr.notes==null)pr.notes="";
     if(pr.question==null)pr.question="";
-    if(pr.hypothesis==null)pr.hypothesis="";
-    if(pr.exclusions==null)pr.exclusions="";
-    if(!pr.groupPlan||typeof pr.groupPlan!=="object")pr.groupPlan={};
     if(!Array.isArray(pr.steps))pr.steps=[];
+    // Hypothesis, exclusions and arms belong to an experiment, not to a project —
+    // a project runs several. Any text written at project level before that is
+    // folded into the notes rather than silently orphaned.
+    if(!pr._designMoved){
+      const carry=[["Hypothesis",pr.hypothesis],["Exclusion criteria",pr.exclusions]]
+        .filter(([,v])=>String(v||"").trim()).map(([k,v])=>`${k}: ${v}`);
+      if(carry.length) pr.notes=[pr.notes,...carry].filter(Boolean).join("\n\n");
+      pr._designMoved=true;
+    }
     // projectId is carried on the step so the calendar can colour it and jump
     // back to its plan without walking every project to find its owner
     pr.steps.forEach(st=>{ st.projectId=pr.id;
       if(!Array.isArray(st.links))st.links=[];
+      if(st.description==null)st.description="";
+      if(st.hypothesis==null)st.hypothesis="";
+      if(st.exclusions==null)st.exclusions="";
       if(st.expected==null)st.expected="";
-      if(st.outcome==null)st.outcome=""; });
+      if(st.outcome==null)st.outcome="";
+      if(!st.plan||typeof st.plan!=="object")st.plan={nExp:null,nCtl:null,controlType:""};
+      if(!st.groups||typeof st.groups!=="object")st.groups={};
+    });
   });
   // experiment/control lives on the animal: it is a fact about the mouse, and it
   // shows up wherever the mouse does rather than only inside one project
@@ -1621,12 +1654,12 @@ function openNotificationsModal(){
 document.getElementById("notifyNudge").addEventListener("click",openNotificationsModal);
 
 /* ---------- PROJECTS ----------
-   A project invents nothing. It has a name, a colour, a note, and links to
-   records that already live in the other tabs — animals, cohorts, viruses,
-   injection sites, inventory, procedure templates, literature, procedures
-   actually done, and anything external. Nothing is copied in: every label is
-   resolved live from the source record, and every chip opens that source for
-   editing, so a project can never drift out of date with the thing it names. */
+   A project is a research question and the series of experiments run to answer
+   it. Each step is one experiment and carries its own design — what it is, what
+   it predicts, which animals are in which arm, what would disqualify one, and
+   what actually happened. The project itself holds the question and whatever is
+   shared across all of them.
+   Nothing is copied in: every linked record is resolved live from its source. */
 const projById=id=>DB.projects.find(p=>p.id===id);
 const LINK_GROUPS=[
   {kind:"animal",   icon:"🐁", label:"Animals"},
@@ -1639,6 +1672,17 @@ const LINK_GROUPS=[
 ];
 const TERM_LABEL={alive:"alive",sacrificed:"sacrificed",early_death:"early death",excluded:"excluded"};
 const TERM_COLOR={alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"};
+const CONTROL_TYPES=["fluorophore-only (e.g. GFP)","no-virus","vehicle / saline","CNO in non-DREADD",
+  "sham stimulation","light-off","contralateral hemisphere","littermate","scrambled / non-targeting"];
+
+function linkName(l){
+  if(l.kind==="animal"){ const x=DB.animals.find(v=>v.id===l.id); return x?x.name:"(deleted animal)"; }
+  if(l.kind==="template"){ const x=(DB.config.procedureLib||[]).find(v=>v.id===l.id); return x?(x.name||"(unnamed)"):"(deleted)"; }
+  if(l.kind==="procedure") return diaryTypeDef(l.type).label;
+  if(l.kind==="reading"){ const x=DB.readings.find(v=>v.id===l.id); return x?x.title:"(deleted paper)"; }
+  if(l.kind==="url") return l.url||"";
+  return l.id||"";
+}
 // Read live off the source record every time, so a card can never show a state
 // the thing itself has moved on from.
 function linkDetail(l){
@@ -1675,28 +1719,16 @@ function linkDetail(l){
     const r=DB.readings.find(x=>x.id===l.id); if(!r)return {text:"deleted"};
     return {text:r.link||""};
   }
-  return {text:""};   // an external link is its own label
+  return {text:""};
 }
-// The primary label alone, without the icon and without the secondary facts —
-// linkLabel() packs animal+date into one string, which read as a duplicate once
-// the detail line sat underneath it.
-function linkName(l){
-  if(l.kind==="animal"){ const x=DB.animals.find(v=>v.id===l.id); return x?x.name:"(deleted animal)"; }
-  if(l.kind==="template"){ const x=(DB.config.procedureLib||[]).find(v=>v.id===l.id); return x?(x.name||"(unnamed)"):"(deleted)"; }
-  if(l.kind==="procedure") return diaryTypeDef(l.type).label;
-  if(l.kind==="reading"){ const x=DB.readings.find(v=>v.id===l.id); return x?x.title:"(deleted paper)"; }
-  if(l.kind==="url") return l.url||"";
-  return l.id||"";
-}
-// which category rows are open, per project — survives a re-render
-const projOpen=new Set();
-function projCatsHTML(pr){
+const projOpen=new Set();          // which link categories are open, per owner
+function projCatsHTML(owner,keyPrefix){
   const by={};
-  (pr.links||[]).forEach((l,i)=>{ (by[l.kind]=by[l.kind]||[]).push({l,i}); });
+  (owner.links||[]).forEach((l,i)=>{ (by[l.kind]=by[l.kind]||[]).push({l,i}); });
   const groups=LINK_GROUPS.filter(g=>by[g.kind]);
-  if(!groups.length)return `<div class="pc-counts"><span style="color:var(--ink-faint)">nothing linked yet</span></div>`;
+  if(!groups.length)return `<div class="pc-empty">nothing linked yet</div>`;
   return groups.map(g=>{
-    const items=by[g.kind], key=pr.id+":"+g.kind, open=projOpen.has(key);
+    const items=by[g.kind], key=(keyPrefix||owner.id)+":"+g.kind, open=projOpen.has(key);
     return `<div class="pc-cat">
       <button class="pc-cathead" data-key="${escAttr(key)}">
         <span class="pc-caret">${open?"▾":"▸"}</span>
@@ -1713,18 +1745,20 @@ function projCatsHTML(pr){
     </div>`;
   }).join("");
 }
-// No status field. A step is finished when you have written down what happened —
-// which is the thing worth recording anyway, and means nothing has to be ticked
-// twice. Everything downstream (overdue styling, the badge, the .ics export)
-// reads this instead of a state.
+
+/* ---- experiments ---- */
+// No status field: an experiment is finished when you have written down what
+// happened, which is the thing worth recording anyway.
 const stepDone=st=>!!String(st.outcome||"").trim();
-// the controls people actually run in this work; the field stays free text
-const CONTROL_TYPES=["fluorophore-only (e.g. GFP)","no-virus","vehicle / saline","CNO in non-DREADD",
-  "sham stimulation","light-off","contralateral hemisphere","littermate","scrambled / non-targeting"];
 const stepsUnder=(pr,parentId)=>(pr.steps||[]).filter(x=>(x.parentId||null)===(parentId||null));
+function allSteps(){ return DB.projects.flatMap(pr=>pr.steps||[]); }
+function stepById(id){ return allSteps().find(x=>x.id===id); }
+function stepColor(st){ const pr=projById(st.projectId); return pr?pr.color:"#556"; }
 function addStep(pr,parentId){
-  const st={id:uid("st_"),projectId:pr.id,parentId:parentId||null,title:"",
-            expected:"",outcome:"",deadline:null,endDate:null,duration:null,links:[]};
+  const st={id:uid("st_"),projectId:pr.id,parentId:parentId||null,title:"",description:"",
+            hypothesis:"",exclusions:"",expected:"",outcome:"",
+            plan:{nExp:null,nCtl:null,controlType:""},groups:{},
+            deadline:null,endDate:null,duration:null,links:[]};
   (pr.steps=pr.steps||[]).push(st); persist(); return st;
 }
 function deleteStep(pr,id){
@@ -1732,46 +1766,125 @@ function deleteStep(pr,id){
   (function walk(x){ kill.add(x); (pr.steps||[]).filter(v=>v.parentId===x).forEach(c=>walk(c.id)); })(id);
   pr.steps=(pr.steps||[]).filter(x=>!kill.has(x.id)); persist();
 }
-// every dated step across every project — the calendar's non-diary source
-function allSteps(){ return DB.projects.flatMap(pr=>pr.steps||[]); }
-function stepById(id){ return allSteps().find(x=>x.id===id); }
-function stepColor(st){ const pr=projById(st.projectId); return pr?pr.color:"#556"; }
-function addProject(){
-  const pr={id:uid("pj_"),name:"",color:DOMAIN_PALETTE[DB.projects.length%DOMAIN_PALETTE.length],
-            notes:"",question:"",hypothesis:"",exclusions:"",groupPlan:{},links:[],steps:[],created:Date.now()};
-  DB.projects.push(pr); persist(); editProjectModal(pr.id,true);
+// Which animals this experiment can assign to an arm: the ones it links itself,
+// plus everything its project links — so a cohort linked once at the top is
+// assignable in every experiment without linking it again each time.
+function animalsForStep(pr,st){
+  const ids=new Set(), fromLinks=ls=>(ls||[]).forEach(l=>{
+    if(l.kind==="animal")ids.add(l.id);
+    if(l.kind==="cohort")DB.animals.filter(a=>a.cohort===l.id).forEach(a=>ids.add(a.id));
+  });
+  fromLinks(st.links); fromLinks(pr.links);
+  return DB.animals.filter(a=>ids.has(a.id));
 }
-// a step's span, shown on its date button
-function stepWhenLabel(st){
-  if(!st.deadline)return "📅 when";
+function stepSpan(st){
+  if(!st.deadline)return "";
   const a=fmtWhenFull(st.deadline);
   return st.endDate?`${a} → ${fmtWhenFull(st.endDate)}`:a;
 }
+function stepArmTally(pr,st){
+  const g=st.groups||{}, pl=st.plan||{};
+  const nExp=Object.values(g).filter(v=>v==="experiment").length;
+  const nCtl=Object.values(g).filter(v=>v==="control").length;
+  const part=(n,want)=>want?`${n}/${want}`:`${n}`;
+  return {nExp,nCtl,text:`${part(nExp,+pl.nExp||0)} exp · ${part(nCtl,+pl.nCtl||0)} ctrl`,
+          ok:(!pl.nExp||nExp>=pl.nExp)&&(!pl.nCtl||nCtl>=pl.nCtl)};
+}
+
+function addProject(){
+  const pr={id:uid("pj_"),name:"",color:DOMAIN_PALETTE[DB.projects.length%DOMAIN_PALETTE.length],
+            notes:"",question:"",links:[],steps:[],created:Date.now()};
+  DB.projects.push(pr); persist(); editProjectModal(pr.id,true);
+}
+
+/* ---- the experiment editor ---- */
 function stepModal(pr,st,after){
-  modal(`<h3>Step</h3>
+  const animals=animalsForStep(pr,st);
+  modal(`<h3>Experiment</h3>
     <div class="fld"><label>Name</label><input id="sm_name" value="${escAttr(st.title)}" autofocus></div>
+    <div class="fld"><label>What this experiment is</label>
+      <textarea id="sm_desc" rows="3">${esc(st.description||"")}</textarea></div>
+    <div class="fld"><label>Hypothesis</label>
+      <textarea id="sm_hyp" rows="2">${esc(st.hypothesis||"")}</textarea></div>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Start</label>
         <button type="button" id="sm_start" class="datebtn ${st.deadline?"":"datebtn-empty"}">${st.deadline?fmtWhenFull(st.deadline):"📅 start"}</button></div>
       <div class="fld" style="flex:1"><label>End</label>
         <button type="button" id="sm_end" class="datebtn ${st.endDate?"":"datebtn-empty"}">${st.endDate?fmtWhenFull(st.endDate):"📅 end"}</button></div>
     </div>
+    <div class="fld"><label>Arms</label>
+      <div class="grp-plan">
+        <span class="gp-lab">Planned</span>
+        <input class="gp-n" id="sm_nexp" type="number" min="0" value="${(st.plan||{}).nExp!=null?st.plan.nExp:""}"><span class="gp-lab">exp</span>
+        <input class="gp-n" id="sm_nctl" type="number" min="0" value="${(st.plan||{}).nCtl!=null?st.plan.nCtl:""}"><span class="gp-lab">ctrl</span>
+        <input class="gp-type" id="sm_ctype" list="sm_ctypes" value="${escAttr((st.plan||{}).controlType||"")}">
+        <datalist id="sm_ctypes">${CONTROL_TYPES.map(t=>`<option value="${escAttr(t)}">`).join("")}</datalist>
+      </div>
+      <div id="sm_groups"></div></div>
+    <div class="fld"><label>Exclusion criteria</label>
+      <textarea id="sm_excl" rows="2">${esc(st.exclusions||"")}</textarea></div>
     <div class="fld"><label>Expected result</label>
-      <textarea id="sm_exp" rows="3" placeholder="what you expect to see, and what would tell you the hypothesis is wrong">${esc(st.expected||"")}</textarea></div>
+      <textarea id="sm_exp" rows="2">${esc(st.expected||"")}</textarea></div>
     <div class="fld"><label>What happened</label>
-      <textarea id="sm_out" rows="3" placeholder="the result, including a negative one — writing this marks the step finished">${esc(st.outcome||"")}</textarea></div>
+      <textarea id="sm_out" rows="3">${esc(st.outcome||"")}</textarea></div>
+    <div class="fld"><label>Linked</label><div id="sm_links">${projCatsHTML(st,st.id)}</div>
+      <button class="btn ghost" id="sm_addlink" style="margin-top:8px">＋ Link</button></div>
+    <div class="drow" style="margin-top:16px"><button class="btn danger" id="sm_del">Delete experiment</button></div>
     <div class="actions"><button class="btn accent" id="sm_save">Done</button></div>`,{wide:true});
-  bindDateButton(document.getElementById("sm_start"), ()=>st.deadline||"", v=>{ st.deadline=v||null; persist(); });
-  bindDateButton(document.getElementById("sm_end"),   ()=>st.endDate||"",  v=>{ st.endDate=v||null;  persist(); });
-  document.getElementById("sm_save").onclick=()=>{
+
+  const save=()=>{
     st.title=document.getElementById("sm_name").value;
+    st.description=document.getElementById("sm_desc").value;
+    st.hypothesis=document.getElementById("sm_hyp").value;
+    st.exclusions=document.getElementById("sm_excl").value;
     st.expected=document.getElementById("sm_exp").value;
     st.outcome=document.getElementById("sm_out").value;
-    persist(); closeModal(); if(after)after();
+    st.plan=st.plan||{};
+    const ne=document.getElementById("sm_nexp").value, nc=document.getElementById("sm_nctl").value;
+    st.plan.nExp=ne===""?null:Math.max(0,+ne);
+    st.plan.nCtl=nc===""?null:Math.max(0,+nc);
+    st.plan.controlType=document.getElementById("sm_ctype").value;
+    persist();
   };
+  bindDateButton(document.getElementById("sm_start"), ()=>st.deadline||"", v=>{ st.deadline=v||null; persist(); });
+  bindDateButton(document.getElementById("sm_end"),   ()=>st.endDate||"",  v=>{ st.endDate=v||null;  persist(); });
+
+  function drawGroups(){
+    const box=document.getElementById("sm_groups");
+    if(!animals.length){
+      box.innerHTML=`<div class="pc-empty">Link an animal or a cohort — to this experiment or to the project — to split it into arms.</div>`;
+      return; }
+    st.groups=st.groups||{};
+    box.innerHTML=animals.map(a=>`<div class="grp-row" data-a="${a.id}">
+      <span class="grp-name">${esc(a.name)}</span>
+      <span class="grp-sub">${esc(a.cohort||"")}</span>
+      <div class="seg grp-seg">${[["experiment","Exp"],["control","Ctrl"],["","—"]].map(([v,l])=>
+        `<button data-g="${v}" class="${(st.groups[a.id]||"")===v?"on":""}">${l}</button>`).join("")}</div>
+    </div>`).join("");
+    box.querySelectorAll(".grp-row").forEach(r=>r.querySelectorAll(".grp-seg button").forEach(b=>b.onclick=()=>{
+      if(b.dataset.g)st.groups[r.dataset.a]=b.dataset.g; else delete st.groups[r.dataset.a];
+      persist(); drawGroups(); }));
+  }
+  drawGroups();
+
+  const wireLinks=()=>{
+    const box=document.getElementById("sm_links");
+    box.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=()=>{
+      const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k);
+      box.innerHTML=projCatsHTML(st,st.id); wireLinks(); });
+    box.querySelectorAll(".pc-item").forEach(r=>r.onclick=()=>{ save(); closeModal(); openLinked(st.links[+r.dataset.i]); });
+  };
+  wireLinks();
+  document.getElementById("sm_addlink").onclick=()=>{ save(); addLinkModal(st,()=>stepModal(pr,st,after)); };
+  document.getElementById("sm_del").onclick=()=>{
+    if(!confirm(`Delete "${st.title||"this experiment"}"?${stepsUnder(pr,st.id).length?"\n\nIts nested experiments go too.":""}`))return;
+    deleteStep(pr,st.id); closeModal(); if(after)after(); };
+  document.getElementById("sm_save").onclick=()=>{ save(); closeModal(); if(after)after(); };
 }
-let projOpenId=null;                 // project whose plan is open, or null
-const openSteps=new Set();           // which step subtrees are expanded
+
+/* ---- the plan page ---- */
+let projOpenId=null;
+const openSteps=new Set();
 function renderProjectPlan(id){
   const pr=projById(id); if(!pr){ projOpenId=null; return renderProjects(); }
   const host=document.getElementById("projects"); host.innerHTML="";
@@ -1786,209 +1899,130 @@ function renderProjectPlan(id){
   head.querySelector("#pl_edit").onclick=()=>editProjectModal(pr.id);
 
   const q=document.createElement("div"); q.className="fld"; host.appendChild(q);
-  q.innerHTML=`<label>Research question</label>
-    <textarea id="pl_q" rows="2" placeholder="the question this project is built to answer">${esc(pr.question||"")}</textarea>
-    <label style="margin-top:12px">Hypothesis</label>
-    <textarea id="pl_h" rows="2" placeholder="what you expect to find, and what would refute it">${esc(pr.hypothesis||"")}</textarea>
-    <label style="margin-top:12px">Exclusion criteria</label>
-    <textarea id="pl_x" rows="2" placeholder="what makes an animal or a session unusable — decided now, not after the data">${esc(pr.exclusions||"")}</textarea>`;
+  q.innerHTML=`<label>Research question</label><textarea id="pl_q" rows="2">${esc(pr.question||"")}</textarea>`;
   q.querySelector("#pl_q").addEventListener("input",e=>{ pr.question=e.target.value; persist(); });
-  q.querySelector("#pl_h").addEventListener("input",e=>{ pr.hypothesis=e.target.value; persist(); });
-  q.querySelector("#pl_x").addEventListener("input",e=>{ pr.exclusions=e.target.value; persist(); });
 
-  // ---- steps ----
   const sw=document.createElement("div"); sw.className="fld"; host.appendChild(sw);
-  sw.innerHTML=`<label>Steps</label><div id="pl_steps"></div>
-    <button class="btn ghost" id="pl_addstep" style="margin-top:8px">＋ Step</button>`;
-  sw.querySelector("#pl_addstep").onclick=()=>{ addStep(pr,null); drawSteps(); };
+  sw.innerHTML=`<label>Experiments</label><div id="pl_steps"></div>
+    <button class="btn ghost" id="pl_addstep" style="margin-top:10px">＋ Experiment</button>`;
+  sw.querySelector("#pl_addstep").onclick=()=>{ const st=addStep(pr,null); stepModal(pr,st,()=>renderProjectPlan(id)); };
 
   function drawSteps(){
     const box=document.getElementById("pl_steps");
     const roots=stepsUnder(pr,null);
-    if(!roots.length){ box.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint);padding:4px 0">No steps yet.</div>`; return; }
-    const row=(st,depth)=>{
-      const kids=stepsUnder(pr,st.id), open=openSteps.has(st.id);
-      return `<div class="step-row" data-id="${st.id}" style="margin-left:${depth*18}px">
-        <button class="step-caret" ${kids.length?"":"disabled"}>${kids.length?(open?"▾":"▸"):"·"}</button>
-        <input class="step-name" value="${escAttr(st.title)}" placeholder="what happens in this step">
-        ${stepDone(st)?`<span class="step-tick" title="has an outcome">✓</span>`:""}
-        <button type="button" class="datebtn step-when ${st.deadline?"":"datebtn-empty"}">${st.deadline?stepWhenLabel(st):"📅 when"}</button>
-        <button class="step-edit" title="Expected result, outcome, end date">✎</button>
-        <button class="step-add" title="Add a nested step">＋</button>
-        <button class="step-del" title="Delete this step">✕</button>
-      </div>
-      <div class="step-links" style="margin-left:${depth*18+26}px">${(st.links||[]).map((l,i)=>
-        `<span class="linkchip" data-sid="${st.id}" data-i="${i}"><span class="lk-open">${esc(linkLabel(l))}</span><button class="lk-del" title="Unlink">✕</button></span>`).join("")}
-        <button class="lk-add" data-sid="${st.id}">＋ link</button></div>`
-      +(open?kids.map(k=>row(k,depth+1)).join(""):"");
+    if(!roots.length){ box.innerHTML=`<div class="pc-empty">No experiments yet.</div>`; return; }
+    const card=(st,depth)=>{
+      const kids=stepsUnder(pr,st.id), open=openSteps.has(st.id), arms=stepArmTally(pr,st);
+      const nLinks=(st.links||[]).length;
+      return `<div class="exp-card${stepDone(st)?" done":""}" data-id="${st.id}" style="margin-left:${depth*20}px">
+        <div class="exp-top">
+          <button class="exp-caret" ${kids.length?"":"disabled"}>${kids.length?(open?"▾":"▸"):"·"}</button>
+          <span class="exp-name">${esc(st.title||"(unnamed experiment)")}</span>
+          ${stepDone(st)?`<span class="exp-tick" title="has a result">✓</span>`:""}
+          <button class="exp-open">Open</button>
+          <button class="exp-sub" title="Add a nested experiment">＋</button>
+        </div>
+        ${st.description?`<div class="exp-desc">${esc(st.description)}</div>`:""}
+        <div class="exp-meta">
+          ${st.deadline?`<span class="em-date">${esc(stepSpan(st))}</span>`:""}
+          <span class="em-arms ${arms.ok?"ok":""}">${arms.text}</span>
+          ${nLinks?`<span>${nLinks} linked</span>`:""}
+          ${st.hypothesis?`<span title="${escAttr(st.hypothesis)}">hypothesis ✓</span>`:""}
+        </div>
+      </div>`+(open?kids.map(k=>card(k,depth+1)).join(""):"");
     };
-    box.innerHTML=roots.map(st=>row(st,0)).join("");
-
-    box.querySelectorAll(".step-row").forEach(r=>{
-      const st=(pr.steps||[]).find(x=>x.id===r.dataset.id); if(!st)return;
-      r.querySelector(".step-name").addEventListener("input",e=>{ st.title=e.target.value; persist(); });
-      r.querySelector(".step-caret").onclick=()=>{ openSteps.has(st.id)?openSteps.delete(st.id):openSteps.add(st.id); drawSteps(); };
-      r.querySelector(".step-edit").onclick=()=>stepModal(pr,st,()=>renderProjectPlan(id));
-      bindDateButton(r.querySelector(".step-when"), ()=>st.deadline||"", v=>{ st.deadline=v||null; persist(); drawSteps(); });
-      r.querySelector(".step-add").onclick=()=>{ addStep(pr,st.id); openSteps.add(st.id); drawSteps(); };
-      r.querySelector(".step-del").onclick=()=>{
-        if(!confirm(`Delete "${st.title||"this step"}"?${stepsUnder(pr,st.id).length?"\n\nIts nested steps go too.":""}`))return;
-        deleteStep(pr,st.id); drawSteps(); };
-    });
-    box.querySelectorAll(".lk-add").forEach(b=>b.onclick=()=>{
-      const st=(pr.steps||[]).find(x=>x.id===b.dataset.sid);
-      addLinkModal(st,()=>{ renderProjectPlan(id); }); });
-    box.querySelectorAll(".step-links .linkchip").forEach(chip=>{
-      const st=(pr.steps||[]).find(x=>x.id===chip.dataset.sid), i=+chip.dataset.i;
-      chip.querySelector(".lk-open").onclick=()=>openLinked(st.links[i]);
-      chip.querySelector(".lk-del").onclick=()=>{ st.links.splice(i,1); persist(); drawSteps(); };
+    box.innerHTML=roots.map(st=>card(st,0)).join("");
+    box.querySelectorAll(".exp-card").forEach(c=>{
+      const st=(pr.steps||[]).find(x=>x.id===c.dataset.id); if(!st)return;
+      c.querySelector(".exp-caret").onclick=()=>{ openSteps.has(st.id)?openSteps.delete(st.id):openSteps.add(st.id); drawSteps(); };
+      c.querySelector(".exp-open").onclick=()=>stepModal(pr,st,()=>renderProjectPlan(id));
+      c.querySelector(".exp-name").onclick=()=>stepModal(pr,st,()=>renderProjectPlan(id));
+      c.querySelector(".exp-sub").onclick=()=>{ const k=addStep(pr,st.id); openSteps.add(st.id); stepModal(pr,k,()=>renderProjectPlan(id)); };
     });
   }
   drawSteps();
 
-  // ---- experiment / control, per linked cohort ----
-  const cohorts=[...new Set((pr.links||[]).filter(l=>l.kind==="cohort").map(l=>l.id))];
-  const gw=document.createElement("div"); gw.className="fld"; host.appendChild(gw);
-  if(!cohorts.length){
-    gw.innerHTML=`<label>Groups</label><div style="font-size:11.5px;color:var(--ink-faint)">Link a cohort to this project to split it into experiment and control.</div>`;
-  }else{
-    gw.innerHTML=`<label>Groups</label><div id="pl_groups"></div>
-      <datalist id="pl_ctltypes">${CONTROL_TYPES.map(t=>`<option value="${escAttr(t)}">`).join("")}</datalist>`;
-    const drawGroups=()=>{
-      document.getElementById("pl_groups").innerHTML=cohorts.map(cn=>{
-        const animals=DB.animals.filter(a=>a.cohort===cn);
-        const nExp=animals.filter(a=>a.group==="experiment").length, nCtl=animals.filter(a=>a.group==="control").length;
-        const gp=pr.groupPlan[cn]||{};
-        const need=(planned,actual)=>planned?`<span class="grp-need ${actual>=planned?"ok":""}">${actual}/${planned}</span>`:`<span class="grp-need">${actual}</span>`;
-        return `<div class="grp-block"><div class="grp-head">${esc(cn)}
-            <span class="grp-tally">${animals.length-nExp-nCtl} unassigned</span></div>
-          <div class="grp-plan" data-c="${escAttr(cn)}">
-            <span class="gp-lab">Experiment</span>${need(+gp.nExp||0,nExp)}
-            <input class="gp-n" data-g="nExp" type="number" min="0" placeholder="planned" value="${gp.nExp!=null?gp.nExp:""}">
-            <span class="gp-lab">Control</span>${need(+gp.nCtl||0,nCtl)}
-            <input class="gp-n" data-g="nCtl" type="number" min="0" placeholder="planned" value="${gp.nCtl!=null?gp.nCtl:""}">
-            <input class="gp-type" list="pl_ctltypes" placeholder="kind of control" value="${escAttr(gp.controlType||"")}">
-          </div>
-          ${animals.map(a=>`<div class="grp-row" data-a="${a.id}">
-            <span class="grp-name">${esc(a.name)}</span>
-            <div class="seg grp-seg">${[["experiment","Exp"],["control","Ctrl"],["","—"]].map(([v,l])=>
-              `<button data-g="${v}" class="${(a.group||"")===v?"on":""}">${l}</button>`).join("")}</div>
-          </div>`).join("")||`<div style="font-size:11.5px;color:var(--ink-faint)">No animals in this cohort yet.</div>`}
-        </div>`;
-      }).join("");
-      document.getElementById("pl_groups").querySelectorAll(".grp-plan").forEach(pl=>{
-        const cn=pl.dataset.c;
-        const store=()=>{ pr.groupPlan[cn]=pr.groupPlan[cn]||{}; return pr.groupPlan[cn]; };
-        pl.querySelectorAll(".gp-n").forEach(inp=>inp.addEventListener("change",e=>{
-          store()[inp.dataset.g]=e.target.value===""?null:Math.max(0,+e.target.value); persist(); drawGroups(); }));
-        pl.querySelector(".gp-type").addEventListener("input",e=>{ store().controlType=e.target.value; persist(); });
-      });
-      document.getElementById("pl_groups").querySelectorAll(".grp-row").forEach(r=>{
-        r.querySelectorAll(".grp-seg button").forEach(b=>b.onclick=()=>{
-          const a=DB.animals.find(x=>x.id===r.dataset.a); if(!a)return;
-          a.group=b.dataset.g; persist(); drawGroups(); });
-      });
-    };
-    drawGroups();
-  }
-
-  // ---- everything linked to the project itself ----
   const lw=document.createElement("div"); lw.className="fld"; host.appendChild(lw);
-  lw.innerHTML=`<label>Linked</label><div>${projCatsHTML(pr)}</div>
+  lw.innerHTML=`<label>Shared across the project</label><div id="pl_links">${projCatsHTML(pr)}</div>
     <button class="btn ghost" id="pl_addlink" style="margin-top:8px">＋ Link</button>`;
   lw.querySelector("#pl_addlink").onclick=()=>addLinkModal(pr,()=>renderProjectPlan(id));
   lw.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=()=>{
     const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k); renderProjectPlan(id); });
   lw.querySelectorAll(".pc-item").forEach(r=>r.onclick=()=>openLinked(pr.links[+r.dataset.i]));
 }
+
+/* ---- the project list ---- */
+function projSummary(pr){
+  const steps=pr.steps||[];
+  const done=steps.filter(stepDone).length;
+  const animals=new Set();
+  (pr.links||[]).forEach(l=>{
+    if(l.kind==="animal")animals.add(l.id);
+    if(l.kind==="cohort")DB.animals.filter(a=>a.cohort===l.id).forEach(a=>animals.add(a.id)); });
+  steps.forEach(st=>(st.links||[]).forEach(l=>{ if(l.kind==="animal")animals.add(l.id); }));
+  const dated=steps.filter(x=>x.deadline&&!stepDone(x)).sort((a,b)=>a.deadline.localeCompare(b.deadline));
+  return {nSteps:steps.length,done,nAnimals:animals.size,next:dated[0]||null};
+}
 function renderProjects(){
   if(projOpenId) return renderProjectPlan(projOpenId);
   const host=document.getElementById("projects"); host.innerHTML="";
   const top=document.createElement("div");
-  top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap";
-  top.innerHTML=`<button id="pj_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ Project</button>`;
+  top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px";
+  top.innerHTML=`<button id="pj_add" class="btn accent" style="margin-left:auto;font-size:12px">＋ Project</button>`;
   host.appendChild(top);
   top.querySelector("#pj_add").onclick=addProject;
 
   if(!DB.projects.length){
     host.appendChild(Object.assign(document.createElement("div"),
-      {className:"empty",textContent:"No projects yet. Make one, then link the animals, viruses and procedures that belong to it."}));
+      {className:"empty",textContent:"No projects yet."}));
     return;
   }
   const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
   DB.projects.forEach(pr=>{
+    const sm=projSummary(pr);
     const card=document.createElement("div"); card.className="proj-card"; card.dataset.id=pr.id;
     card.innerHTML=`<div class="pc-bar" style="background:${pr.color}"></div>
       <div class="pc-body">
         <div class="pc-head"><span class="pc-name">${esc(pr.name||"(unnamed project)")}</span>
           <button class="pc-edit" title="Edit this project">✎</button></div>
-        ${pr.question?`<div class="pc-note">${esc(pr.question)}</div>`:(pr.notes?`<div class="pc-note">${esc(pr.notes)}</div>`:"")}
-        ${(()=>{const n=(pr.steps||[]).length,d=(pr.steps||[]).filter(stepDone).length;
-          return n?`<div class="pc-steps">${n} step${n!==1?"s":""}${d?` · ${d} with an outcome`:""}</div>`:"";})()}
+        ${pr.question?`<div class="pc-note">${esc(pr.question)}</div>`:""}
+        <div class="pc-stats">
+          <span><b>${sm.nSteps}</b> experiment${sm.nSteps!==1?"s":""}</span>
+          <span><b>${sm.done}</b> with a result</span>
+          <span><b>${sm.nAnimals}</b> animal${sm.nAnimals!==1?"s":""}</span>
+        </div>
+        ${sm.next?`<div class="pc-next">Next: ${esc(sm.next.title||"(unnamed)")} <span>${esc(fmtWhenFull(sm.next.deadline))}</span></div>`:""}
         ${projCatsHTML(pr)}
       </div>`;
     card.querySelector(".pc-edit").onclick=e=>{ e.stopPropagation(); editProjectModal(pr.id); };
-    card.onclick=()=>{ projOpenId=pr.id; renderProjects(); };
     card.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=e=>{
       e.stopPropagation();
-      const k=b.dataset.key;
-      projOpen.has(k)?projOpen.delete(k):projOpen.add(k);
-      renderProjects();
-    });
-    // an item opens the record it names, at its source
-    card.querySelectorAll(".pc-item").forEach(row=>row.onclick=e=>{
-      e.stopPropagation(); openLinked(pr.links[+row.dataset.i]);
-    });
+      const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k); renderProjects(); });
+    card.querySelectorAll(".pc-item").forEach(r=>r.onclick=e=>{ e.stopPropagation(); openLinked(pr.links[+r.dataset.i]); });
+    card.onclick=()=>{ projOpenId=pr.id; renderProjects(); };
     grid.appendChild(card);
   });
 }
 function editProjectModal(id,isNew){
   const pr=projById(id); if(!pr)return;
   modal(`<h3>${isNew?"New project":"Project"}</h3>
-    <div class="fld"><label>Name</label><input id="pj_name" value="${escAttr(pr.name)}" placeholder="what this project is" autofocus></div>
+    <div class="fld"><label>Name</label><input id="pj_name" value="${escAttr(pr.name)}" autofocus></div>
     <div class="fld"><label>Colour</label><div class="taglist" id="pj_pal">${paletteHTML(pr.color)}</div></div>
     <div class="fld"><label>Notes</label><textarea id="pj_notes" rows="4">${esc(pr.notes||"")}</textarea></div>
-    <div class="fld"><label>Linked</label><div id="pj_links"></div>
-      <button class="btn ghost" id="pj_addlink" style="margin-top:8px">＋ Link</button></div>
-    <div class="drow" style="margin-top:18px"><button class="btn danger" id="pj_del">Delete project</button></div>
-    <div class="actions"><button class="btn accent" id="pj_save">Done</button></div>`,{wide:true});
-
-  function drawLinks(){
-    const box=document.getElementById("pj_links");
-    if(!(pr.links||[]).length){
-      box.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint);padding:4px 0">Nothing linked yet.</div>`; return; }
-    // grouped so a project with thirty animals stays readable
-    box.innerHTML=LINK_GROUPS.map(g=>{
-      const items=pr.links.map((l,i)=>({l,i})).filter(x=>x.l.kind===g.kind);
-      if(!items.length)return "";
-      return `<div class="pj-group"><div class="pj-gtitle">${g.label}</div><div class="linklist">${
-        items.map(({l,i})=>`<span class="linkchip" data-i="${i}">
-          <span class="lk-open">${esc(linkLabel(l))}</span><button class="lk-del" title="Unlink">✕</button></span>`).join("")}</div></div>`;
-    }).join("");
-    box.querySelectorAll(".linkchip").forEach(chip=>{
-      const i=+chip.dataset.i;
-      chip.querySelector(".lk-open").addEventListener("click",()=>{ saveProj(); closeModal(); openLinked(pr.links[i]); });
-      chip.querySelector(".lk-del").addEventListener("click",()=>{ pr.links.splice(i,1); persist(); drawLinks(); });
-    });
-  }
-  drawLinks();
-  // commit the fields first: adding a link reopens this editor from the stored
-  // record, so anything typed and not yet saved would be thrown away
-  document.getElementById("pj_addlink").onclick=()=>{ saveProj(); addLinkModal(pr,()=>editProjectModal(id)); };
-
+    <div class="drow" style="margin-top:16px"><button class="btn danger" id="pj_del">Delete project</button></div>
+    <div class="actions"><button class="btn accent" id="pj_save">Done</button></div>`);
   let chosen=pr.color;
   document.getElementById("pj_pal").addEventListener("click",e=>{const t=e.target.closest(".tag");if(!t)return;chosen=t.dataset.c;
     document.querySelectorAll("#pj_pal .tag").forEach(x=>x.style.boxShadow="none");t.style.boxShadow=`0 0 0 2px ${chosen}`;});
-  function saveProj(){
+  document.getElementById("pj_save").onclick=()=>{
     pr.name=document.getElementById("pj_name").value.trim();
     pr.notes=document.getElementById("pj_notes").value;
-    pr.color=chosen; persist();
-  }
-  document.getElementById("pj_save").onclick=()=>{ saveProj(); renderProjects(); closeModal(); };
+    pr.color=chosen; persist(); closeModal(); renderProjects();
+  };
   document.getElementById("pj_del").onclick=()=>{
-    if(!confirm(`Delete "${pr.name||"this project"}"?\n\nOnly the project goes — every animal, virus and paper it links to stays exactly where it is.`))return;
+    if(!confirm(`Delete "${pr.name||"this project"}"?\n\nOnly the project and its experiments go — every animal, virus and paper it links to stays where it is.`))return;
     DB.projects=DB.projects.filter(x=>x.id!==id); if(projOpenId===id)projOpenId=null;
-    persist(); renderProjects(); closeModal(); toast("Project deleted");
+    persist(); closeModal(); renderProjects(); toast("Project deleted");
   };
 }
 
