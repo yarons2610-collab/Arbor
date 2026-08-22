@@ -262,6 +262,9 @@
   .exp-meta .em-arms{color:var(--amber)}
   .exp-meta .em-arms.ok{color:var(--gcamp)}
   .grp-sub{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto}
+  .at-pick{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+  .at-pick select{flex:1;min-width:160px;font-size:12px}
+  .at-pick .btn{font-size:12px;padding:4px 12px}
   .step-caret:disabled{opacity:.3;cursor:default;border-color:transparent;background:transparent}
   .step-name{flex:1;min-width:0;font-size:12.5px;background:transparent;border:1px solid transparent;border-radius:6px;padding:3px 5px;color:var(--ink)}
   .step-name:focus{border-color:var(--line2);background:var(--panel2);outline:none}
@@ -1666,6 +1669,7 @@ const LINK_GROUPS=[
   {kind:"cohort",   icon:"🧬", label:"Cohorts"},
   {kind:"material", icon:"🧪", label:"Materials"},
   {kind:"template", icon:"🧰", label:"Procedure templates"},
+  {kind:"task",     icon:"🎯", label:"Behavioural tasks"},
   {kind:"procedure",icon:"🔪", label:"Procedures done"},
   {kind:"reading",  icon:"📖", label:"Literature"},
   {kind:"url",      icon:"🔗", label:"External"}
@@ -1678,6 +1682,7 @@ const CONTROL_TYPES=["fluorophore-only (e.g. GFP)","no-virus","vehicle / saline"
 function linkName(l){
   if(l.kind==="animal"){ const x=DB.animals.find(v=>v.id===l.id); return x?x.name:"(deleted animal)"; }
   if(l.kind==="template"){ const x=(DB.config.procedureLib||[]).find(v=>v.id===l.id); return x?(x.name||"(unnamed)"):"(deleted)"; }
+  if(l.kind==="task") return l.id||"";
   if(l.kind==="procedure") return diaryTypeDef(l.type).label;
   if(l.kind==="reading"){ const x=DB.readings.find(v=>v.id===l.id); return x?x.title:"(deleted paper)"; }
   if(l.kind==="url") return l.url||"";
@@ -1710,6 +1715,14 @@ function linkDetail(l){
     const bits=[]; if(pr.headpost)bits.push("head-post"); if(pr.window)bits.push("window");
     const n=(pr.injections||[]).length; if(n)bits.push(`${n} injection${n!==1?"s":""}`);
     return {text:bits.join(" · ")||"empty template"};
+  }
+  if(l.kind==="task"){
+    const tk=(DB.config.taskLib||[]).find(x=>x.name===l.id);
+    if(!tk)return {text:"not in the task library"};
+    const n=(tk.params||[]).length;
+    // how many sessions have actually been logged against this task
+    let runs=0; DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{ if(e.type==="training"&&e.data&&e.data.task===l.id)runs++; }));
+    return {text:[n?`${n} metric${n!==1?"s":""}`:null,runs?`${runs} session${runs!==1?"s":""} logged`:null].filter(Boolean).join(" · ")||"in the task library"};
   }
   if(l.kind==="procedure"){
     const a=DB.animals.find(x=>x.id===l.animalId);
@@ -1880,6 +1893,72 @@ function stepModal(pr,st,after){
     if(!confirm(`Delete "${st.title||"this experiment"}"?${stepsUnder(pr,st.id).length?"\n\nIts nested experiments go too.":""}`))return;
     deleteStep(pr,st.id); closeModal(); if(after)after(); };
   document.getElementById("sm_save").onclick=()=>{ save(); closeModal(); if(after)after(); };
+}
+
+/* ---- attaching from the other side ----
+   Everything above links outward: a project or an experiment names a record.
+   This is the same edge approached from the record — an animal's own editor
+   saying which experiments it belongs to. It writes into the very same links
+   array, so there is one relationship, not two that can disagree. */
+function sameLink(a,b){
+  if(a.kind!==b.kind)return false;
+  if(a.kind==="procedure")return a.animalId===b.animalId&&a.type===b.type&&a.date===b.date;
+  if(a.kind==="url")return (a.url||"")===(b.url||"");
+  if(a.kind==="material")return a.id===b.id&&a.cat===b.cat;
+  return a.id===b.id;
+}
+// every project and experiment this record is currently attached to
+function attachmentsOf(link){
+  const out=[];
+  DB.projects.forEach(pr=>{
+    if((pr.links||[]).some(l=>sameLink(l,link))) out.push({pr,st:null});
+    (pr.steps||[]).forEach(st=>{ if((st.links||[]).some(l=>sameLink(l,link))) out.push({pr,st}); });
+  });
+  return out;
+}
+function attachLabel(a){ return a.st?`${a.pr.name||"(unnamed)"} › ${a.st.title||"(unnamed experiment)"}`:(a.pr.name||"(unnamed project)"); }
+function detachLink(a,link){
+  const owner=a.st||a.pr;
+  owner.links=(owner.links||[]).filter(l=>!sameLink(l,link));
+  persist();
+}
+// Renders into `host`: what this record is attached to, plus a way to attach it
+// somewhere else. Call it from any record's own editor.
+function mountAttachments(host,link,onChange){
+  const draw=()=>{
+    const list=attachmentsOf(link);
+    host.innerHTML=`<div class="linklist">${list.map((a,i)=>`<span class="linkchip" data-i="${i}">
+        <span class="lk-open">${esc(attachLabel(a))}</span><button class="lk-del" title="Detach">✕</button></span>`).join("")}
+      <button class="lk-add" id="at_add">＋ link to an experiment</button></div>`;
+    host.querySelectorAll(".linkchip").forEach(chip=>{
+      const a=list[+chip.dataset.i];
+      chip.querySelector(".lk-open").onclick=()=>{ closeModal(); projOpenId=a.pr.id; switchTo("projects"); };
+      chip.querySelector(".lk-del").onclick=()=>{ detachLink(a,link); draw(); if(onChange)onChange(); };
+    });
+    host.querySelector("#at_add").onclick=()=>{
+      if(!DB.projects.length){ toast("Make a project first"); return; }
+      const opts=DB.projects.map(pr=>{
+        const kids=(pr.steps||[]).map(st=>`<option value="${pr.id}::${st.id}">— ${esc(st.title||"(unnamed experiment)")}</option>`).join("");
+        return `<option value="${pr.id}">${esc(pr.name||"(unnamed project)")}</option>${kids}`;
+      }).join("");
+      // a nested modal would trap the record's editor behind it, so this is a
+      // small inline picker instead of a second modal
+      host.innerHTML=`<div class="at-pick"><select id="at_sel">${opts}</select>
+        <button class="btn accent" id="at_go">Link</button>
+        <button class="btn ghost" id="at_cancel">Cancel</button></div>`;
+      host.querySelector("#at_cancel").onclick=draw;
+      host.querySelector("#at_go").onclick=()=>{
+        const v=host.querySelector("#at_sel").value, [pid,sid]=v.split("::");
+        const pr=projById(pid); if(!pr)return;
+        const owner=sid?(pr.steps||[]).find(x=>x.id===sid):pr;
+        if(!owner)return;
+        owner.links=owner.links||[];
+        if(!owner.links.some(l=>sameLink(l,link))) owner.links.push({...link});
+        persist(); draw(); if(onChange)onChange();
+      };
+    };
+  };
+  draw();
 }
 
 /* ---- the plan page ---- */
@@ -3669,9 +3748,11 @@ function readingModal(id){
   const r=id?DB.readings.find(x=>x.id===id):null;
   modal(`<h3>${r?"Paper":"New paper"}</h3>
     <div class="fld"><label>Title</label><input id="r_title" value="${escAttr(r?r.title:"")}" autofocus></div>
-    <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(r?r.link:"")}" placeholder="URL, DOI, or a path on the lab drive"></div>
+    <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(r?r.link:"")}"></div>
+    ${r?`<div class="fld"><label>Experiments</label><div id="r_attach"></div></div>`:""}
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="r_save">Save</button></div>`);
+  if(r) mountAttachments(document.getElementById("r_attach"),{kind:"reading",id:r.id});
   document.getElementById("r_save").onclick=()=>{
     const title=document.getElementById("r_title").value.trim();
     if(!title){ toast("Title can't be empty"); return; }
@@ -5134,7 +5215,12 @@ function animalModal(id,draft){
     </div>
 
     <div class="fld"><label>Surgical comments / notes</label><textarea id="am_com">${esc(view.comments||"")}</textarea></div>
+    ${id?`<div class="fld"><label>Experiments</label><div id="am_attach"></div></div>`:""}
     <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
+
+  // which experiments this animal belongs to, editable from here
+  if(id&&document.getElementById("am_attach"))
+    mountAttachments(document.getElementById("am_attach"),{kind:"animal",id});
 
   // dates — custom wiring instead of bindDateButton so the Born button can
   // also show age in weeks (which depends on both dates, so either one
@@ -5287,6 +5373,7 @@ function openLinked(l){
   if(l.kind==="cohort"){ closeDetail(); animalCohort=l.id; DB.config.animalFilters.cohort=l.id; persist();
     switchTo("animals"); return; }
   if(l.kind==="template"){ closeDetail(); goMaterials("procedures"); return; }
+  if(l.kind==="task"){ closeDetail(); goMaterials("diarytypes"); return; }
   if(l.kind==="reading"){ closeDetail(); goMaterials("literature"); return; }
   if(l.kind==="material"){ closeDetail();
     // land on the library the material actually lives in
@@ -5314,6 +5401,8 @@ function addLinkModal(sp,after){
         `<option value="${escAttr(g.cat+"::"+n)}">${esc(n)}</option>`).join("")}</optgroup>`).join("")}</select></div>
     <div class="fld"><label>Cohort</label><select id="lk_cohort"><option value="">—</option>
       ${(DB.cohorts||[]).map(c=>`<option value="${escAttr(c.name)}">${esc(c.name)}</option>`).join("")}</select></div>
+    <div class="fld"><label>Behavioural task</label><select id="lk_task"><option value="">—</option>
+      ${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t.name)}">${esc(t.name)}</option>`).join("")}</select></div>
     <div class="fld"><label>Procedure template</label><select id="lk_tpl"><option value="">—</option>
       ${(DB.config.procedureLib||[]).map(x=>`<option value="${x.id}">${esc(x.name||"(unnamed)")}</option>`).join("")}</select></div>
     <div class="fld"><label>Literature</label><select id="lk_read"><option value="">—</option>
@@ -5327,9 +5416,10 @@ function addLinkModal(sp,after){
     const av=document.getElementById("lk_animal").value, mv=document.getElementById("lk_mat").value,
           pv=document.getElementById("lk_proc").value, uv=document.getElementById("lk_url").value.trim(),
           cv=document.getElementById("lk_cohort").value, tv=document.getElementById("lk_tpl").value,
-          rv=document.getElementById("lk_read").value;
+          rv=document.getElementById("lk_read").value, kv=document.getElementById("lk_task").value;
     sp.links=sp.links||[];
     if(cv)sp.links.push({kind:"cohort",id:cv});
+    if(kv)sp.links.push({kind:"task",id:kv});
     if(tv)sp.links.push({kind:"template",id:tv});
     if(rv)sp.links.push({kind:"reading",id:rv});
     if(av)sp.links.push({kind:"animal",id:av});
