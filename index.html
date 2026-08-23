@@ -243,6 +243,23 @@
   .gdef-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 7px;font-size:11px;cursor:pointer}
   .gdef-del:hover{color:var(--overdue)}
   .grp-row .grp-pick{flex:0 0 auto;width:auto;min-width:150px;font-size:11.5px;padding:5px 8px}
+  .lk-sec{padding:8px 0;border-bottom:1px solid var(--line)}
+  .lk-sec:last-child{border-bottom:0}
+  .lk-sec-t{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--ink-faint);margin-bottom:5px}
+  .lk-add-wrap{margin-top:6px}
+  .lk-sec .lk-sel{width:auto;min-width:190px;max-width:100%;font-size:11.5px;padding:4px 8px}
+  .lk-add-row{display:flex;gap:6px}
+  .lk-sec .lk-url{flex:1 1 auto;width:auto;font-size:11.5px;padding:4px 8px}
+  .lk-urlgo{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:3px 12px;font-size:11.5px;cursor:pointer}
+  .lk-urlgo:hover{color:var(--ink)}
+  .ag-row{display:flex;align-items:center;gap:8px;padding:4px 0}
+  .ag-where{flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ag-sep{color:var(--ink-faint)}
+  .ag-row .ag-pick{flex:0 0 auto;width:auto;min-width:150px;font-size:11.5px;padding:4px 8px}
+  .ag-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;flex:0 0 auto}
+  .ag-del:hover{color:var(--overdue)}
+  .ag-add{margin-top:6px}
+  .ag-add #ag_sel{width:auto;min-width:230px;max-width:100%;font-size:11.5px;padding:4px 8px}
   .pc-empty{font-size:11.5px;color:var(--ink-faint);padding:5px 0}
   .pc-stats{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--ink-dim);padding:6px 0}
   .pc-stats b{font-family:var(--mono);color:var(--ink);font-weight:600}
@@ -1267,7 +1284,7 @@ const taskById=id=>DB.tasks.find(x=>x.id===id);
 // any task with no linked animal yet (e.g. a blank one created straight from Timeline).
 function taskColor(t){
   const aid=(t.linkedAnimals||[])[0];
-  if(aid){ const a=DB.animals.find(x=>x.id===aid); const co=a&&cohortByName(a.cohort); if(co&&co.color)return co.color; }
+  if(aid){ const a=DB.animals.find(x=>x.id===aid); if(a)return animalColor(a); }
   const dom=domById(t.domainId); return dom?dom.color:"#556";
 }
 const spineById=id=>DB.spines.find(x=>x.id===id);
@@ -1683,7 +1700,6 @@ document.getElementById("notifyNudge").addEventListener("click",openNotification
 const projById=id=>DB.projects.find(p=>p.id===id);
 const LINK_GROUPS=[
   {kind:"animal",   icon:"🐁", label:"Animals"},
-  {kind:"cohort",   icon:"🧬", label:"Cohorts"},
   {kind:"material", icon:"🧪", label:"Materials"},
   {kind:"template", icon:"🧰", label:"Procedure templates"},
   {kind:"task",     icon:"🎯", label:"Behavioural tasks"},
@@ -1714,13 +1730,8 @@ function linkDetail(l){
   if(l.kind==="animal"){
     const a=DB.animals.find(x=>x.id===l.id); if(!a)return {text:"deleted",color:"var(--overdue)"};
     const w=latestWeight(a);
-    return {text:[a.cohort,TERM_LABEL[a.termination]||a.termination,w!=null?w+"g":null].filter(Boolean).join(" · "),
+    return {text:[animalWhere(a),TERM_LABEL[a.termination]||a.termination,w!=null?w+"g":null].filter(Boolean).join(" · "),
             color:TERM_COLOR[a.termination]||"var(--ink-faint)"};
-  }
-  if(l.kind==="cohort"){
-    const n=DB.animals.filter(a=>a.cohort===l.id).length;
-    const alive=DB.animals.filter(a=>a.cohort===l.id&&a.termination==="alive").length;
-    return {text:`${n} animal${n!==1?"s":""} · ${alive} alive`};
   }
   if(l.kind==="material"){
     if(l.cat==="inv"){ const inv=(DB.inventory||{})[l.id];
@@ -1805,7 +1816,6 @@ function deleteStep(pr,id){
 function animalsForStep(pr,st){
   const ids=new Set(), fromLinks=ls=>(ls||[]).forEach(l=>{
     if(l.kind==="animal")ids.add(l.id);
-    if(l.kind==="cohort")DB.animals.filter(a=>a.cohort===l.id).forEach(a=>ids.add(a.id));
   });
   fromLinks(st.links); fromLinks(pr.links);
   return DB.animals.filter(a=>ids.has(a.id));
@@ -1841,9 +1851,77 @@ function addProject(){
   DB.projects.push(pr); persist(); editProjectModal(pr.id,true);
 }
 
+/* ---- links, inline ----
+   The picker used to be a modal behind a "+ Link" button, which left linking
+   feeling bolted on: you had to go somewhere else to say what an experiment
+   uses. Every kind is on the page now, each as a chip list with an add-control
+   directly under it. Same links array, no modal. */
+function linkOptions(kind){
+  if(kind==="animal") return [...DB.animals].sort((a,b)=>a.name.localeCompare(b.name))
+    .map(a=>({v:a.id,t:a.name}));
+  if(kind==="task") return (DB.config.taskLib||[]).map(t=>({v:t.name,t:t.name}));
+  if(kind==="template") return (DB.config.procedureLib||[]).map(x=>({v:x.id,t:x.name||"(unnamed)"}));
+  if(kind==="reading") return DB.readings.map(r=>({v:r.id,t:r.title}));
+  if(kind==="material") return [
+    {grp:"Viruses",     items:(activeViruses()||[]).map(v=>({v:"virus::"+v.name,t:v.name}))},
+    {grp:"Injection sites",items:(DB.config.siteLib||[]).map(x=>({v:"site::"+x.name,t:x.name}))},
+    {grp:"Inventory",   items:Object.keys(DB.inventory||{}).map(n=>({v:"inv::"+n,t:n}))}
+  ].filter(g=>g.items.length);
+  if(kind==="procedure"){
+    const out=[]; DB.animals.forEach(a=>(a.diary||[]).forEach(e=>out.push(
+      {v:`${a.id}|${e.type}|${e.date}`,t:`${a.name} — ${diaryTypeDef(e.type).label} · ${e.date||""}`})));
+    return out.sort((x,y)=>y.t.localeCompare(x.t)).slice(0,300);
+  }
+  return [];
+}
+function linkFromValue(kind,v){
+  if(kind==="material"){ const i=v.indexOf("::"); return {kind:"material",cat:v.slice(0,i),id:v.slice(i+2)}; }
+  if(kind==="procedure"){ const [animalId,type,date]=v.split("|"); return {kind:"procedure",animalId,type,date}; }
+  return {kind,id:v};
+}
+function mountLinkEditor(host,owner,onChange){
+  const draw=()=>{
+    owner.links=owner.links||[];
+    host.innerHTML=LINK_GROUPS.map(g=>{
+      const mine=owner.links.map((l,i)=>({l,i})).filter(x=>x.l.kind===g.kind);
+      const opts=linkOptions(g.kind);
+      const flat=g.kind==="material"
+        ? opts.map(o=>`<optgroup label="${escAttr(o.grp)}">${o.items.map(it=>`<option value="${escAttr(it.v)}">${esc(it.t)}</option>`).join("")}</optgroup>`).join("")
+        : opts.map(o=>`<option value="${escAttr(o.v)}">${esc(o.t)}</option>`).join("");
+      const adder=g.kind==="url"
+        ? `<div class="lk-add-row"><input class="lk-url" placeholder=""><button class="lk-urlgo">Add</button></div>`
+        : (opts.length?`<select class="lk-sel" data-kind="${g.kind}"><option value="">＋ add…</option>${flat}</select>`
+                      :`<span class="pc-empty">nothing in the library yet</span>`);
+      return `<div class="lk-sec">
+        <div class="lk-sec-t">${g.icon} ${g.label}</div>
+        <div class="linklist">${mine.map(({l,i})=>`<span class="linkchip" data-i="${i}">
+          <span class="lk-open">${esc(linkName(l))}</span><button class="lk-del" title="Unlink">✕</button></span>`).join("")
+          ||`<span class="pc-empty">none</span>`}</div>
+        <div class="lk-add-wrap">${adder}</div>
+      </div>`;
+    }).join("");
+
+    const add=l=>{
+      if(!owner.links.some(x=>sameLink(x,l)))owner.links.push(l);
+      persist(); draw(); if(onChange)onChange();
+    };
+    host.querySelectorAll(".lk-sel").forEach(sel=>sel.addEventListener("change",e=>{
+      if(!e.target.value)return; add(linkFromValue(sel.dataset.kind,e.target.value)); }));
+    const ub=host.querySelector(".lk-urlgo");
+    if(ub)ub.onclick=()=>{ const inp=host.querySelector(".lk-url");
+      const v=inp.value.trim(); if(!v)return; add({kind:"url",url:v}); };
+    host.querySelectorAll(".linkchip").forEach(chip=>{
+      const i=+chip.dataset.i;
+      chip.querySelector(".lk-open").onclick=()=>openLinked(owner.links[i]);
+      chip.querySelector(".lk-del").onclick=()=>{ owner.links.splice(i,1); persist(); draw(); if(onChange)onChange(); };
+    });
+  };
+  draw();
+}
+
 /* ---- the experiment editor ---- */
 function stepModal(pr,st,after){
-  const animals=animalsForStep(pr,st);
+  const animals=()=>animalsForStep(pr,st);
   modal(`<h3>Experiment</h3>
     <div class="fld"><label>Name</label><input id="sm_name" value="${escAttr(st.title)}" autofocus></div>
     <div class="fld"><label>What this experiment is</label>
@@ -1867,8 +1945,7 @@ function stepModal(pr,st,after){
       <textarea id="sm_exp" rows="2">${esc(st.expected||"")}</textarea></div>
     <div class="fld"><label>What happened</label>
       <textarea id="sm_out" rows="3">${esc(st.outcome||"")}</textarea></div>
-    <div class="fld"><label>Linked</label><div id="sm_links">${projCatsHTML(st,st.id)}</div>
-      <button class="btn ghost" id="sm_addlink" style="margin-top:8px">＋ Link</button></div>
+    <div class="fld"><label>Uses</label><div id="sm_links"></div></div>
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="sm_del">Delete experiment</button></div>
     <div class="actions"><button class="btn accent" id="sm_save">Done</button></div>`,{wide:true});
 
@@ -1906,16 +1983,16 @@ function stepModal(pr,st,after){
   }
   function drawGroups(){
     const box=document.getElementById("sm_groups");
-    if(!animals.length){
-      box.innerHTML=`<div class="pc-empty">Link an animal or a cohort — to this experiment or to the project — to assign it to a group.</div>`;
+    const list=animals();
+    if(!list.length){
+      box.innerHTML=`<div class="pc-empty">Add animals below, or to the project, to assign them to a group.</div>`;
       return; }
     if(!(st.groupDefs||[]).length){
       box.innerHTML=`<div class="pc-empty">Add a group above, then assign these animals to it.</div>`;
       return; }
     st.groups=st.groups||{};
-    box.innerHTML=animals.map(a=>`<div class="grp-row" data-a="${a.id}">
+    box.innerHTML=list.map(a=>`<div class="grp-row" data-a="${a.id}">
       <span class="grp-name">${esc(a.name)}</span>
-      <span class="grp-sub">${esc(a.cohort||"")}</span>
       <select class="grp-pick"><option value="">—</option>${st.groupDefs.map(g=>
         `<option value="${g.id}" ${st.groups[a.id]===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>
     </div>`).join("");
@@ -1926,19 +2003,90 @@ function stepModal(pr,st,after){
   drawGroupDefs(); drawGroups();
   document.getElementById("sm_addgroup").onclick=()=>{ addGroup(st,""); drawGroupDefs(); drawGroups(); };
 
-  const wireLinks=()=>{
-    const box=document.getElementById("sm_links");
-    box.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=()=>{
-      const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k);
-      box.innerHTML=projCatsHTML(st,st.id); wireLinks(); });
-    box.querySelectorAll(".pc-item").forEach(r=>r.onclick=()=>{ save(); closeModal(); openLinked(st.links[+r.dataset.i]); });
-  };
-  wireLinks();
-  document.getElementById("sm_addlink").onclick=()=>{ save(); addLinkModal(st,()=>stepModal(pr,st,after)); };
+  mountLinkEditor(document.getElementById("sm_links"),st,()=>{ drawGroupDefs(); drawGroups(); });
   document.getElementById("sm_del").onclick=()=>{
     if(!confirm(`Delete "${st.title||"this experiment"}"?${stepsUnder(pr,st.id).length?"\n\nIts nested experiments go too.":""}`))return;
     deleteStep(pr,st.id); closeModal(); if(after)after(); };
   document.getElementById("sm_save").onclick=()=>{ save(); closeModal(); if(after)after(); };
+}
+
+// Every (project, experiment, group) an animal is assigned to. Derived, never
+// stored on the animal — the assignment lives on the experiment that made it.
+function animalGroups(aid){
+  const out=[];
+  DB.projects.forEach(pr=>(pr.steps||[]).forEach(st=>{
+    const gid=(st.groups||{})[aid]; if(!gid)return;
+    const g=(st.groupDefs||[]).find(x=>x.id===gid); if(g)out.push({pr,st,g});
+  }));
+  return out;
+}
+// the projects an animal belongs to at all, group or no group
+function animalProjects(aid){
+  const set=new Map();
+  DB.projects.forEach(pr=>{
+    const onProj=(pr.links||[]).some(l=>l.kind==="animal"&&l.id===aid);
+    const onStep=(pr.steps||[]).some(st=>(st.links||[]).some(l=>l.kind==="animal"&&l.id===aid)
+                                       ||((st.groups||{})[aid]));
+    if(onProj||onStep)set.set(pr.id,pr);
+  });
+  return [...set.values()];
+}
+// "PT inhibition > Experimental (CNO)", or just the project, or nothing —
+// whatever is the most specific true thing about where this animal sits.
+function animalWhere(a){
+  const g=animalGroups(a.id)[0];
+  if(g)return `${g.pr.name||"(unnamed project)"} \u203a ${g.g.name||"(unnamed group)"}`;
+  const ps=animalProjects(a.id);
+  return ps.length?(ps[0].name||"(unnamed project)"):"";
+}
+function animalColor(a){
+  const ps=animalProjects(a.id);
+  return ps.length?ps[0].color:"#5b6678";
+}
+
+// Every experiment this animal is in, the group it sits in there, and a way to
+// put it into another one.
+function mountAnimalGroups(host,aid){
+  const draw=()=>{
+    const rows=[];
+    DB.projects.forEach(pr=>(pr.steps||[]).forEach(st=>{
+      const onStep=(st.links||[]).some(l=>l.kind==="animal"&&l.id===aid)||!!(st.groups||{})[aid];
+      const onProj=(pr.links||[]).some(l=>l.kind==="animal"&&l.id===aid);
+      if(onStep||onProj)rows.push({pr,st});
+    }));
+    host.innerHTML=`${rows.length?rows.map((r,i)=>`<div class="ag-row" data-i="${i}">
+        <span class="ag-where">${esc(r.pr.name||"(unnamed project)")} <span class="ag-sep">\u203a</span> ${esc(r.st.title||"(unnamed experiment)")}</span>
+        <select class="ag-pick"><option value="">\u2014</option>${(r.st.groupDefs||[]).map(g=>
+          `<option value="${g.id}" ${(r.st.groups||{})[aid]===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>
+        <button class="ag-del" title="Remove from this experiment">\u2715</button>
+      </div>`).join(""):`<div class="pc-empty">Not in any experiment yet.</div>`}
+      <div class="ag-add">
+        <select id="ag_sel"><option value="">\uff0b add to an experiment\u2026</option>${
+          DB.projects.flatMap(pr=>(pr.steps||[]).map(st=>
+            `<option value="${pr.id}::${st.id}">${esc(pr.name||"(unnamed)")} \u203a ${esc(st.title||"(unnamed experiment)")}</option>`)).join("")}</select>
+      </div>`;
+    host.querySelectorAll(".ag-row").forEach(el=>{
+      const r=rows[+el.dataset.i];
+      el.querySelector(".ag-pick").addEventListener("change",e=>{
+        r.st.groups=r.st.groups||{};
+        if(e.target.value)r.st.groups[aid]=e.target.value; else delete r.st.groups[aid];
+        // being in a group implies being on the experiment
+        if(e.target.value&&!(r.st.links||[]).some(l=>l.kind==="animal"&&l.id===aid))
+          (r.st.links=r.st.links||[]).push({kind:"animal",id:aid});
+        persist(); draw(); });
+      el.querySelector(".ag-del").onclick=()=>{
+        r.st.links=(r.st.links||[]).filter(l=>!(l.kind==="animal"&&l.id===aid));
+        if(r.st.groups)delete r.st.groups[aid];
+        persist(); draw(); };
+    });
+    host.querySelector("#ag_sel").addEventListener("change",e=>{
+      if(!e.target.value)return;
+      const [pid,sid]=e.target.value.split("::");
+      const pr=projById(pid), st=pr&&(pr.steps||[]).find(x=>x.id===sid); if(!st)return;
+      if(!(st.links||[]).some(l=>l.kind==="animal"&&l.id===aid))(st.links=st.links||[]).push({kind:"animal",id:aid});
+      persist(); draw(); });
+  };
+  draw();
 }
 
 /* ---- attaching from the other side ----
@@ -2068,12 +2216,8 @@ function renderProjectPlan(id){
   drawSteps();
 
   const lw=document.createElement("div"); lw.className="fld"; host.appendChild(lw);
-  lw.innerHTML=`<label>Shared across the project</label><div id="pl_links">${projCatsHTML(pr)}</div>
-    <button class="btn ghost" id="pl_addlink" style="margin-top:8px">＋ Link</button>`;
-  lw.querySelector("#pl_addlink").onclick=()=>addLinkModal(pr,()=>renderProjectPlan(id));
-  lw.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=()=>{
-    const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k); renderProjectPlan(id); });
-  lw.querySelectorAll(".pc-item").forEach(r=>r.onclick=()=>openLinked(pr.links[+r.dataset.i]));
+  lw.innerHTML=`<label>Shared across the project</label><div id="pl_links"></div>`;
+  mountLinkEditor(document.getElementById("pl_links"),pr,()=>drawSteps());
 }
 
 /* ---- the project list ---- */
@@ -2082,8 +2226,7 @@ function projSummary(pr){
   const done=steps.filter(stepDone).length;
   const animals=new Set();
   (pr.links||[]).forEach(l=>{
-    if(l.kind==="animal")animals.add(l.id);
-    if(l.kind==="cohort")DB.animals.filter(a=>a.cohort===l.id).forEach(a=>animals.add(a.id)); });
+    if(l.kind==="animal")animals.add(l.id); });
   steps.forEach(st=>(st.links||[]).forEach(l=>{ if(l.kind==="animal")animals.add(l.id); }));
   const dated=steps.filter(x=>x.deadline&&!stepDone(x)).sort((a,b)=>a.deadline.localeCompare(b.deadline));
   return {nSteps:steps.length,done,nAnimals:animals.size,next:dated[0]||null};
@@ -3980,7 +4123,7 @@ function diaryEntryDetailHTML(e,a){
 function pipe(v){ return v===true?{c:"var(--gcamp)",m:"✓"}:v===false?{c:"var(--overdue)",m:"✕"}:{c:"var(--ink-faint)",m:"·"}; }
 function renderAnimals(){
   const host=document.getElementById("animals"); host.innerHTML="";
-  const cohortNames=(DB.cohorts||[]).map(c=>c.name).sort((a,b)=>a.localeCompare(b));
+  const projNames=DB.projects.map(p=>[p.id,p.name||"(unnamed project)"]);
   const bar=document.createElement("div");
   bar.style.cssText="margin-bottom:16px";
   const row=(label,id,cur,opts)=>`<div class="af-row"><span class="af-label">${label}</span><div class="seg" id="${id}">${opts.map(o=>`<button data-v="${o[0]}" class="${cur===o[0]?"on":""}">${o[1]}</button>`).join("")}</div></div>`;
@@ -3990,10 +4133,10 @@ function renderAnimals(){
         style="flex:1 1 160px;max-width:340px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         <button class="btn ghost" id="a_eventlog">📋 Event log</button>
-        <button class="btn ghost" id="a_cohortNew">＋ Cohort</button><button class="btn accent" id="a_add">＋ Animal</button>
+        <button class="btn accent" id="a_add">＋ Animal</button>
       </div>
     </div>
-    ${row("Cohort","a_cohort",animalCohort,[["all","All"],...cohortNames.map(c=>[c,c])])}
+    ${row("Project","a_cohort",animalCohort,[["all","All"],...projNames,["none","Unassigned"]])}
     ${row("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
     ${row("Pipeline","a_pipe",animalPipe,[
       ["all","All"],
@@ -4016,7 +4159,6 @@ function renderAnimals(){
     if(ni){ ni.focus(); ni.setSelectionRange(pos,pos); }
   });
   bar.querySelector("#a_add").onclick=()=>animalModal(null);
-  bar.querySelector("#a_cohortNew").onclick=()=>cohortModal(null);
   bar.querySelector("#a_eventlog").onclick=()=>openEventLogModal(null);
 
   function pipeMatch(a){
@@ -4034,10 +4176,12 @@ function renderAnimals(){
   const q=animalSearch.trim().toLowerCase();
   function searchMatch(a){
     if(!q) return true;
-    return [a.name,a.cage,a.cohort,a.strain,a.comments].some(v=>v && String(v).toLowerCase().includes(q));
+    return [a.name,a.cage,a.strain,a.comments].some(v=>v && String(v).toLowerCase().includes(q));
   }
+  const inProject=(a,pid)=>pid==="all"||(pid==="none"?!animalProjects(a.id).length
+                                                     :animalProjects(a.id).some(p=>p.id===pid));
   let list=DB.animals.filter(a=>
-    (animalCohort==="all"||a.cohort===animalCohort) &&
+    inProject(a,animalCohort) &&
     (animalStatus==="all"||a.termination===animalStatus) &&
     pipeMatch(a) && searchMatch(a));
   const cnt=(f)=>list.filter(f).length;
@@ -4048,44 +4192,22 @@ function renderAnimals(){
     <span>histology ${cnt(a=>hasProcEntry(a,"histology",true))}</span><span>microscopy ${cnt(a=>hasProcEntry(a,"microscopy",true))}</span>`;
   host.appendChild(sum);
 
-  // show every cohort group (even empty ones) so new cohorts are visible
-  const shownCohorts=animalCohort==="all"?cohortNames:[animalCohort];
-  let any=false;
-  shownCohorts.forEach(cohort=>{
-    const items=list.filter(a=>a.cohort===cohort);
-    const co=cohortByName(cohort);
+  // Grouped by project rather than by cohort. An animal in two projects is
+  // listed under both, which is the truth rather than a duplicate.
+  const sections=[...DB.projects.map(pj=>({id:pj.id,name:pj.name||"(unnamed project)",color:pj.color})),
+                  {id:"none",name:"Not in a project",color:"#5b6678"}];
+  const shown=animalCohort==="all"?sections:sections.filter(x=>x.id===animalCohort);
+  shown.forEach(sec=>{
+    const items=sec.id==="none"?list.filter(a=>!animalProjects(a.id).length)
+                               :list.filter(a=>animalProjects(a.id).some(pj=>pj.id===sec.id));
+    if(sec.id==="none"&&!items.length)return;
     const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="6px";
-    h.innerHTML=`<span class="chip" style="background:${co?co.color:"#889"}"></span><h2>${esc(cohort)}</h2>
-      <span class="count">${items.length} animal${items.length!==1?"s":""}</span>
-      <button class="co-edit" data-co="${escAttr(cohort)}" style="margin-left:auto;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px">✎ cohort</button>`;
+    h.innerHTML=`<span class="chip" style="background:${sec.color}"></span><h2>${esc(sec.name)}</h2>
+      <span class="count">${items.length} animal${items.length!==1?"s":""}</span>`;
     host.appendChild(h);
-    h.querySelector(".co-edit").onclick=()=>cohortModal(cohort);
-    if(items.length){ any=true; items.forEach(a=>host.appendChild(animalCard(a))); }
-    else { const e=document.createElement("div"); e.style.cssText="font-size:12px;color:var(--ink-faint);font-family:var(--mono);padding:4px 0 10px"; e.textContent="no animals in this cohort yet"; host.appendChild(e); }
+    if(items.length) items.forEach(a=>host.appendChild(animalCard(a)));
+    else { const e=document.createElement("div"); e.style.cssText="font-size:12px;color:var(--ink-faint);font-family:var(--mono);padding:4px 0 10px"; e.textContent="no animals yet"; host.appendChild(e); }
   });
-  if(!list.length && !any){ /* filters could hide all */ }
-}
-function cohortModal(name){
-  const co=name?cohortByName(name):null;
-  const startColor=co?co.color:DOMAIN_PALETTE[(DB.cohorts||[]).length%DOMAIN_PALETTE.length];
-  modal(`<h3>${name?"Edit":"New"} cohort</h3>
-    <div class="fld"><label>Cohort name</label><input id="co_name" value="${escAttr(co?co.name:"")}" placeholder="e.g. SNr, Type 2 enhancer" autofocus></div>
-    <div class="fld"><label>Colour</label><div class="taglist" id="co_pal">${paletteHTML(startColor)}</div></div>
-    <div class="actions">${name?`<button class="btn danger" id="co_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="co_save">Save</button></div>`);
-  let chosenColor=startColor;
-  document.getElementById("co_pal").addEventListener("click",e=>{const t=e.target.closest(".tag");if(!t)return;chosenColor=t.dataset.c;
-    document.querySelectorAll("#co_pal .tag").forEach(x=>x.style.boxShadow="none");t.style.boxShadow=`0 0 0 2px ${chosenColor}`;});
-  document.getElementById("co_save").onclick=()=>{
-    const nm=document.getElementById("co_name").value.trim(); if(!nm){toast("Name needed");return;}
-    if(co){ const old=co.name; co.name=nm; co.color=chosenColor; if(old!==nm)DB.animals.forEach(a=>{if(a.cohort===old)a.cohort=nm;}); }
-    else { if(cohortByName(nm)){toast("Cohort exists");return;} DB.cohorts.push({id:uid("co_"),name:nm,color:chosenColor}); }
-    persist(); closeModal(); render(); toast("Cohort saved");
-  };
-  if(name)document.getElementById("co_del").onclick=()=>{
-    const n=DB.animals.filter(a=>a.cohort===name).length;
-    if(n){ toast(`Reassign or remove its ${n} animal${n>1?"s":""} first`); return; }
-    if(confirm(`Delete cohort "${name}"?`)){ DB.cohorts=DB.cohorts.filter(c=>c.name!==name); persist(); closeModal(); render(); toast("Cohort deleted"); }
-  };
 }
 function animalCard(a){
   const card=document.createElement("div");
@@ -5222,7 +5344,7 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
 }
 
 function animalModal(id,draft){
-  const a=id?DB.animals.find(x=>x.id===id):{cohort:((DB.cohorts||[])[0]||{}).name||"Type 2",alive:true,tasks:[]};
+  const a=id?DB.animals.find(x=>x.id===id):{alive:true,tasks:[]};
   if(!Array.isArray(a.tasks))a.tasks=[];
   // `view` supplies initial field values: normally the stored record, but when
   // returning from the virus/site library (opened mid-edit via "✎ edit library")
@@ -5230,12 +5352,11 @@ function animalModal(id,draft){
   // `a` itself stays the real DB.animals reference so Save's Object.assign(a,rec)
   // still mutates the actual stored record in place.
   const view=draft||a;
-  const cohorts=(DB.cohorts||[]).map(c=>c.name);
   const F=(fid,lab,val,type="text")=>`<div class="fld" style="flex:1"><label>${lab}</label><input id="${fid}" type="${type}" value="${escAttr(val||"")}"></div>`;
   const dbtn=(fid,val)=>`<button type="button" id="${fid}" class="datebtn datebtn-sm ${val?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${val?fmtWhenFull(val):"set date"}</button>`;
   const seg=(fid,on)=>`<div class="seg" id="${fid}"><button data-v="1" class="${on?"on":""}">Yes</button><button data-v="0" class="${!on?"on":""}">No</button></div>`;
   modal(`<h3>${id?"Edit":"New"} animal</h3>
-    <div class="drow">${F("am_name","Name",view.name)}<div class="fld" style="width:120px"><label>Cohort</label><select id="am_cohort">${cohorts.map(c=>`<option ${view.cohort===c?"selected":""}>${esc(c)}</option>`).join("")}</select></div></div>
+    <div class="drow">${F("am_name","Name",view.name)}</div>
     <div class="drow">${F("am_cage","Cage",view.cage)}${F("am_sex","Sex",view.sex)}${F("am_strain","Strain",view.strain)}</div>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",view.dob)}</div>
@@ -5261,12 +5382,14 @@ function animalModal(id,draft){
     </div>
 
     <div class="fld"><label>Surgical comments / notes</label><textarea id="am_com">${esc(view.comments||"")}</textarea></div>
-    ${id?`<div class="fld"><label>Experiments</label><div id="am_attach"></div></div>`:""}
+    ${id?`<div class="fld"><label>Experiments &amp; groups</label><div id="am_attach"></div></div>`:""}
     <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
 
-  // which experiments this animal belongs to, editable from here
+  // Which experiments this animal is in and which group of each. Same
+  // assignment the experiment editor writes — read back from the experiments
+  // themselves, never stored on the animal.
   if(id&&document.getElementById("am_attach"))
-    mountAttachments(document.getElementById("am_attach"),{kind:"animal",id});
+    mountAnimalGroups(document.getElementById("am_attach"),id);
 
   // dates — custom wiring instead of bindDateButton so the Born button can
   // also show age in weeks (which depends on both dates, so either one
@@ -5294,7 +5417,6 @@ function animalModal(id,draft){
   function goToLibrary(focus){
     const d={
       name:document.getElementById("am_name").value,
-      cohort:document.getElementById("am_cohort").value,
       cage:document.getElementById("am_cage").value,
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
@@ -5315,7 +5437,6 @@ function animalModal(id,draft){
     // only headpost/window/injections come from the template.
     const d={
       name:document.getElementById("am_name").value,
-      cohort:document.getElementById("am_cohort").value,
       cage:document.getElementById("am_cage").value,
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
@@ -5342,7 +5463,7 @@ function animalModal(id,draft){
     const snap=procEditor.getSnapshot();
     const cleanInjs=snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
     const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
-    const rec={name,cohort:document.getElementById("am_cohort").value,cage:document.getElementById("am_cage").value.trim(),
+    const rec={name,cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
       dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
       termination, alive:termination==="alive",
@@ -5359,9 +5480,9 @@ function animalModal(id,draft){
 function taskTagHTML(t){
   const aid=(t.linkedAnimals||[])[0];
   const a=aid&&DB.animals.find(x=>x.id===aid);
-  const co=a&&cohortByName(a.cohort);
   if(!a)return "";
-  return `<span class="chip" style="background:${co?co.color:"#889"}"></span>${esc(a.cohort)} · ${esc(a.name)}`;
+  const where=animalWhere(a);
+  return `<span class="chip" style="background:${animalColor(a)}"></span>${where?esc(where)+" · ":""}${esc(a.name)}`;
 }
 function openDetail(id){
   selectedId=id; const t=taskById(id); if(!t)return;
@@ -5387,7 +5508,6 @@ function openDetail(id){
 // without anything being copied. The label is looked up, never stored.
 function linkLabel(l){
   if(l.kind==="animal"){ const a=DB.animals.find(x=>x.id===l.id); return a?`🐁 ${a.name}`:"🐁 (deleted animal)"; }
-  if(l.kind==="cohort") return `🧬 ${l.id}`;
   if(l.kind==="template"){ const pr=(DB.config.procedureLib||[]).find(x=>x.id===l.id); return `🧰 ${pr?pr.name:"(deleted procedure)"}`; }
   if(l.kind==="reading"){ const r=DB.readings.find(x=>x.id===l.id); return `📖 ${r?r.title:"(deleted paper)"}`; }
   if(l.kind==="material") return `${{virus:"🦠",site:"📍"}[l.cat]||"🧪"} ${l.id}`;
@@ -5416,8 +5536,6 @@ function goMaterials(sub){
 }
 function openLinked(l){
   if(l.kind==="animal"){ closeDetail(); switchTo("animals"); animalModal(l.id); return; }
-  if(l.kind==="cohort"){ closeDetail(); animalCohort=l.id; DB.config.animalFilters.cohort=l.id; persist();
-    switchTo("animals"); return; }
   if(l.kind==="template"){ closeDetail(); goMaterials("procedures"); return; }
   if(l.kind==="task"){ closeDetail(); goMaterials("diarytypes"); return; }
   if(l.kind==="reading"){ closeDetail(); goMaterials("literature"); return; }
@@ -5441,12 +5559,10 @@ function addLinkModal(sp,after){
   procs.sort((x,y)=>(y.date||"").localeCompare(x.date||""));
   modal(`<h3>Link this datum to…</h3>
     <div class="fld"><label>Animal</label><select id="lk_animal"><option value="">—</option>
-      ${animals.map(a=>`<option value="${a.id}">${esc(a.name)} · ${esc(a.cohort||"")}</option>`).join("")}</select></div>
+      ${animals.map(a=>`<option value="${a.id}">${esc(a.name)}${animalWhere(a)?" · "+esc(animalWhere(a)):""}</option>`).join("")}</select></div>
     <div class="fld"><label>Material</label><select id="lk_mat"><option value="">—</option>
       ${mats.map(g=>`<optgroup label="${escAttr(g.label)}">${g.items.sort().map(n=>
         `<option value="${escAttr(g.cat+"::"+n)}">${esc(n)}</option>`).join("")}</optgroup>`).join("")}</select></div>
-    <div class="fld"><label>Cohort</label><select id="lk_cohort"><option value="">—</option>
-      ${(DB.cohorts||[]).map(c=>`<option value="${escAttr(c.name)}">${esc(c.name)}</option>`).join("")}</select></div>
     <div class="fld"><label>Behavioural task</label><select id="lk_task"><option value="">—</option>
       ${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t.name)}">${esc(t.name)}</option>`).join("")}</select></div>
     <div class="fld"><label>Procedure template</label><select id="lk_tpl"><option value="">—</option>
@@ -5461,10 +5577,9 @@ function addLinkModal(sp,after){
   document.getElementById("lk_go").onclick=()=>{
     const av=document.getElementById("lk_animal").value, mv=document.getElementById("lk_mat").value,
           pv=document.getElementById("lk_proc").value, uv=document.getElementById("lk_url").value.trim(),
-          cv=document.getElementById("lk_cohort").value, tv=document.getElementById("lk_tpl").value,
+          tv=document.getElementById("lk_tpl").value,
           rv=document.getElementById("lk_read").value, kv=document.getElementById("lk_task").value;
     sp.links=sp.links||[];
-    if(cv)sp.links.push({kind:"cohort",id:cv});
     if(kv)sp.links.push({kind:"task",id:kv});
     if(tv)sp.links.push({kind:"template",id:tv});
     if(rv)sp.links.push({kind:"reading",id:rv});
@@ -5732,7 +5847,7 @@ function openTimelineCreateModal(prefillDeadline){
     body.innerHTML=`
       <div class="drow">
         <div class="fld" style="flex:1"><label>Animal</label>
-          <select id="tc_animal">${animals.map(a=>`<option value="${a.id}">${esc(a.name)} (${esc(a.cohort)})</option>`).join("")}</select></div>
+          <select id="tc_animal">${animals.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select></div>
         <div class="fld" style="flex:1"><label>Type</label>
           <select id="tc_type">${types.map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}</select></div>
       </div>
