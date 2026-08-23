@@ -235,12 +235,14 @@
   .step-row{display:flex;align-items:center;gap:6px;padding:3px 0}
   .step-caret,.step-edit,.step-add,.step-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:1px 6px;font-size:11px;cursor:pointer;flex:0 0 auto}
   .step-tick{color:var(--gcamp);font-size:11px;flex:0 0 auto}
-  .grp-plan{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:6px 0}
-  .gp-lab{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--ink-faint)}
-  .gp-n{width:62px;font-size:11.5px;padding:2px 6px}
-  .gp-type{flex:1;min-width:130px;font-size:11.5px;padding:2px 6px}
-  .grp-need{font-family:var(--mono);font-size:11px;color:var(--amber)}
-  .grp-need.ok{color:var(--gcamp)}
+  .gdef-row{display:flex;align-items:center;gap:7px;padding:3px 0}
+  .gdef-name{flex:1;min-width:0;font-size:12.5px;padding:3px 7px}
+  .gdef-n{width:64px;font-size:11.5px;padding:3px 6px}
+  .gdef-count{font-family:var(--mono);font-size:10.5px;color:var(--amber);min-width:34px;text-align:right}
+  .gdef-count.ok{color:var(--gcamp)}
+  .gdef-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 7px;font-size:11px;cursor:pointer}
+  .gdef-del:hover{color:var(--overdue)}
+  .grp-pick{flex:0 0 auto;min-width:140px;font-size:11.5px;padding:2px 6px}
   .pc-empty{font-size:11.5px;color:var(--ink-faint);padding:5px 0}
   .pc-stats{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--ink-dim);padding:6px 0}
   .pc-stats b{font-family:var(--mono);color:var(--ink);font-weight:600}
@@ -276,7 +278,6 @@
   .grp-tally{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-left:auto}
   .grp-row{display:flex;align-items:center;gap:8px;padding:4px 0}
   .grp-name{flex:1;min-width:0;font-size:12.5px}
-  .grp-seg button{font-size:11px;padding:2px 9px}
   .linklist{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;align-items:center}
   .linkchip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line2);background:var(--panel2);border-radius:20px;padding:2px 4px 2px 9px;font-size:11px;max-width:100%}
   .lk-open{cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}
@@ -1166,8 +1167,24 @@ function migrate(){                       // backfill fields added in later vers
       if(st.exclusions==null)st.exclusions="";
       if(st.expected==null)st.expected="";
       if(st.outcome==null)st.outcome="";
-      if(!st.plan||typeof st.plan!=="object")st.plan={nExp:null,nCtl:null,controlType:""};
       if(!st.groups||typeof st.groups!=="object")st.groups={};
+      // Arms were a fixed pair; groups are a list you define. Convert the old
+      // experiment/control assignment into two named groups so nothing is lost,
+      // folding the control type into that group's name where one was set.
+      if(!Array.isArray(st.groupDefs)){
+        st.groupDefs=[];
+        const used=new Set(Object.values(st.groups));
+        const pl=st.plan||{};
+        if(used.has("experiment")||pl.nExp!=null)
+          st.groupDefs.push({id:"g_exp",name:"Experimental",planned:pl.nExp!=null?pl.nExp:null});
+        if(used.has("control")||pl.nCtl!=null)
+          st.groupDefs.push({id:"g_ctl",name:pl.controlType?`Control — ${pl.controlType}`:"Control",
+                             planned:pl.nCtl!=null?pl.nCtl:null});
+        Object.keys(st.groups).forEach(aid=>{
+          if(st.groups[aid]==="experiment")st.groups[aid]="g_exp";
+          else if(st.groups[aid]==="control")st.groups[aid]="g_ctl";
+        });
+      }
     });
   });
   // experiment/control lives on the animal: it is a fact about the mouse, and it
@@ -1676,8 +1693,11 @@ const LINK_GROUPS=[
 ];
 const TERM_LABEL={alive:"alive",sacrificed:"sacrificed",early_death:"early death",excluded:"excluded"};
 const TERM_COLOR={alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"};
-const CONTROL_TYPES=["fluorophore-only (e.g. GFP)","no-virus","vehicle / saline","CNO in non-DREADD",
-  "sham stimulation","light-off","contralateral hemisphere","littermate","scrambled / non-targeting"];
+// Offered as autocomplete when naming a group — the arms people actually run in
+// this work. Nothing is restricted to them; a group is whatever you call it.
+const GROUP_SUGGESTIONS=["Experimental","Control","Fluorophore-only (GFP)","No-virus","Vehicle / saline",
+  "CNO in non-DREADD","Sham stimulation","Light-off","Contralateral hemisphere","Littermate",
+  "Scrambled / non-targeting","Naive"];
 
 function linkName(l){
   if(l.kind==="animal"){ const x=DB.animals.find(v=>v.id===l.id); return x?x.name:"(deleted animal)"; }
@@ -1770,7 +1790,7 @@ function stepColor(st){ const pr=projById(st.projectId); return pr?pr.color:"#55
 function addStep(pr,parentId){
   const st={id:uid("st_"),projectId:pr.id,parentId:parentId||null,title:"",description:"",
             hypothesis:"",exclusions:"",expected:"",outcome:"",
-            plan:{nExp:null,nCtl:null,controlType:""},groups:{},
+            groupDefs:[],groups:{},
             deadline:null,endDate:null,duration:null,links:[]};
   (pr.steps=pr.steps||[]).push(st); persist(); return st;
 }
@@ -1795,13 +1815,24 @@ function stepSpan(st){
   const a=fmtWhenFull(st.deadline);
   return st.endDate?`${a} → ${fmtWhenFull(st.endDate)}`:a;
 }
-function stepArmTally(pr,st){
-  const g=st.groups||{}, pl=st.plan||{};
-  const nExp=Object.values(g).filter(v=>v==="experiment").length;
-  const nCtl=Object.values(g).filter(v=>v==="control").length;
-  const part=(n,want)=>want?`${n}/${want}`:`${n}`;
-  return {nExp,nCtl,text:`${part(nExp,+pl.nExp||0)} exp · ${part(nCtl,+pl.nCtl||0)} ctrl`,
-          ok:(!pl.nExp||nExp>=pl.nExp)&&(!pl.nCtl||nCtl>=pl.nCtl)};
+function addGroup(st,name){
+  const g={id:uid("g_"),name:name||"",planned:null};
+  (st.groupDefs=st.groupDefs||[]).push(g); persist(); return g;
+}
+function removeGroup(st,gid){
+  st.groupDefs=(st.groupDefs||[]).filter(g=>g.id!==gid);
+  // animals assigned to a group that no longer exists become unassigned rather
+  // than pointing at nothing
+  Object.keys(st.groups||{}).forEach(aid=>{ if(st.groups[aid]===gid) delete st.groups[aid]; });
+  persist();
+}
+function groupCount(st,gid){ return Object.values(st.groups||{}).filter(v=>v===gid).length; }
+function stepGroupTally(pr,st){
+  const defs=st.groupDefs||[];
+  if(!defs.length)return {text:"no groups",ok:true};
+  const parts=defs.map(g=>{ const n=groupCount(st,g.id);
+    return `${g.planned?`${n}/${g.planned}`:n} ${g.name||"unnamed"}`; });
+  return {text:parts.join(" · "),ok:defs.every(g=>!g.planned||groupCount(st,g.id)>=g.planned)};
 }
 
 function addProject(){
@@ -1825,15 +1856,11 @@ function stepModal(pr,st,after){
       <div class="fld" style="flex:1"><label>End</label>
         <button type="button" id="sm_end" class="datebtn ${st.endDate?"":"datebtn-empty"}">${st.endDate?fmtWhenFull(st.endDate):"📅 end"}</button></div>
     </div>
-    <div class="fld"><label>Arms</label>
-      <div class="grp-plan">
-        <span class="gp-lab">Planned</span>
-        <input class="gp-n" id="sm_nexp" type="number" min="0" value="${(st.plan||{}).nExp!=null?st.plan.nExp:""}"><span class="gp-lab">exp</span>
-        <input class="gp-n" id="sm_nctl" type="number" min="0" value="${(st.plan||{}).nCtl!=null?st.plan.nCtl:""}"><span class="gp-lab">ctrl</span>
-        <input class="gp-type" id="sm_ctype" list="sm_ctypes" value="${escAttr((st.plan||{}).controlType||"")}">
-        <datalist id="sm_ctypes">${CONTROL_TYPES.map(t=>`<option value="${escAttr(t)}">`).join("")}</datalist>
-      </div>
-      <div id="sm_groups"></div></div>
+    <div class="fld"><label>Groups</label>
+      <div id="sm_gdefs"></div>
+      <button class="btn ghost" id="sm_addgroup" style="margin-top:6px">＋ Group</button>
+      <datalist id="sm_gsuggest">${GROUP_SUGGESTIONS.map(t=>`<option value="${escAttr(t)}">`).join("")}</datalist>
+      <div id="sm_groups" style="margin-top:12px"></div></div>
     <div class="fld"><label>Exclusion criteria</label>
       <textarea id="sm_excl" rows="2">${esc(st.exclusions||"")}</textarea></div>
     <div class="fld"><label>Expected result</label>
@@ -1852,33 +1879,52 @@ function stepModal(pr,st,after){
     st.exclusions=document.getElementById("sm_excl").value;
     st.expected=document.getElementById("sm_exp").value;
     st.outcome=document.getElementById("sm_out").value;
-    st.plan=st.plan||{};
-    const ne=document.getElementById("sm_nexp").value, nc=document.getElementById("sm_nctl").value;
-    st.plan.nExp=ne===""?null:Math.max(0,+ne);
-    st.plan.nCtl=nc===""?null:Math.max(0,+nc);
-    st.plan.controlType=document.getElementById("sm_ctype").value;
     persist();
   };
   bindDateButton(document.getElementById("sm_start"), ()=>st.deadline||"", v=>{ st.deadline=v||null; persist(); });
   bindDateButton(document.getElementById("sm_end"),   ()=>st.endDate||"",  v=>{ st.endDate=v||null;  persist(); });
 
+  function drawGroupDefs(){
+    const box=document.getElementById("sm_gdefs");
+    const defs=st.groupDefs||[];
+    box.innerHTML=defs.length?defs.map(g=>`<div class="gdef-row" data-g="${g.id}">
+        <input class="gdef-name" list="sm_gsuggest" value="${escAttr(g.name)}">
+        <input class="gdef-n" type="number" min="0" value="${g.planned!=null?g.planned:""}" title="Planned number of animals">
+        <span class="gdef-count ${(!g.planned||groupCount(st,g.id)>=g.planned)?"ok":""}">${g.planned?`${groupCount(st,g.id)}/${g.planned}`:groupCount(st,g.id)}</span>
+        <button class="gdef-del" title="Remove this group">✕</button>
+      </div>`).join(""):`<div class="pc-empty">No groups yet.</div>`;
+    box.querySelectorAll(".gdef-row").forEach(r=>{
+      const g=(st.groupDefs||[]).find(x=>x.id===r.dataset.g); if(!g)return;
+      r.querySelector(".gdef-name").addEventListener("input",e=>{ g.name=e.target.value; persist(); drawGroups(); });
+      r.querySelector(".gdef-n").addEventListener("change",e=>{
+        g.planned=e.target.value===""?null:Math.max(0,+e.target.value); persist(); drawGroupDefs(); });
+      r.querySelector(".gdef-del").onclick=()=>{
+        const n=groupCount(st,g.id);
+        if(n&&!confirm(`Remove "${g.name||"this group"}"?\n\n${n} animal${n!==1?"s":""} will become unassigned.`))return;
+        removeGroup(st,g.id); drawGroupDefs(); drawGroups(); };
+    });
+  }
   function drawGroups(){
     const box=document.getElementById("sm_groups");
     if(!animals.length){
-      box.innerHTML=`<div class="pc-empty">Link an animal or a cohort — to this experiment or to the project — to split it into arms.</div>`;
+      box.innerHTML=`<div class="pc-empty">Link an animal or a cohort — to this experiment or to the project — to assign it to a group.</div>`;
+      return; }
+    if(!(st.groupDefs||[]).length){
+      box.innerHTML=`<div class="pc-empty">Add a group above, then assign these animals to it.</div>`;
       return; }
     st.groups=st.groups||{};
     box.innerHTML=animals.map(a=>`<div class="grp-row" data-a="${a.id}">
       <span class="grp-name">${esc(a.name)}</span>
       <span class="grp-sub">${esc(a.cohort||"")}</span>
-      <div class="seg grp-seg">${[["experiment","Exp"],["control","Ctrl"],["","—"]].map(([v,l])=>
-        `<button data-g="${v}" class="${(st.groups[a.id]||"")===v?"on":""}">${l}</button>`).join("")}</div>
+      <select class="grp-pick"><option value="">—</option>${st.groupDefs.map(g=>
+        `<option value="${g.id}" ${st.groups[a.id]===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>
     </div>`).join("");
-    box.querySelectorAll(".grp-row").forEach(r=>r.querySelectorAll(".grp-seg button").forEach(b=>b.onclick=()=>{
-      if(b.dataset.g)st.groups[r.dataset.a]=b.dataset.g; else delete st.groups[r.dataset.a];
-      persist(); drawGroups(); }));
+    box.querySelectorAll(".grp-row").forEach(r=>r.querySelector(".grp-pick").addEventListener("change",e=>{
+      if(e.target.value)st.groups[r.dataset.a]=e.target.value; else delete st.groups[r.dataset.a];
+      persist(); drawGroupDefs(); }));
   }
-  drawGroups();
+  drawGroupDefs(); drawGroups();
+  document.getElementById("sm_addgroup").onclick=()=>{ addGroup(st,""); drawGroupDefs(); drawGroups(); };
 
   const wireLinks=()=>{
     const box=document.getElementById("sm_links");
@@ -1991,7 +2037,7 @@ function renderProjectPlan(id){
     const roots=stepsUnder(pr,null);
     if(!roots.length){ box.innerHTML=`<div class="pc-empty">No experiments yet.</div>`; return; }
     const card=(st,depth)=>{
-      const kids=stepsUnder(pr,st.id), open=openSteps.has(st.id), arms=stepArmTally(pr,st);
+      const kids=stepsUnder(pr,st.id), open=openSteps.has(st.id), grp=stepGroupTally(pr,st);
       const nLinks=(st.links||[]).length;
       return `<div class="exp-card${stepDone(st)?" done":""}" data-id="${st.id}" style="margin-left:${depth*20}px">
         <div class="exp-top">
@@ -2004,7 +2050,7 @@ function renderProjectPlan(id){
         ${st.description?`<div class="exp-desc">${esc(st.description)}</div>`:""}
         <div class="exp-meta">
           ${st.deadline?`<span class="em-date">${esc(stepSpan(st))}</span>`:""}
-          <span class="em-arms ${arms.ok?"ok":""}">${arms.text}</span>
+          ${(st.groupDefs||[]).length?`<span class="em-arms ${grp.ok?"ok":""}">${esc(grp.text)}</span>`:""}
           ${nLinks?`<span>${nLinks} linked</span>`:""}
           ${st.hypothesis?`<span title="${escAttr(st.hypothesis)}">hypothesis ✓</span>`:""}
         </div>
