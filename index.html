@@ -504,6 +504,9 @@
   .af-row .seg button{flex:0 0 auto}
   .af-label{font-family:var(--mono);font-size:10px;color:var(--ink-faint);text-transform:uppercase;width:60px;flex:0 0 auto}
   .af-grid .af-label{width:auto;align-self:end;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .af-grid .af-sort{border-left:1px solid var(--line2);padding-left:12px;margin-left:2px}
+  .af-grid .af-label.af-sort{color:var(--ink-dim)}
+  .af-grid .af-sel.af-sort{border-radius:7px;border-left-width:1px}
   .taglist{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
   .tag{display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1px solid var(--line2);border-radius:20px;padding:3px 10px;font-size:12px}
   .tag button{border:0;background:transparent;color:var(--ink-faint);font-size:13px;padding:0}
@@ -4252,8 +4255,8 @@ function renderAnimals(){
   // One column per filter: its title, and its dropdown directly beneath. The
   // columns wrap together, so the titles always sit on the line above their own
   // control however narrow the window gets.
-  const col=(label,id,cur,opts)=>`<span class="af-label">${label}</span>
-    <select id="${id}" class="af-sel">${opts.map(o=>
+  const col=(label,id,cur,opts,cls)=>`<span class="af-label${cls?" "+cls:""}">${label}</span>
+    <select id="${id}" class="af-sel${cls?" "+cls:""}">${opts.map(o=>
       `<option value="${escAttr(o[0])}" ${String(cur)===String(o[0])?"selected":""}>${esc(o[1])}</option>`).join("")}</select>`;
   bar.innerHTML=`
     <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin-bottom:10px;align-items:center">
@@ -4268,8 +4271,8 @@ function renderAnimals(){
       ${col("Project","a_cohort",animalCohort,[["all","All projects"],...projNames,["none","Unassigned"]])}
       ${expNames.length?col("Experiment","a_exp",animalExperiment,[["all","All experiments"],...expNames]):""}
       ${groupNames.length?col("Group","a_group",animalGroup,[["all","All groups"],...groupNames.map(g=>[g,g])]):""}
-      ${col("Sort","a_sort",animalSort,[["name","Name"],["dob","Born"],["added","Added"],["sac","Sacrificed"]])}
       ${col("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
+      ${col("↕ Sort by","a_sort",animalSort,[["name","Name"],["dob","Born"],["added","Added"],["sac","Sacrificed"]],"af-sort")}
     </div>
 `;
   host.appendChild(bar);
