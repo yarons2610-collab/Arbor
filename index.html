@@ -227,6 +227,12 @@
   .lit-row button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;flex:0 0 auto}
   .lit-row button:hover{color:var(--ink)}
   .lit-row .lit-del:hover{color:var(--overdue)}
+  .lf-row{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+  .lf-name{flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lf-name.lf-none{color:var(--ink-faint);font-style:italic}
+  .lf-row button{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;flex:0 0 auto;width:auto}
+  .lf-row button:hover{color:var(--ink)}
+  .lf-note{font-size:11px;color:var(--ink-faint);margin-top:5px;line-height:1.45}
   .plan-head{display:flex;align-items:center;gap:10px;margin-bottom:18px}
   .plan-head .plan-name{flex:1;min-width:0;width:auto;font-family:var(--disp);font-size:19px;font-weight:600;background:transparent;border:1px solid transparent;border-radius:8px;padding:4px 8px;color:var(--ink)}
   .plan-head .plan-name:focus{border-color:var(--line2);background:var(--panel2);outline:none}
@@ -644,11 +650,13 @@
         <button class="mat-stab" data-ms="sites">Injection Sites</button>
         <button class="mat-stab" data-ms="inventory">Inventory</button>
         <button class="mat-stab" data-ms="literature">Literature</button>
+        <button class="mat-stab" data-ms="protocols">Protocols</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
         <button class="mat-stab" data-ms="viruses">Viruses</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview hidden" id="ms-literature"></div>
+      <div class="wrap mat-subview hidden" id="ms-protocols"></div>
       <div class="wrap mat-subview hidden" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-procedures"></div>
@@ -1083,6 +1091,8 @@ function persist(){ clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160); 
 async function flushSave(){ clearTimeout(saveTimer); try{ window.arbor.saveSync(DB); }catch(e){} }
 function migrate(){                       // backfill fields added in later versions
   if(!DB.readings)DB.readings=[];
+  // Protocols are literature's twin: a titled pointer to where the method lives.
+  if(!DB.protocols)DB.protocols=[];
   if(!DB.sharedVirusCache)DB.sharedVirusCache={viruses:[],deletedIds:[],fetchedAt:0};
   DB.readings.forEach(r=>{ if(!r.track)r.track="core"; if(!r.added)r.added=Date.now(); });
   if(!DB.config)DB.config={...DEFAULT_CONFIG};
@@ -1264,8 +1274,10 @@ function migrate(){                       // backfill fields added in later vers
   DB.schedule.forEach(t=>{
     if(!Array.isArray(t.links))t.links=[];
     if(t.repeat===undefined)t.repeat=null;
-    // an experiment that has since been deleted leaves the task unassigned
-    if(t.experimentId&&!expById(t.experimentId)){ t.experimentId=null; t.projectId=null; }
+    // an experiment that has since been deleted leaves the task in its project
+    if(t.experimentId&&!expById(t.experimentId)) t.experimentId=null;
+    // a project that has since been deleted leaves it unassigned
+    if(t.projectId&&!projById(t.projectId)) t.projectId=null;
   });
   DB.projects.forEach(pr=>{
     if(!Array.isArray(pr.links)) pr.links=[];
@@ -1936,6 +1948,7 @@ const LINK_GROUPS=[
   {kind:"template", icon:"🧰", label:"Procedure templates"},
   {kind:"task",     icon:"🎯", label:"Behavioural tasks"},
   {kind:"reading",  icon:"📖", label:"Literature"},
+  {kind:"protocol", icon:"📋", label:"Protocols"},
   {kind:"url",      icon:"🔗", label:"External"}
 ];
 const TERM_LABEL={alive:"alive",sacrificed:"sacrificed",early_death:"early death",excluded:"excluded"};
@@ -1951,6 +1964,7 @@ function linkName(l){
   if(l.kind==="template"){ const x=(DB.config.procedureLib||[]).find(v=>v.id===l.id); return x?(x.name||"(unnamed)"):"(deleted)"; }
   if(l.kind==="task") return l.id||"";
   if(l.kind==="reading"){ const x=DB.readings.find(v=>v.id===l.id); return x?x.title:"(deleted paper)"; }
+  if(l.kind==="protocol"){ const x=DB.protocols.find(v=>v.id===l.id); return x?x.title:"(deleted protocol)"; }
   if(l.kind==="url") return l.url||"";
   return l.id||"";
 }
@@ -1987,7 +2001,11 @@ function linkDetail(l){
   }
   if(l.kind==="reading"){
     const r=DB.readings.find(x=>x.id===l.id); if(!r)return {text:"deleted"};
-    return {text:r.link||""};
+    return {text:r.link||r.fileName||""};
+  }
+  if(l.kind==="protocol"){
+    const x=DB.protocols.find(v=>v.id===l.id); if(!x)return {text:"deleted"};
+    return {text:x.link||x.fileName||""};
   }
   return {text:""};
 }
@@ -2036,6 +2054,28 @@ function taskColorOf(t){
   if(pr)return pr.color;
   const e=t.experimentId?expById(t.experimentId):null;
   return e?e.pr.color:"#7db4ff";        // unassigned tasks get their own colour
+}
+// Minutes between two when-strings, counting a date-only value as midnight.
+function minutesBetween(a,b){
+  const x=whenDate(a), y=whenDate(b);
+  if(!x||!y)return null;
+  return Math.round((y-x)/60000);
+}
+// Shift a when-string by minutes, keeping a date-only value date-only when the
+// shift lands on a whole number of days (so an all-day span stays all-day).
+function addMinutesISO(iso,mins){
+  const d=whenDate(iso); if(!d)return null;
+  d.setMinutes(d.getMinutes()+mins);
+  const p2=n=>String(n).padStart(2,"0");
+  const day=`${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
+  return (hasTime(iso)||mins%1440!==0) ? `${day}T${p2(d.getHours())}:${p2(d.getMinutes())}` : day;
+}
+// What an empty end should default to: the same day, half an hour on. A start
+// with no time of day is left alone — a whole-day task already means "that
+// day", and an end would say nothing the start does not.
+function suggestEnd(when){
+  if(!when||!hasTime(when))return null;
+  return addMinutesISO(when,30);
 }
 function taskSpan(t){
   if(!t.when)return "";
@@ -2138,11 +2178,20 @@ function addTask(init){
   taskList().push(t); persist(); return t;
 }
 function deleteTask(id){ DB.schedule=taskList().filter(x=>x.id!==id); persist(); }
-// keep a task's project in step with whichever experiment it names
-function setTaskExperiment(t,expId){
-  t.experimentId=expId||null;
-  const e=expId?expById(expId):null;
-  t.projectId=e?e.pr.id:null;
+// Where a task belongs. It can name an experiment, or a project on its own —
+// some work is the project's without being any single experiment's. The picker
+// encodes which with an "e:"/"p:" prefix so the two id spaces cannot collide,
+// and naming an experiment always keeps its project in step.
+function setTaskTarget(t,val){
+  const v=String(val||"");
+  if(v.startsWith("e:")){
+    const id=v.slice(2), e=expById(id);
+    t.experimentId=id; t.projectId=e?e.pr.id:null;
+  } else if(v.startsWith("p:")){
+    t.experimentId=null; t.projectId=v.slice(2);
+  } else {
+    t.experimentId=null; t.projectId=null;
+  }
   persist();
 }
 const stepsUnder=(pr,parentId)=>parentId?tasksFor(parentId):experimentsOf(pr);
@@ -2157,9 +2206,9 @@ function addStep(pr,parentId){
   (pr.steps=pr.steps||[]).push(st); persist(); return st;
 }
 // deleting an experiment orphans its tasks rather than destroying them — they
-// keep their date and go back to the unassigned pile
+// keep their date and stay in the project, which can now hold a task directly
 function deleteStep(pr,id){
-  taskList().forEach(t=>{ if(t.experimentId===id){ t.experimentId=null; t.projectId=null; } });
+  taskList().forEach(t=>{ if(t.experimentId===id){ t.experimentId=null; t.projectId=pr.id; } });
   pr.steps=(pr.steps||[]).filter(x=>x.id!==id); persist();
 }
 // Which animals this experiment can assign to an arm: the ones it links itself,
@@ -2215,6 +2264,7 @@ function linkOptions(kind){
   if(kind==="task") return (DB.config.taskLib||[]).map(t=>({v:t.name,t:t.name}));
   if(kind==="template") return (DB.config.procedureLib||[]).map(x=>({v:x.id,t:x.name||"(unnamed)"}));
   if(kind==="reading") return DB.readings.map(r=>({v:r.id,t:r.title}));
+  if(kind==="protocol") return DB.protocols.map(x=>({v:x.id,t:x.title}));
   if(kind==="material") return [
     {grp:"Viruses",     items:(activeViruses()||[]).map(v=>({v:"virus::"+v.name,t:v.name}))},
     {grp:"Injection sites",items:(DB.config.siteLib||[]).map(x=>({v:"site::"+x.name,t:x.name}))},
@@ -2273,8 +2323,16 @@ function stepModal(pr,st,after){ return experimentModal(pr,st,after); }
 // Name, when, and which of the experiment's data this step uses.
 // A task: what it is, when, and which experiment it belongs to (if any).
 function taskEditor(t,after){
-  const opts=DB.projects.flatMap(pr=>experimentsOf(pr).map(e=>
-    `<option value="${e.id}" ${t.experimentId===e.id?"selected":""}>${esc(pr.name||"(unnamed)")} › ${esc(e.title||"(unnamed experiment)")}</option>`)).join("");
+  // Each project offers itself first, then its experiments, so "this belongs to
+  // the project but to no one experiment" is a thing you can actually say.
+  const opts=DB.projects.map(pr=>{
+    const own=(!t.experimentId&&t.projectId===pr.id)?" selected":"";
+    return `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">`
+      +`<option value="p:${pr.id}"${own}>the project in general</option>`
+      +experimentsOf(pr).map(e=>
+        `<option value="e:${e.id}" ${t.experimentId===e.id?"selected":""}>${esc(e.title||"(unnamed experiment)")}</option>`).join("")
+      +`</optgroup>`;
+  }).join("");
   modal(`<h3>Task</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
     <div class="drow">
@@ -2294,12 +2352,32 @@ function taskEditor(t,after){
       <div class="dow-every"><span>repeat every</span>
         <input id="tk_ivl" type="number" min="1" max="12" value="1"><span>week(s)</span></div></div>
     <div class="fld"><label>Part of</label>
-      <select id="tk_exp"><option value="">— not attached to an experiment</option>${opts}</select></div>
+      <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="tk_del">Delete task</button></div>
     <div class="actions"><button class="btn accent" id="tk_save">Done</button></div>`,{wide:true});
-  bindDateButton(document.getElementById("tk_start"), ()=>t.when||"", v=>{ t.when=v||null; persist(); });
-  bindDateButton(document.getElementById("tk_end"),   ()=>t.endDate||"", v=>{ t.endDate=v||null; persist(); });
-  document.getElementById("tk_exp").addEventListener("change",e=>setTaskExperiment(t,e.target.value));
+  // The end follows the start the way it does in a calendar: an end already set
+  // keeps its length, and an empty one is suggested half an hour on. Repainting
+  // by hand because the end's own button only relabels itself when picked.
+  const paintEnd=()=>{
+    const b=document.getElementById("tk_end"); if(!b)return;
+    b.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${t.endDate?fmtWhenFull(t.endDate):"end"}`;
+    b.classList.toggle("datebtn-empty",!t.endDate);
+  };
+  bindDateButton(document.getElementById("tk_start"), ()=>t.when||"", v=>{
+    const prev=t.when;
+    t.when=v||null;
+    if(t.when){
+      const keep=(prev&&t.endDate)?minutesBetween(prev,t.endDate):null;
+      t.endDate=(keep!=null&&keep>0) ? addMinutesISO(t.when,keep) : suggestEnd(t.when);
+      // never leave an end sitting before its own start
+      if(t.endDate&&t.endDate<t.when) t.endDate=suggestEnd(t.when);
+    }
+    persist(); paintEnd();
+  });
+  // opening an unset end starts it at the suggestion rather than at today
+  bindDateButton(document.getElementById("tk_end"), ()=>t.endDate||suggestEnd(t.when)||"",
+    v=>{ t.endDate=v||null; persist(); });
+  document.getElementById("tk_exp").addEventListener("change",e=>setTaskTarget(t,e.target.value));
   const wrap=document.getElementById("tk_customwrap"), dowBox=document.getElementById("tk_dow"),
         ivl=document.getElementById("tk_ivl");
   function drawRepeat(){
@@ -2643,22 +2721,22 @@ function renderProjectPlan(id){
     <button class="btn ghost" id="pl_addstep" style="margin-top:10px">＋ Experiment</button>`;
   sw.querySelector("#pl_addstep").onclick=()=>{ const st=addStep(pr,null); stepModal(pr,st,()=>renderProjectPlan(id)); };
 
+  // A task renders as a slimmer row: what it is, when, and how often. It has no
+  // + of its own — tasks do not nest. Shared by the rows inside an experiment
+  // and by the project's own list below them.
+  const stepRow=st=>{
+    const fin=taskDone(st);
+    return `<div class="step-line${fin?" done":""}" data-id="${st.id}">
+      <span class="step-dot">${fin?"✓":""}</span>
+      <span class="step-title">${esc(st.title||"(unnamed task)")}</span>
+      ${st.repeat?`<span class="step-n">↻ ${esc(repeatLabel(st.repeat))}</span>`:""}
+      ${st.when?`<span class="step-date">${esc(taskSpan(st))}</span>`:`<span class="step-date unset">not scheduled</span>`}
+    </div>`;
+  };
   function drawSteps(){
     const box=document.getElementById("pl_steps");
     const roots=stepsUnder(pr,null);
     if(!roots.length){ box.innerHTML=`<div class="pc-empty">No experiments yet.</div>`; return; }
-    // A step renders as a slimmer row inside its experiment: what it is, when,
-    // and how much of the experiment's data it touches. It has no + of its own
-    // — steps do not nest.
-    const stepRow=st=>{
-      const fin=taskDone(st);
-      return `<div class="step-line${fin?" done":""}" data-id="${st.id}">
-        <span class="step-dot">${fin?"✓":""}</span>
-        <span class="step-title">${esc(st.title||"(unnamed task)")}</span>
-        ${st.repeat?`<span class="step-n">↻ ${esc(repeatLabel(st.repeat))}</span>`:""}
-        ${st.when?`<span class="step-date">${esc(taskSpan(st))}</span>`:`<span class="step-date unset">not scheduled</span>`}
-      </div>`;
-    };
     const card=(st,depth)=>{
       const kids=tasksFor(st.id), open=openSteps.has(st.id), grp=stepGroupTally(pr,st);
       const nLinks=(st.links||[]).length;
@@ -2686,13 +2764,41 @@ function renderProjectPlan(id){
     });
     box.querySelectorAll(".exp-card").forEach(c=>{
       const st=(pr.steps||[]).find(x=>x.id===c.dataset.id); if(!st)return;
-      c.querySelector(".exp-caret").onclick=()=>{ openSteps.has(st.id)?openSteps.delete(st.id):openSteps.add(st.id); drawSteps(); };
+      // The caret is only rendered when the experiment has tasks. Reaching
+      // through the null it returns otherwise threw, and since this runs inside
+      // forEach the throw abandoned the rest of the loop — so every card after
+      // the first task-less one was left with no handlers and would not open.
+      const caret=c.querySelector(".exp-caret");
+      if(caret) caret.onclick=()=>{ openSteps.has(st.id)?openSteps.delete(st.id):openSteps.add(st.id); drawSteps(); };
       c.querySelector(".exp-open").onclick=()=>stepModal(pr,st,()=>renderProjectPlan(id));
       c.querySelector(".exp-name").onclick=()=>stepModal(pr,st,()=>renderProjectPlan(id));
       c.querySelector(".exp-sub").onclick=()=>{ const k=addTask({experimentId:st.id,projectId:pr.id}); openSteps.add(st.id); taskEditor(k,()=>renderProjectPlan(id)); };
     });
   }
   drawSteps();
+
+  // Tasks assigned to the project itself. Without this list they existed only on
+  // the timeline, and assigning one here would have looked like losing it.
+  const tw=document.createElement("div"); tw.className="fld"; host.appendChild(tw);
+  tw.innerHTML=`<label>Tasks in the project generally</label><div id="pl_ptasks"></div>
+    <button class="btn ghost" id="pl_addptask" style="margin-top:10px">＋ Task</button>`;
+  tw.querySelector("#pl_addptask").onclick=()=>{
+    const k=addTask({projectId:pr.id}); taskEditor(k,()=>renderProjectPlan(id)); };
+  function drawProjTasks(){
+    const box=document.getElementById("pl_ptasks");
+    const list=taskList().filter(x=>x.projectId===pr.id&&!x.experimentId)
+      .sort((a,b)=>String(a.when||"9999").localeCompare(String(b.when||"9999")));
+    if(!list.length){
+      box.innerHTML=`<div class="pc-empty">Nothing yet — work that is the project's but no one experiment's lands here.</div>`;
+      return;
+    }
+    box.innerHTML=list.map(stepRow).join("");
+    box.querySelectorAll(".step-line").forEach(el=>{
+      const k=taskOf(el.dataset.id); if(!k)return;
+      el.onclick=()=>taskEditor(k,()=>renderProjectPlan(id));
+    });
+  }
+  drawProjTasks();
 
   const del=document.createElement("div"); del.className="drow"; del.style.marginTop="22px";
   del.innerHTML=`<button class="btn danger" id="pl_del">Delete project</button>`;
@@ -3717,6 +3823,7 @@ function renderMatSubTab(){
   else if(matSubTab === "sites")    renderSiteLib();
   else if(matSubTab === "procedures") renderProcedureLib();
   else if(matSubTab === "literature") renderReading("ms-literature");
+  else if(matSubTab === "protocols")  renderProtocols("ms-protocols");
   else if(matSubTab === "diarytypes") renderDiaryTypesLib();
 }
 
@@ -4401,63 +4508,190 @@ function renderDiaryTypesLib(){
 
 /* ---------- READING (two-track: core canon + capped frontier) ---------- */
 const daysSince=ts=>ts?Math.floor((Date.now()-ts)/864e5):0;
+/* ---- files on this computer ----
+   A handle from the File System Access API is a live reference to a file on
+   disk: opening it always shows the current version, and nothing is copied into
+   the workspace. Handles are structured-cloneable but not JSON, so they live in
+   IndexedDB rather than in DB — which also means they are per-origin and
+   per-device and do NOT travel with a Gist sync. Each device links its own copy;
+   the file's name is kept in DB so the other devices can at least say what to
+   look for. Browsers without the API keep the URL field and show the name. */
+const FILE_DB="arborFiles", FILE_STORE="handles";
+function fileDB(){
+  return new Promise((res,rej)=>{
+    const rq=indexedDB.open(FILE_DB,1);
+    rq.onupgradeneeded=()=>{ rq.result.createObjectStore(FILE_STORE); };
+    rq.onsuccess=()=>res(rq.result);
+    rq.onerror=()=>rej(rq.error);
+  });
+}
+function fileHandleGet(key){
+  return fileDB().then(db=>new Promise((res,rej)=>{
+    const rq=db.transaction(FILE_STORE,"readonly").objectStore(FILE_STORE).get(key);
+    rq.onsuccess=()=>res(rq.result||null); rq.onerror=()=>rej(rq.error);
+  })).catch(()=>null);
+}
+function fileHandleSet(key,handle){
+  return fileDB().then(db=>new Promise((res,rej)=>{
+    const tx=db.transaction(FILE_STORE,"readwrite");
+    tx.objectStore(FILE_STORE).put(handle,key);
+    tx.oncomplete=()=>res(true); tx.onerror=()=>rej(tx.error);
+  })).catch(()=>false);
+}
+function fileHandleDel(key){
+  return fileDB().then(db=>new Promise(res=>{
+    const tx=db.transaction(FILE_STORE,"readwrite");
+    tx.objectStore(FILE_STORE).delete(key);
+    tx.oncomplete=()=>res(true); tx.onerror=()=>res(false);
+  })).catch(()=>false);
+}
+const canPickFiles=()=>typeof window.showOpenFilePicker==="function";
+async function pickLocalFile(key){
+  if(!canPickFiles())return null;
+  let handle;
+  try{ [handle]=await window.showOpenFilePicker({multiple:false}); }
+  catch(e){ return null; }                    // the picker was cancelled
+  await fileHandleSet(key,handle);
+  return handle.name;
+}
+// Permission has to be granted again after a browser restart, so this can put a
+// prompt on screen before anything opens.
+async function openLocalFile(key){
+  const handle=await fileHandleGet(key);
+  if(!handle){ toast("That file was linked on another device"); return false; }
+  try{
+    let perm=await handle.queryPermission({mode:"read"});
+    if(perm!=="granted") perm=await handle.requestPermission({mode:"read"});
+    if(perm!=="granted"){ toast("Permission denied"); return false; }
+    const f=await handle.getFile();
+    const url=URL.createObjectURL(f);
+    window.open(url,"_blank","noopener");
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    return true;
+  }catch(e){
+    toast("Could not open it — the file may have been moved or renamed");
+    return false;
+  }
+}
+// The local-file row, shared by a paper and a protocol. `rec` must already be
+// saved, since the handle is filed under its id.
+function mountLocalFile(host,rec,onChange){
+  const draw=()=>{
+    if(!canPickFiles()&&!rec.fileName){
+      host.innerHTML=`<div class="lf-note">This browser cannot open files from disk. Chrome or Edge on a computer can; on an iPhone, put the file somewhere with a web address and use the Link field above.</div>`;
+      return;
+    }
+    host.innerHTML=`<div class="lf-row">
+        ${rec.fileName?`<span class="lf-name">${esc(rec.fileName)}</span>`
+                      :`<span class="lf-name lf-none">nothing chosen on this device</span>`}
+        ${rec.fileName?`<button type="button" class="lf-open">Open</button>`:""}
+        ${canPickFiles()?`<button type="button" class="lf-pick">${rec.fileName?"Change\u2026":"Choose\u2026"}</button>`:""}
+        ${rec.fileName?`<button type="button" class="lf-clear" title="Forget this file">\u2715</button>`:""}
+      </div>
+      <div class="lf-note">Kept as a reference, not a copy \u2014 edits to the file show up here. It lives on this computer only, so other devices will see the name but cannot open it.</div>`;
+    const pick=host.querySelector(".lf-pick");
+    if(pick)pick.onclick=async()=>{
+      const name=await pickLocalFile(rec.id);
+      if(name){ rec.fileName=name; persist(); draw(); if(onChange)onChange(); toast("File linked"); }
+    };
+    const open=host.querySelector(".lf-open");
+    if(open)open.onclick=()=>openLocalFile(rec.id);
+    const clear=host.querySelector(".lf-clear");
+    if(clear)clear.onclick=async()=>{
+      await fileHandleDel(rec.id); rec.fileName=""; persist(); draw(); if(onChange)onChange(); };
+  };
+  draw();
+}
 const frontierQueue=()=>DB.readings.filter(r=>r.track==="frontier"&&r.status!=="read");
 // Literature is a list of links and nothing else. The old version carried tags,
 // a read/unread state, a "frontier cap" and a per-soma filing field; none of it
 // was doing work. Existing records keep those fields untouched in storage — they
 // are simply no longer read or shown.
-function renderReading(hostId){
-  const host=document.getElementById(hostId||"reading"); host.innerHTML="";
+/* Literature and protocols are the same record wearing a different name: a
+   title, a link, and optionally a file on this computer. One renderer and one
+   editor serve both, so the two can never drift apart the way two copies of the
+   same widget did before. */
+const LIBS={
+  reading:{ list:()=>DB.readings,  set:v=>{DB.readings=v;},  prefix:"r_",
+            Noun:"Paper",    noun:"paper",
+            empty:"Nothing here yet. Add a paper with a link to wherever it lives." },
+  protocol:{list:()=>DB.protocols, set:v=>{DB.protocols=v;}, prefix:"pt_",
+            Noun:"Protocol", noun:"protocol",
+            empty:"Nothing here yet. Add a protocol — a link, a file on this computer, or both." }
+};
+function renderLib(kind,hostId){
+  const cfg=LIBS[kind];
+  const host=document.getElementById(hostId); if(!host)return;
+  host.innerHTML="";
   const top=document.createElement("div");
   top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px";
-  top.innerHTML=`<button class="btn accent" id="addReading" style="margin-left:auto;font-size:12px">＋ Paper</button>`;
+  top.innerHTML=`<button class="btn accent" id="addLib" style="margin-left:auto;font-size:12px">＋ ${esc(cfg.Noun)}</button>`;
   host.appendChild(top);
-  top.querySelector("#addReading").onclick=()=>readingModal();
+  top.querySelector("#addLib").onclick=()=>libModal(kind);
 
-  if(!DB.readings.length){
+  const all=cfg.list();
+  if(!all.length){
     host.appendChild(Object.assign(document.createElement("div"),
-      {className:"empty",textContent:"Nothing here yet. Add a paper with a link to wherever it lives."}));
+      {className:"empty",textContent:cfg.empty}));
     return;
   }
   const list=document.createElement("div"); list.className="lit-list"; host.appendChild(list);
-  [...DB.readings].sort((a,b)=>(a.title||"").localeCompare(b.title||"")).forEach(r=>{
+  [...all].sort((a,b)=>(a.title||"").localeCompare(b.title||"")).forEach(r=>{
     const row=document.createElement("div"); row.className="lit-row";
+    const sub=r.link||r.fileName||"";
     row.innerHTML=`<div class="lit-main">
         <div class="lit-title">${esc(r.title||"(untitled)")}</div>
-        ${r.link?`<div class="lit-link">${esc(r.link)}</div>`:""}
+        ${sub?`<div class="lit-link">${esc(sub)}</div>`:""}
       </div>
+      ${r.fileName?`<button class="lit-file" title="Open the file on this computer">📄</button>`:""}
       ${r.link?`<button class="lit-open" title="Open the link">↗</button>`:""}
       <button class="lit-edit" title="Edit">✎</button>
       <button class="lit-del" title="Delete">✕</button>`;
     const open=row.querySelector(".lit-open");
     if(open)open.onclick=()=>window.open(/^https?:\/\//i.test(r.link)?r.link:"https://"+r.link,"_blank","noopener");
-    row.querySelector(".lit-edit").onclick=()=>readingModal(r.id);
+    const file=row.querySelector(".lit-file");
+    if(file)file.onclick=()=>openLocalFile(r.id);
+    row.querySelector(".lit-edit").onclick=()=>libModal(kind,r.id);
     row.querySelector(".lit-del").onclick=()=>{
-      if(!confirm(`Delete "${r.title||"this paper"}"?`))return;
-      DB.readings=DB.readings.filter(x=>x.id!==r.id); persist(); renderReading(hostId); toast("Paper deleted"); };
+      if(!confirm(`Delete "${r.title||"this "+cfg.noun}"?`))return;
+      cfg.set(cfg.list().filter(x=>x.id!==r.id));
+      fileHandleDel(r.id);                 // the handle goes with the record
+      persist(); renderLib(kind,hostId); toast(`${cfg.Noun} deleted`);
+    };
     list.appendChild(row);
   });
 }
-function readingModal(id){
-  const r=id?DB.readings.find(x=>x.id===id):null;
-  modal(`<h3>${r?"Paper":"New paper"}</h3>
+function libModal(kind,id){
+  const cfg=LIBS[kind];
+  const r=id?cfg.list().find(x=>x.id===id):null;
+  modal(`<h3>${r?esc(cfg.Noun):"New "+esc(cfg.noun)}</h3>
     <div class="fld"><label>Title</label><input id="r_title" value="${escAttr(r?r.title:"")}" autofocus></div>
-    <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(r?r.link:"")}"></div>
+    <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(r?(r.link||""):"")}"></div>
+    ${r?`<div class="fld"><label>File on this computer</label><div id="r_file"></div></div>`:""}
     ${r?`<div class="fld"><label>Experiments</label><div id="r_attach"></div></div>`:""}
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="r_save">Save</button></div>`);
-  if(r) mountAttachments(document.getElementById("r_attach"),{kind:"reading",id:r.id});
+  if(r){
+    mountLocalFile(document.getElementById("r_file"),r);
+    mountAttachments(document.getElementById("r_attach"),{kind,id:r.id});
+  }
   document.getElementById("r_save").onclick=()=>{
     const title=document.getElementById("r_title").value.trim();
     if(!title){ toast("Title can't be empty"); return; }
     const link=document.getElementById("r_link").value.trim();
     if(r){ r.title=title; r.link=link; }
-    else DB.readings.push({id:uid("r_"),title,link,added:Date.now()});
+    else cfg.list().push({id:uid(cfg.prefix),title,link,fileName:"",added:Date.now()});
     persist(); closeModal();
-    if(currentView==="materials")renderMaterials(); else renderReading();
-    toast(r?"Paper updated":"Paper added");
+    if(currentView==="materials")renderMaterials();
+    else if(kind==="reading")renderReading();
+    toast(r?`${cfg.Noun} updated`:`${cfg.Noun} added`);
   };
 }
+// kept as the names the rest of the app already calls
+function renderReading(hostId){ renderLib("reading",hostId||"reading"); }
+function readingModal(id){ libModal("reading",id); }
+function renderProtocols(hostId){ renderLib("protocol",hostId||"ms-protocols"); }
+function protocolModal(id){ libModal("protocol",id); }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
 let animalCohort="all", animalExperiment="all", animalGroup="all", animalStatus="all", animalSearch="", animalSort="name";
@@ -6327,7 +6561,8 @@ function createAndOpenTask(opts){
 // Clicking a calendar slot makes a task there and opens it — no intermediate
 // "what kind of thing is this" step, and no experiment required up front.
 function openNewTaskModal(prefillDeadline){
-  const t=addTask({when:prefillDeadline||todayDateStr()+"T"+DEFAULT_ENTRY_TIME});
+  const when=prefillDeadline||todayDateStr()+"T"+DEFAULT_ENTRY_TIME;
+  const t=addTask({when,endDate:suggestEnd(when)});
   taskEditor(t,()=>{ if(currentView==="timeline")renderTimeline(); else render(); });
 }
 function addSpine(dendriteId,init){
