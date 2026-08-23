@@ -280,6 +280,14 @@
   .exp-meta .em-date{color:var(--ink-dim)}
   .exp-meta .em-arms{color:var(--amber)}
   .exp-meta .em-arms.ok{color:var(--gcamp)}
+  .step-list{margin-top:8px;border-top:1px solid var(--line);padding-top:6px}
+  .step-line{display:flex;align-items:center;gap:9px;padding:5px 6px;border-radius:6px;cursor:pointer}
+  .step-line:hover{background:rgba(255,255,255,.05)}
+  .step-dot{width:5px;height:5px;border-radius:50%;background:var(--ink-faint);flex:0 0 auto}
+  .step-title{flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .step-date{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);flex:0 0 auto}
+  .step-date.unset{color:var(--ink-faint)}
+  .step-n{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto}
   .grp-sub{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto}
   .at-pick{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
   .at-pick #at_sel{flex:1 1 auto;width:auto;min-width:160px;font-size:12px}
@@ -1801,16 +1809,34 @@ function projCatsHTML(owner,keyPrefix){
 /* ---- experiments ---- */
 // No status field: an experiment is finished when you have written down what
 // happened, which is the thing worth recording anyway.
-const stepDone=st=>!!String(st.outcome||"").trim();
+// A step lives inside an experiment. It has no hypothesis, no groups and no
+// result of its own — those belong to the experiment it is part of. It names a
+// piece of work, when it happens, and which of the experiment's data it uses.
+const isStep=st=>!!st.parentId;
+const parentExp=st=>{ const pr=projById(st.projectId); return pr&&(pr.steps||[]).find(x=>x.id===st.parentId); };
+// A step's data can only ever be a subset of its experiment's, so it is derived
+// rather than stored independently: unlink something from the experiment and it
+// disappears from every step at once.
+function stepData(st){
+  const par=parentExp(st); if(!par)return [];
+  return (st.links||[]).filter(l=>(par.links||[]).some(x=>sameLink(x,l)));
+}
+// A step finishes when its experiment is written up — it has no outcome field
+// of its own to check, and without this every past step would nag forever.
+const stepDone=st=>{
+  if(isStep(st)){ const par=parentExp(st); return par?!!String(par.outcome||"").trim():false; }
+  return !!String(st.outcome||"").trim();
+};
 const stepsUnder=(pr,parentId)=>(pr.steps||[]).filter(x=>(x.parentId||null)===(parentId||null));
 function allSteps(){ return DB.projects.flatMap(pr=>pr.steps||[]); }
 function stepById(id){ return allSteps().find(x=>x.id===id); }
 function stepColor(st){ const pr=projById(st.projectId); return pr?pr.color:"#556"; }
 function addStep(pr,parentId){
-  const st={id:uid("st_"),projectId:pr.id,parentId:parentId||null,title:"",description:"",
-            hypothesis:"",exclusions:"",expected:"",outcome:"",
-            groupDefs:[],groups:{},
-            deadline:null,endDate:null,duration:null,links:[]};
+  const st=parentId
+    ? {id:uid("st_"),projectId:pr.id,parentId,title:"",deadline:null,endDate:null,duration:null,links:[]}
+    : {id:uid("st_"),projectId:pr.id,parentId:null,title:"",description:"",
+       hypothesis:"",exclusions:"",outcome:"",groupDefs:[],groups:{},
+       deadline:null,endDate:null,duration:null,links:[]};
   (pr.steps=pr.steps||[]).push(st); persist(); return st;
 }
 function deleteStep(pr,id){
@@ -1923,6 +1949,54 @@ function mountLinkEditor(host,owner,onChange){
 
 /* ---- the experiment editor ---- */
 function stepModal(pr,st,after){
+  if(isStep(st)) return stepEditor(pr,st,after);
+  return experimentModal(pr,st,after);
+}
+// Name, when, and which of the experiment's data this step uses.
+function stepEditor(pr,st,after){
+  const par=parentExp(st), avail=(par&&par.links)||[];
+  modal(`<h3>Step</h3>
+    <div class="fld"><label>Name</label><input id="sd_name" value="${escAttr(st.title)}" autofocus></div>
+    <div class="drow">
+      <div class="fld" style="flex:1"><label>When</label>
+        <button type="button" id="sd_start" class="datebtn ${st.deadline?"":"datebtn-empty"}">${st.deadline?fmtWhenFull(st.deadline):"📅 start"}</button></div>
+      <div class="fld" style="flex:1"><label>Until</label>
+        <button type="button" id="sd_end" class="datebtn ${st.endDate?"":"datebtn-empty"}">${st.endDate?fmtWhenFull(st.endDate):"📅 end"}</button></div>
+    </div>
+    <div class="fld"><label>Data used</label><div id="sd_data"></div></div>
+    <div class="drow" style="margin-top:16px"><button class="btn danger" id="sd_del">Delete step</button></div>
+    <div class="actions"><button class="btn accent" id="sd_save">Done</button></div>`,{wide:true});
+  bindDateButton(document.getElementById("sd_start"), ()=>st.deadline||"", v=>{ st.deadline=v||null; persist(); });
+  bindDateButton(document.getElementById("sd_end"),   ()=>st.endDate||"",  v=>{ st.endDate=v||null;  persist(); });
+
+  const box=document.getElementById("sd_data");
+  const drawData=()=>{
+    if(!avail.length){
+      box.innerHTML=`<div class="pc-empty">This experiment has no data linked yet — add some to it and this step can use it.</div>`;
+      return; }
+    st.links=st.links||[];
+    box.innerHTML=LINK_GROUPS.map(g=>{
+      const items=avail.filter(l=>l.kind===g.kind);
+      if(!items.length)return "";
+      return `<div class="lk-sec"><div class="lk-sec-t">${g.icon} ${g.label}</div>
+        ${items.map(l=>`<label class="sharerow"><input type="checkbox" data-k="${escAttr(JSON.stringify(l))}"
+          ${st.links.some(x=>sameLink(x,l))?"checked":""}> ${esc(linkName(l))}</label>`).join("")}</div>`;
+    }).join("");
+    box.querySelectorAll("input[type=checkbox]").forEach(cb=>cb.addEventListener("change",()=>{
+      const l=JSON.parse(cb.dataset.k);
+      if(cb.checked){ if(!st.links.some(x=>sameLink(x,l)))st.links.push(l); }
+      else st.links=st.links.filter(x=>!sameLink(x,l));
+      persist();
+    }));
+  };
+  drawData();
+  document.getElementById("sd_save").onclick=()=>{
+    st.title=document.getElementById("sd_name").value; persist(); closeModal(); if(after)after(); };
+  document.getElementById("sd_del").onclick=()=>{
+    if(!confirm(`Delete the step "${st.title||"(unnamed)"}"?`))return;
+    deleteStep(pr,st.id); closeModal(); if(after)after(); };
+}
+function experimentModal(pr,st,after){
   const animals=()=>animalsForStep(pr,st);
   modal(`<h3>Experiment</h3>
     <div class="fld"><label>Name</label><input id="sm_name" value="${escAttr(st.title)}" autofocus></div>
@@ -2140,32 +2214,50 @@ function renderProjectPlan(id){
     const box=document.getElementById("pl_steps");
     const roots=stepsUnder(pr,null);
     if(!roots.length){ box.innerHTML=`<div class="pc-empty">No experiments yet.</div>`; return; }
+    // A step renders as a slimmer row inside its experiment: what it is, when,
+    // and how much of the experiment's data it touches. It has no + of its own
+    // — steps do not nest.
+    const stepRow=st=>{
+      const n=stepData(st).length;
+      return `<div class="step-line" data-id="${st.id}">
+        <span class="step-dot"></span>
+        <span class="step-title">${esc(st.title||"(unnamed step)")}</span>
+        ${st.deadline?`<span class="step-date">${esc(stepSpan(st))}</span>`:`<span class="step-date unset">not scheduled</span>`}
+        ${n?`<span class="step-n">${n} item${n!==1?"s":""}</span>`:""}
+      </div>`;
+    };
     const card=(st,depth)=>{
       const kids=stepsUnder(pr,st.id), open=openSteps.has(st.id), grp=stepGroupTally(pr,st);
       const nLinks=(st.links||[]).length;
-      return `<div class="exp-card${stepDone(st)?" done":""}" data-id="${st.id}" style="margin-left:${depth*20}px">
+      return `<div class="exp-card${stepDone(st)?" done":""}" data-id="${st.id}">
         <div class="exp-top">
           <button class="exp-caret" ${kids.length?"":"disabled"}>${kids.length?(open?"▾":"▸"):"·"}</button>
           <span class="exp-name">${esc(st.title||"(unnamed experiment)")}</span>
           ${stepDone(st)?`<span class="exp-tick" title="has a result">✓</span>`:""}
           <button class="exp-open">Open</button>
-          <button class="exp-sub" title="Add a nested experiment">＋</button>
+          <button class="exp-sub" title="Add a step to this experiment">＋ Step</button>
         </div>
         ${st.description?`<div class="exp-desc">${esc(st.description)}</div>`:""}
         <div class="exp-meta">
           ${st.deadline?`<span class="em-date">${esc(stepSpan(st))}</span>`:""}
           ${(st.groupDefs||[]).length?`<span class="em-arms ${grp.ok?"ok":""}">${esc(grp.text)}</span>`:""}
           ${nLinks?`<span>${nLinks} linked</span>`:""}
+          ${kids.length?`<span>${kids.length} step${kids.length!==1?"s":""}</span>`:""}
         </div>
-      </div>`+(open?kids.map(k=>card(k,depth+1)).join(""):"");
+        ${open&&kids.length?`<div class="step-list">${kids.map(stepRow).join("")}</div>`:""}
+      </div>`;
     };
     box.innerHTML=roots.map(st=>card(st,0)).join("");
+    box.querySelectorAll(".step-line").forEach(el=>{
+      const st=(pr.steps||[]).find(x=>x.id===el.dataset.id); if(!st)return;
+      el.onclick=()=>stepEditor(pr,st,()=>renderProjectPlan(id));
+    });
     box.querySelectorAll(".exp-card").forEach(c=>{
       const st=(pr.steps||[]).find(x=>x.id===c.dataset.id); if(!st)return;
       c.querySelector(".exp-caret").onclick=()=>{ openSteps.has(st.id)?openSteps.delete(st.id):openSteps.add(st.id); drawSteps(); };
       c.querySelector(".exp-open").onclick=()=>stepModal(pr,st,()=>renderProjectPlan(id));
       c.querySelector(".exp-name").onclick=()=>stepModal(pr,st,()=>renderProjectPlan(id));
-      c.querySelector(".exp-sub").onclick=()=>{ const k=addStep(pr,st.id); openSteps.add(st.id); stepModal(pr,k,()=>renderProjectPlan(id)); };
+      c.querySelector(".exp-sub").onclick=()=>{ const k=addStep(pr,st.id); openSteps.add(st.id); stepEditor(pr,k,()=>renderProjectPlan(id)); };
     });
   }
   drawSteps();
