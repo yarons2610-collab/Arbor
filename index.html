@@ -236,13 +236,13 @@
   .step-caret,.step-edit,.step-add,.step-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:1px 6px;font-size:11px;cursor:pointer;flex:0 0 auto}
   .step-tick{color:var(--gcamp);font-size:11px;flex:0 0 auto}
   .gdef-row{display:flex;align-items:center;gap:7px;padding:3px 0}
-  .gdef-name{flex:1;min-width:0;font-size:12.5px;padding:3px 7px}
-  .gdef-n{width:64px;font-size:11.5px;padding:3px 6px}
+  .gdef-row .gdef-name{flex:1 1 auto;width:auto;min-width:0;font-size:12.5px;padding:5px 8px}
+  .gdef-row .gdef-n{flex:0 0 72px;width:72px;font-size:11.5px;padding:5px 6px;text-align:right}
   .gdef-count{font-family:var(--mono);font-size:10.5px;color:var(--amber);min-width:34px;text-align:right}
   .gdef-count.ok{color:var(--gcamp)}
   .gdef-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 7px;font-size:11px;cursor:pointer}
   .gdef-del:hover{color:var(--overdue)}
-  .grp-pick{flex:0 0 auto;min-width:140px;font-size:11.5px;padding:2px 6px}
+  .grp-row .grp-pick{flex:0 0 auto;width:auto;min-width:150px;font-size:11.5px;padding:5px 8px}
   .pc-empty{font-size:11.5px;color:var(--ink-faint);padding:5px 0}
   .pc-stats{display:flex;flex-wrap:wrap;gap:12px;font-size:11.5px;color:var(--ink-dim);padding:6px 0}
   .pc-stats b{font-family:var(--mono);color:var(--ink);font-weight:600}
@@ -265,7 +265,7 @@
   .exp-meta .em-arms.ok{color:var(--gcamp)}
   .grp-sub{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto}
   .at-pick{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
-  .at-pick select{flex:1;min-width:160px;font-size:12px}
+  .at-pick #at_sel{flex:1 1 auto;width:auto;min-width:160px;font-size:12px}
   .at-pick .btn{font-size:12px;padding:4px 12px}
   .step-caret:disabled{opacity:.3;cursor:default;border-color:transparent;background:transparent}
   .step-name{flex:1;min-width:0;font-size:12.5px;background:transparent;border:1px solid transparent;border-radius:6px;padding:3px 5px;color:var(--ink)}
