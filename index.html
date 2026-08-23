@@ -207,8 +207,6 @@
   .pj-gtitle{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--ink-faint);margin-bottom:4px}
   .pc-head{display:flex;align-items:center;gap:8px}
   .pc-head .pc-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:0}
-  .pc-edit{border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:13px;padding:0 2px;flex:0 0 auto}
-  .pc-edit:hover{color:var(--ink)}
   .pc-cat{border-top:1px solid var(--line)}
   .pc-cathead{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:var(--ink-dim);cursor:pointer;padding:6px 0;text-align:left;font-size:12px}
   .pc-cathead:hover{color:var(--ink)}
@@ -230,7 +228,9 @@
   .lit-row button:hover{color:var(--ink)}
   .lit-row .lit-del:hover{color:var(--overdue)}
   .plan-head{display:flex;align-items:center;gap:10px;margin-bottom:18px}
-  .plan-title{font-family:var(--disp);font-size:19px;margin:0}
+  .plan-head .plan-name{flex:1;min-width:0;width:auto;font-family:var(--disp);font-size:19px;font-weight:600;background:transparent;border:1px solid transparent;border-radius:8px;padding:4px 8px;color:var(--ink)}
+  .plan-head .plan-name:focus{border-color:var(--line2);background:var(--panel2);outline:none}
+  .plan-pal{flex:0 0 auto;display:flex;gap:4px}
   .pc-steps{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);padding:2px 0 6px}
   .step-row{display:flex;align-items:center;gap:6px;padding:3px 0}
   .step-caret,.step-edit,.step-add,.step-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:1px 6px;font-size:11px;cursor:pointer;flex:0 0 auto}
@@ -1848,7 +1848,7 @@ function stepGroupTally(pr,st){
 function addProject(){
   const pr={id:uid("pj_"),name:"",color:DOMAIN_PALETTE[DB.projects.length%DOMAIN_PALETTE.length],
             notes:"",question:"",links:[],steps:[],created:Date.now()};
-  DB.projects.push(pr); persist(); editProjectModal(pr.id,true);
+  DB.projects.push(pr); persist(); projOpenId=pr.id; renderProjects();
 }
 
 /* ---- links, inline ----
@@ -1941,8 +1941,6 @@ function stepModal(pr,st,after){
       <div id="sm_groups" style="margin-top:12px"></div></div>
     <div class="fld"><label>Exclusion criteria</label>
       <textarea id="sm_excl" rows="2">${esc(st.exclusions||"")}</textarea></div>
-    <div class="fld"><label>Expected result</label>
-      <textarea id="sm_exp" rows="2">${esc(st.expected||"")}</textarea></div>
     <div class="fld"><label>What happened</label>
       <textarea id="sm_out" rows="3">${esc(st.outcome||"")}</textarea></div>
     <div class="fld"><label>Uses</label><div id="sm_links"></div></div>
@@ -1954,7 +1952,6 @@ function stepModal(pr,st,after){
     st.description=document.getElementById("sm_desc").value;
     st.hypothesis=document.getElementById("sm_hyp").value;
     st.exclusions=document.getElementById("sm_excl").value;
-    st.expected=document.getElementById("sm_exp").value;
     st.outcome=document.getElementById("sm_out").value;
     persist();
   };
@@ -2046,18 +2043,20 @@ function animalColor(a){
 
 // Every experiment this animal is in, the group it sits in there, and a way to
 // put it into another one.
-function mountAnimalGroups(host,aid){
+function mountAttachments(host,link,opts){
+  const aid=link.kind==="animal"?link.id:null;
+  const withGroups=!!(opts&&opts.groups)&&!!aid;
   const draw=()=>{
     const rows=[];
     DB.projects.forEach(pr=>(pr.steps||[]).forEach(st=>{
-      const onStep=(st.links||[]).some(l=>l.kind==="animal"&&l.id===aid)||!!(st.groups||{})[aid];
-      const onProj=(pr.links||[]).some(l=>l.kind==="animal"&&l.id===aid);
+      const onStep=(st.links||[]).some(l=>sameLink(l,link))||(withGroups&&!!(st.groups||{})[aid]);
+      const onProj=(pr.links||[]).some(l=>sameLink(l,link));
       if(onStep||onProj)rows.push({pr,st});
     }));
     host.innerHTML=`${rows.length?rows.map((r,i)=>`<div class="ag-row" data-i="${i}">
         <span class="ag-where">${esc(r.pr.name||"(unnamed project)")} <span class="ag-sep">\u203a</span> ${esc(r.st.title||"(unnamed experiment)")}</span>
-        <select class="ag-pick"><option value="">\u2014</option>${(r.st.groupDefs||[]).map(g=>
-          `<option value="${g.id}" ${(r.st.groups||{})[aid]===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>
+        ${withGroups?`<select class="ag-pick"><option value="">\u2014</option>${(r.st.groupDefs||[]).map(g=>
+          `<option value="${g.id}" ${(r.st.groups||{})[aid]===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>`:""}
         <button class="ag-del" title="Remove from this experiment">\u2715</button>
       </div>`).join(""):`<div class="pc-empty">Not in any experiment yet.</div>`}
       <div class="ag-add">
@@ -2067,23 +2066,24 @@ function mountAnimalGroups(host,aid){
       </div>`;
     host.querySelectorAll(".ag-row").forEach(el=>{
       const r=rows[+el.dataset.i];
-      el.querySelector(".ag-pick").addEventListener("change",e=>{
+      const pick=el.querySelector(".ag-pick");
+      if(pick)pick.addEventListener("change",e=>{
         r.st.groups=r.st.groups||{};
         if(e.target.value)r.st.groups[aid]=e.target.value; else delete r.st.groups[aid];
         // being in a group implies being on the experiment
-        if(e.target.value&&!(r.st.links||[]).some(l=>l.kind==="animal"&&l.id===aid))
-          (r.st.links=r.st.links||[]).push({kind:"animal",id:aid});
+        if(e.target.value&&!(r.st.links||[]).some(l=>sameLink(l,link)))
+          (r.st.links=r.st.links||[]).push({...link});
         persist(); draw(); });
       el.querySelector(".ag-del").onclick=()=>{
-        r.st.links=(r.st.links||[]).filter(l=>!(l.kind==="animal"&&l.id===aid));
-        if(r.st.groups)delete r.st.groups[aid];
+        r.st.links=(r.st.links||[]).filter(l=>!sameLink(l,link));
+        if(aid&&r.st.groups)delete r.st.groups[aid];
         persist(); draw(); };
     });
     host.querySelector("#ag_sel").addEventListener("change",e=>{
       if(!e.target.value)return;
       const [pid,sid]=e.target.value.split("::");
       const pr=projById(pid), st=pr&&(pr.steps||[]).find(x=>x.id===sid); if(!st)return;
-      if(!(st.links||[]).some(l=>l.kind==="animal"&&l.id===aid))(st.links=st.links||[]).push({kind:"animal",id:aid});
+      if(!(st.links||[]).some(l=>sameLink(l,link)))(st.links=st.links||[]).push({...link});
       persist(); draw(); });
   };
   draw();
@@ -2101,59 +2101,6 @@ function sameLink(a,b){
   if(a.kind==="material")return a.id===b.id&&a.cat===b.cat;
   return a.id===b.id;
 }
-// every project and experiment this record is currently attached to
-function attachmentsOf(link){
-  const out=[];
-  DB.projects.forEach(pr=>{
-    if((pr.links||[]).some(l=>sameLink(l,link))) out.push({pr,st:null});
-    (pr.steps||[]).forEach(st=>{ if((st.links||[]).some(l=>sameLink(l,link))) out.push({pr,st}); });
-  });
-  return out;
-}
-function attachLabel(a){ return a.st?`${a.pr.name||"(unnamed)"} › ${a.st.title||"(unnamed experiment)"}`:(a.pr.name||"(unnamed project)"); }
-function detachLink(a,link){
-  const owner=a.st||a.pr;
-  owner.links=(owner.links||[]).filter(l=>!sameLink(l,link));
-  persist();
-}
-// Renders into `host`: what this record is attached to, plus a way to attach it
-// somewhere else. Call it from any record's own editor.
-function mountAttachments(host,link,onChange){
-  const draw=()=>{
-    const list=attachmentsOf(link);
-    host.innerHTML=`<div class="linklist">${list.map((a,i)=>`<span class="linkchip" data-i="${i}">
-        <span class="lk-open">${esc(attachLabel(a))}</span><button class="lk-del" title="Detach">✕</button></span>`).join("")}
-      <button class="lk-add" id="at_add">＋ link to an experiment</button></div>`;
-    host.querySelectorAll(".linkchip").forEach(chip=>{
-      const a=list[+chip.dataset.i];
-      chip.querySelector(".lk-open").onclick=()=>{ closeModal(); projOpenId=a.pr.id; switchTo("projects"); };
-      chip.querySelector(".lk-del").onclick=()=>{ detachLink(a,link); draw(); if(onChange)onChange(); };
-    });
-    host.querySelector("#at_add").onclick=()=>{
-      if(!DB.projects.length){ toast("Make a project first"); return; }
-      const opts=DB.projects.map(pr=>{
-        const kids=(pr.steps||[]).map(st=>`<option value="${pr.id}::${st.id}">— ${esc(st.title||"(unnamed experiment)")}</option>`).join("");
-        return `<option value="${pr.id}">${esc(pr.name||"(unnamed project)")}</option>${kids}`;
-      }).join("");
-      // a nested modal would trap the record's editor behind it, so this is a
-      // small inline picker instead of a second modal
-      host.innerHTML=`<div class="at-pick"><select id="at_sel">${opts}</select>
-        <button class="btn accent" id="at_go">Link</button>
-        <button class="btn ghost" id="at_cancel">Cancel</button></div>`;
-      host.querySelector("#at_cancel").onclick=draw;
-      host.querySelector("#at_go").onclick=()=>{
-        const v=host.querySelector("#at_sel").value, [pid,sid]=v.split("::");
-        const pr=projById(pid); if(!pr)return;
-        const owner=sid?(pr.steps||[]).find(x=>x.id===sid):pr;
-        if(!owner)return;
-        owner.links=owner.links||[];
-        if(!owner.links.some(l=>sameLink(l,link))) owner.links.push({...link});
-        persist(); draw(); if(onChange)onChange();
-      };
-    };
-  };
-  draw();
-}
 
 /* ---- the plan page ---- */
 let projOpenId=null;
@@ -2164,12 +2111,13 @@ function renderProjectPlan(id){
 
   const head=document.createElement("div"); head.className="plan-head";
   head.innerHTML=`<button class="btn ghost" id="pl_back">‹ Projects</button>
-    <span class="chip" style="background:${pr.color}"></span>
-    <h2 class="plan-title">${esc(pr.name||"(unnamed project)")}</h2>
-    <button class="btn ghost" id="pl_edit" style="margin-left:auto">✎ Edit</button>`;
+    <input id="pl_name" class="plan-name" value="${escAttr(pr.name)}">
+    <div class="taglist plan-pal" id="pl_pal">${paletteHTML(pr.color)}</div>`;
   host.appendChild(head);
   head.querySelector("#pl_back").onclick=()=>{ projOpenId=null; renderProjects(); };
-  head.querySelector("#pl_edit").onclick=()=>editProjectModal(pr.id);
+  head.querySelector("#pl_name").addEventListener("input",e=>{ pr.name=e.target.value; persist(); });
+  head.querySelector("#pl_pal").addEventListener("click",e=>{ const t=e.target.closest(".tag"); if(!t)return;
+    pr.color=t.dataset.c; persist(); renderProjectPlan(id); });
 
   const q=document.createElement("div"); q.className="fld"; host.appendChild(q);
   q.innerHTML=`<label>Research question</label><textarea id="pl_q" rows="2">${esc(pr.question||"")}</textarea>`;
@@ -2200,7 +2148,6 @@ function renderProjectPlan(id){
           ${st.deadline?`<span class="em-date">${esc(stepSpan(st))}</span>`:""}
           ${(st.groupDefs||[]).length?`<span class="em-arms ${grp.ok?"ok":""}">${esc(grp.text)}</span>`:""}
           ${nLinks?`<span>${nLinks} linked</span>`:""}
-          ${st.hypothesis?`<span title="${escAttr(st.hypothesis)}">hypothesis ✓</span>`:""}
         </div>
       </div>`+(open?kids.map(k=>card(k,depth+1)).join(""):"");
     };
@@ -2218,18 +2165,31 @@ function renderProjectPlan(id){
   const lw=document.createElement("div"); lw.className="fld"; host.appendChild(lw);
   lw.innerHTML=`<label>Shared across the project</label><div id="pl_links"></div>`;
   mountLinkEditor(document.getElementById("pl_links"),pr,()=>drawSteps());
+
+  const del=document.createElement("div"); del.className="drow"; del.style.marginTop="22px";
+  del.innerHTML=`<button class="btn danger" id="pl_del">Delete project</button>`;
+  host.appendChild(del);
+  del.querySelector("#pl_del").onclick=()=>{
+    if(!confirm(`Delete "${pr.name||"this project"}"?\n\nOnly the project and its experiments go — every animal, virus and paper it links to stays where it is.`))return;
+    DB.projects=DB.projects.filter(x=>x.id!==id); projOpenId=null;
+    persist(); renderProjects(); toast("Project deleted");
+  };
 }
 
 /* ---- the project list ---- */
+// Everything the project touches, whether linked at project level or inside one
+// of its experiments. The card used to count animals across both while listing
+// only the project-level ones, so the same card showed two different numbers
+// that looked like the same number.
+function projAllLinks(pr){
+  const out=[...(pr.links||[])];
+  (pr.steps||[]).forEach(st=>(st.links||[]).forEach(l=>{ if(!out.some(x=>sameLink(x,l)))out.push(l); }));
+  return out;
+}
 function projSummary(pr){
   const steps=pr.steps||[];
-  const done=steps.filter(stepDone).length;
-  const animals=new Set();
-  (pr.links||[]).forEach(l=>{
-    if(l.kind==="animal")animals.add(l.id); });
-  steps.forEach(st=>(st.links||[]).forEach(l=>{ if(l.kind==="animal")animals.add(l.id); }));
   const dated=steps.filter(x=>x.deadline&&!stepDone(x)).sort((a,b)=>a.deadline.localeCompare(b.deadline));
-  return {nSteps:steps.length,done,nAnimals:animals.size,next:dated[0]||null};
+  return {nSteps:steps.length,done:steps.filter(stepDone).length,next:dated[0]||null};
 }
 function renderProjects(){
   if(projOpenId) return renderProjectPlan(projOpenId);
@@ -2247,51 +2207,26 @@ function renderProjects(){
   }
   const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
   DB.projects.forEach(pr=>{
-    const sm=projSummary(pr);
+    const sm=projSummary(pr), allLinks=projAllLinks(pr);
     const card=document.createElement("div"); card.className="proj-card"; card.dataset.id=pr.id;
     card.innerHTML=`<div class="pc-bar" style="background:${pr.color}"></div>
       <div class="pc-body">
-        <div class="pc-head"><span class="pc-name">${esc(pr.name||"(unnamed project)")}</span>
-          <button class="pc-edit" title="Edit this project">✎</button></div>
+        <div class="pc-head"><span class="pc-name">${esc(pr.name||"(unnamed project)")}</span></div>
         ${pr.question?`<div class="pc-note">${esc(pr.question)}</div>`:""}
         <div class="pc-stats">
           <span><b>${sm.nSteps}</b> experiment${sm.nSteps!==1?"s":""}</span>
           <span><b>${sm.done}</b> with a result</span>
-          <span><b>${sm.nAnimals}</b> animal${sm.nAnimals!==1?"s":""}</span>
         </div>
         ${sm.next?`<div class="pc-next">Next: ${esc(sm.next.title||"(unnamed)")} <span>${esc(fmtWhenFull(sm.next.deadline))}</span></div>`:""}
-        ${projCatsHTML(pr)}
+        ${projCatsHTML({id:pr.id,links:allLinks},pr.id)}
       </div>`;
-    card.querySelector(".pc-edit").onclick=e=>{ e.stopPropagation(); editProjectModal(pr.id); };
     card.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=e=>{
       e.stopPropagation();
       const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k); renderProjects(); });
-    card.querySelectorAll(".pc-item").forEach(r=>r.onclick=e=>{ e.stopPropagation(); openLinked(pr.links[+r.dataset.i]); });
+    card.querySelectorAll(".pc-item").forEach(r=>r.onclick=e=>{ e.stopPropagation(); openLinked(allLinks[+r.dataset.i]); });
     card.onclick=()=>{ projOpenId=pr.id; renderProjects(); };
     grid.appendChild(card);
   });
-}
-function editProjectModal(id,isNew){
-  const pr=projById(id); if(!pr)return;
-  modal(`<h3>${isNew?"New project":"Project"}</h3>
-    <div class="fld"><label>Name</label><input id="pj_name" value="${escAttr(pr.name)}" autofocus></div>
-    <div class="fld"><label>Colour</label><div class="taglist" id="pj_pal">${paletteHTML(pr.color)}</div></div>
-    <div class="fld"><label>Notes</label><textarea id="pj_notes" rows="4">${esc(pr.notes||"")}</textarea></div>
-    <div class="drow" style="margin-top:16px"><button class="btn danger" id="pj_del">Delete project</button></div>
-    <div class="actions"><button class="btn accent" id="pj_save">Done</button></div>`);
-  let chosen=pr.color;
-  document.getElementById("pj_pal").addEventListener("click",e=>{const t=e.target.closest(".tag");if(!t)return;chosen=t.dataset.c;
-    document.querySelectorAll("#pj_pal .tag").forEach(x=>x.style.boxShadow="none");t.style.boxShadow=`0 0 0 2px ${chosen}`;});
-  document.getElementById("pj_save").onclick=()=>{
-    pr.name=document.getElementById("pj_name").value.trim();
-    pr.notes=document.getElementById("pj_notes").value;
-    pr.color=chosen; persist(); closeModal(); renderProjects();
-  };
-  document.getElementById("pj_del").onclick=()=>{
-    if(!confirm(`Delete "${pr.name||"this project"}"?\n\nOnly the project and its experiments go — every animal, virus and paper it links to stays where it is.`))return;
-    DB.projects=DB.projects.filter(x=>x.id!==id); if(projOpenId===id)projOpenId=null;
-    persist(); closeModal(); renderProjects(); toast("Project deleted");
-  };
 }
 
 /* ---------- ARBOR — the network: somata and their dendrites (force graph) ----------
@@ -5389,7 +5324,7 @@ function animalModal(id,draft){
   // assignment the experiment editor writes — read back from the experiments
   // themselves, never stored on the animal.
   if(id&&document.getElementById("am_attach"))
-    mountAnimalGroups(document.getElementById("am_attach"),id);
+    mountAttachments(document.getElementById("am_attach"),{kind:"animal",id},{groups:true});
 
   // dates — custom wiring instead of bindDateButton so the Born button can
   // also show age in weeks (which depends on both dates, so either one
@@ -5546,50 +5481,6 @@ function openLinked(l){
     closeDetail(); animalSearch=a.name; DB.config.animalFilters.search=a.name; persist(); switchTo("animals"); return; }
   if(l.url) window.open(/^https?:\/\//i.test(l.url)?l.url:"https://"+l.url,"_blank","noopener");
 }
-function addLinkModal(sp,after){
-  const animals=[...DB.animals].sort((x,y)=>x.name.localeCompare(y.name));
-  // materials come from three places, not one
-  const mats=[
-    {cat:"virus", label:"Viruses",         items:(activeViruses()||[]).map(v=>v.name)},
-    {cat:"site",  label:"Injection sites", items:(DB.config.siteLib||[]).map(x=>x.name)},
-    {cat:"inv",   label:"Inventory",       items:Object.keys(DB.inventory||{})}
-  ].filter(g=>g.items.length);
-  const procs=[];
-  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>procs.push({animalId:a.id,name:a.name,type:e.type,date:e.date})));
-  procs.sort((x,y)=>(y.date||"").localeCompare(x.date||""));
-  modal(`<h3>Link this datum to…</h3>
-    <div class="fld"><label>Animal</label><select id="lk_animal"><option value="">—</option>
-      ${animals.map(a=>`<option value="${a.id}">${esc(a.name)}${animalWhere(a)?" · "+esc(animalWhere(a)):""}</option>`).join("")}</select></div>
-    <div class="fld"><label>Material</label><select id="lk_mat"><option value="">—</option>
-      ${mats.map(g=>`<optgroup label="${escAttr(g.label)}">${g.items.sort().map(n=>
-        `<option value="${escAttr(g.cat+"::"+n)}">${esc(n)}</option>`).join("")}</optgroup>`).join("")}</select></div>
-    <div class="fld"><label>Behavioural task</label><select id="lk_task"><option value="">—</option>
-      ${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t.name)}">${esc(t.name)}</option>`).join("")}</select></div>
-    <div class="fld"><label>Procedure template</label><select id="lk_tpl"><option value="">—</option>
-      ${(DB.config.procedureLib||[]).map(x=>`<option value="${x.id}">${esc(x.name||"(unnamed)")}</option>`).join("")}</select></div>
-    <div class="fld"><label>Literature</label><select id="lk_read"><option value="">—</option>
-      ${DB.readings.map(r=>`<option value="${r.id}">${esc(r.title)}</option>`).join("")}</select></div>
-    <div class="fld"><label>Procedure done</label><select id="lk_proc"><option value="">—</option>
-      ${procs.slice(0,300).map((x,i)=>`<option value="${i}">${esc(x.name)} — ${esc(diaryTypeDef(x.type).label)} · ${esc(x.date||"")}</option>`).join("")}</select></div>
-    <div class="fld"><label>External</label><input id="lk_url" placeholder="URL, DOI, or a path on the lab drive"></div>
-    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn accent" id="lk_go">Add</button></div>`);
-  document.getElementById("lk_go").onclick=()=>{
-    const av=document.getElementById("lk_animal").value, mv=document.getElementById("lk_mat").value,
-          pv=document.getElementById("lk_proc").value, uv=document.getElementById("lk_url").value.trim(),
-          tv=document.getElementById("lk_tpl").value,
-          rv=document.getElementById("lk_read").value, kv=document.getElementById("lk_task").value;
-    sp.links=sp.links||[];
-    if(kv)sp.links.push({kind:"task",id:kv});
-    if(tv)sp.links.push({kind:"template",id:tv});
-    if(rv)sp.links.push({kind:"reading",id:rv});
-    if(av)sp.links.push({kind:"animal",id:av});
-    if(mv){ const i=mv.indexOf("::"); sp.links.push({kind:"material",cat:mv.slice(0,i),id:mv.slice(i+2)}); }
-    if(pv!==""){ const x=procs[+pv]; sp.links.push({kind:"procedure",animalId:x.animalId,type:x.type,date:x.date}); }
-    if(uv)sp.links.push({kind:"url",url:uv});
-    persist(); closeModal(); after();
-  };
-}
 function drawSpines(t){
   const host=document.getElementById("e_spines"); if(!host)return;
   const sps=spinesOf(t.id);
@@ -5602,9 +5493,7 @@ function drawSpines(t){
         ${when?`<span class="spine-due">${esc(when)}</span>`:""}
         <button class="spine-del" title="Delete this datum">✕</button>
       </div>
-      <div class="linklist">${(sp.links||[]).map((l,i)=>`<span class="linkchip" data-i="${i}">
-        <span class="lk-open">${esc(linkLabel(l))}</span><button class="lk-del" title="Unlink">✕</button></span>`).join("")}
-        <button class="lk-add">＋ link</button></div>
+      <div class="datum-links"></div>
     </div>`;
   }).join("");
   host.querySelectorAll(".spine-block").forEach(row=>{
@@ -5613,7 +5502,7 @@ function drawSpines(t){
     row.querySelector(".spine-del").addEventListener("click",()=>{
       if(!confirm(`Delete "${sp.title||"(unnamed datum)"}"?`))return;
       DB.spines=DB.spines.filter(x=>x.id!==sp.id); persist(); drawSpines(t); render(); });
-    row.querySelector(".lk-add").addEventListener("click",()=>addLinkModal(sp,()=>drawSpines(t)));
+    mountLinkEditor(row.querySelector(".datum-links"),sp,()=>{});
     row.querySelectorAll(".linkchip").forEach(chip=>{
       const i=+chip.dataset.i;
       chip.querySelector(".lk-open").addEventListener("click",()=>openLinked(sp.links[i]));
