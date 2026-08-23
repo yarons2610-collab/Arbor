@@ -243,6 +243,8 @@
   .gdef-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 7px;font-size:11px;cursor:pointer}
   .gdef-del:hover{color:var(--overdue)}
   .grp-row .grp-pick{flex:0 0 auto;width:auto;min-width:150px;font-size:11.5px;padding:5px 8px}
+  .grp-cluster{padding:2px 0}
+  .grp-cluster+.grp-cluster{margin-top:12px;border-top:1px solid var(--line);padding-top:8px}
   .lk-sec{padding:8px 0;border-bottom:1px solid var(--line)}
   .lk-sec:last-child{border-bottom:0}
   .lk-sec-t{font-family:var(--mono);font-size:9.5px;text-transform:uppercase;color:var(--ink-faint);margin-bottom:5px}
@@ -376,7 +378,8 @@
   .cal-day-hdr.today .dom{background:var(--gcamp);color:#08240f;border-radius:50%;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center}
   /* all-day row */
   .cal-allday-gutter{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:4px 4px 4px 6px;font-family:var(--mono);font-size:9px;color:var(--ink-faint);display:flex;align-items:flex-start;justify-content:flex-end}
-  .cal-allday-cell{border-right:1px solid var(--line);border-bottom:2px solid var(--line2);padding:3px 3px;min-height:28px;display:flex;flex-direction:column;gap:2px}
+  .cal-allday-cell{border-right:1px solid var(--line);border-bottom:2px solid var(--line2);padding:3px 3px;min-height:28px;display:flex;flex-direction:column;gap:2px;overflow:visible}
+  .cal-evt-span{position:relative;z-index:2}
   /* hour rows */
   .cal-hour-gutter{border-right:1px solid var(--line);padding:0 6px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);text-align:right;height:52px;display:flex;align-items:flex-start;padding-top:3px;box-sizing:border-box}
   .cal-hour-cell{border-right:1px solid var(--line);border-top:1px solid var(--line);height:52px;position:relative;box-sizing:border-box;cursor:cell}
@@ -728,7 +731,7 @@ if("serviceWorker" in navigator){
 }
 const KEY="arbor_workspace_v3";   // v3: retire stale v2 storage that carried old example tasks; load embedded (uploaded) data fresh
 const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
-  animalFilters:{cohort:"all",experiment:"all",status:"all",search:""},
+  animalFilters:{cohort:"all",experiment:"all",group:"all",status:"all",search:"",sort:"name"},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // seeded diary entry types - fully user-editable afterward (label/icon/color/
   // fields/timeline flag), not a locked-in schema. "timeline:true" means entries
@@ -1058,9 +1061,12 @@ function migrate(){                       // backfill fields added in later vers
   animalCohort=DB.config.animalFilters.cohort||"all";
   animalStatus=DB.config.animalFilters.status||"all";
   animalExperiment=DB.config.animalFilters.experiment||"all";
+  animalGroup=DB.config.animalFilters.group||"all";
+  animalSort=DB.config.animalFilters.sort||"name";
   animalSearch=DB.config.animalFilters.search||"";
   // backfill new virus fields
-  (DB.config.virusLib||[]).forEach(v=>{ if(!v.promoter)v.promoter=""; if(!v.titer)v.titer=""; if(!v.source)v.source=""; if(!v.note)v.note="";
+  (DB.config.virusLib||[]).forEach((v,i)=>{ if(!v.color)v.color=INJ_COLORS[i%INJ_COLORS.length];
+    if(!v.promoter)v.promoter=""; if(!v.titer)v.titer=""; if(!v.source)v.source=""; if(!v.note)v.note="";
     if(v.backupTubes===undefined)v.backupTubes=null; if(v.aliquotTubes===undefined)v.aliquotTubes=null;
     if(!v.boxNumber)v.boxNumber=""; if(!v.boxColor)v.boxColor=""; if(!v.boxLocation)v.boxLocation=""; if(!v.needOrder)v.needOrder=false; });
   if(!DB.inventory)DB.inventory={};
@@ -1231,6 +1237,10 @@ function migrate(){                       // backfill fields added in later vers
   // experiment/control lives on the animal: it is a fact about the mouse, and it
   // shows up wherever the mouse does rather than only inside one project
   DB.animals.forEach(a=>{ if(a.group===undefined)a.group=""; });
+  // "added" ordering needs a timestamp. Animals created before it existed get
+  // one derived from their position in the array, which is the order they were
+  // added in — arbitrary but stable, and never newer than a real one.
+  DB.animals.forEach((a,i)=>{ if(a.created==null)a.created=i; });
   // a node you have placed by hand keeps its place
   DB.domains.forEach(d=>{ if(d.x===undefined)d.x=null; if(d.y===undefined)d.y=null; });
   DB.tasks.forEach(t=>{ if(t.x===undefined)t.x=null; if(t.y===undefined)t.y=null; });
@@ -1655,6 +1665,7 @@ document.getElementById("readNudge").addEventListener("click",()=>switchTo("read
 // Deliberately a small badge, not a tab: visible the moment something needs
 // attention, invisible (not just quiet) the rest of the time, so it never
 // competes with Timeline/Materials/Animals for a permanent slot.
+const DEFAULT_ENTRY_TIME="08:00";
 const NOTIFY_TASK_LOOKAHEAD_DAYS=3, NOTIFY_DIARY_LOOKAHEAD_DAYS=7;
 function addDays(dateStr,n){ const d=new Date(dateStr+"T00:00:00"); d.setDate(d.getDate()+n);
   const pad=x=>String(x).padStart(2,"0"); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
@@ -1959,7 +1970,6 @@ function stepModal(pr,st,after){
 }
 // Name, when, and which of the experiment's data this step uses.
 function stepEditor(pr,st,after){
-  const par=parentExp(st), avail=(par&&par.links)||[];
   modal(`<h3>Step</h3>
     <div class="fld"><label>Name</label><input id="sd_name" value="${escAttr(st.title)}" autofocus></div>
     <div class="drow">
@@ -1968,33 +1978,11 @@ function stepEditor(pr,st,after){
       <div class="fld" style="flex:1"><label>Until</label>
         <button type="button" id="sd_end" class="datebtn ${st.endDate?"":"datebtn-empty"}">${st.endDate?fmtWhenFull(st.endDate):"📅 end"}</button></div>
     </div>
-    <div class="fld"><label>Data used</label><div id="sd_data"></div></div>
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="sd_del">Delete step</button></div>
     <div class="actions"><button class="btn accent" id="sd_save">Done</button></div>`,{wide:true});
   bindDateButton(document.getElementById("sd_start"), ()=>st.deadline||"", v=>{ st.deadline=v||null; persist(); });
   bindDateButton(document.getElementById("sd_end"),   ()=>st.endDate||"",  v=>{ st.endDate=v||null;  persist(); });
 
-  const box=document.getElementById("sd_data");
-  const drawData=()=>{
-    if(!avail.length){
-      box.innerHTML=`<div class="pc-empty">This experiment has no data linked yet — add some to it and this step can use it.</div>`;
-      return; }
-    st.links=st.links||[];
-    box.innerHTML=LINK_GROUPS.map(g=>{
-      const items=avail.filter(l=>l.kind===g.kind);
-      if(!items.length)return "";
-      return `<div class="lk-sec"><div class="lk-sec-t">${g.icon} ${g.label}</div>
-        ${items.map(l=>`<label class="sharerow"><input type="checkbox" data-k="${escAttr(JSON.stringify(l))}"
-          ${st.links.some(x=>sameLink(x,l))?"checked":""}> ${esc(linkName(l))}</label>`).join("")}</div>`;
-    }).join("");
-    box.querySelectorAll("input[type=checkbox]").forEach(cb=>cb.addEventListener("change",()=>{
-      const l=JSON.parse(cb.dataset.k);
-      if(cb.checked){ if(!st.links.some(x=>sameLink(x,l)))st.links.push(l); }
-      else st.links=st.links.filter(x=>!sameLink(x,l));
-      persist();
-    }));
-  };
-  drawData();
   document.getElementById("sd_save").onclick=()=>{
     st.title=document.getElementById("sd_name").value; persist(); closeModal(); if(after)after(); };
   document.getElementById("sd_del").onclick=()=>{
@@ -2069,11 +2057,18 @@ function experimentModal(pr,st,after){
       box.innerHTML=`<div class="pc-empty">Add a group above, then assign these animals to it.</div>`;
       return; }
     st.groups=st.groups||{};
-    box.innerHTML=list.map(a=>`<div class="grp-row" data-a="${a.id}">
+    // Animals sit with the ones they share a group with, each cluster separated
+    // by a gap, so an arm reads as a block rather than something you reconstruct
+    // by scanning a column of dropdowns.
+    const row=a=>`<div class="grp-row" data-a="${a.id}">
       <span class="grp-name">${esc(a.name)}</span>
       <select class="grp-pick"><option value="">—</option>${st.groupDefs.map(g=>
         `<option value="${g.id}" ${st.groups[a.id]===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>
-    </div>`).join("");
+    </div>`;
+    const clusters=[...st.groupDefs.map(g=>({key:g.id,items:list.filter(a=>st.groups[a.id]===g.id)})),
+                    {key:"",items:list.filter(a=>!st.groups[a.id])}];
+    box.innerHTML=clusters.filter(c=>c.items.length)
+      .map(c=>`<div class="grp-cluster">${c.items.map(row).join("")}</div>`).join("");
     box.querySelectorAll(".grp-row").forEach(r=>r.querySelector(".grp-pick").addEventListener("change",e=>{
       if(e.target.value)st.groups[r.dataset.a]=e.target.value; else delete st.groups[r.dataset.a];
       persist(); drawGroupDefs(); }));
@@ -2885,16 +2880,24 @@ function renderTimeline(){
     if(hasTime(t.deadline)&&tEnd.getTime()===tStart.getTime()) return;
     const col=stepColor(t);
     const overdue=dueClass(t.deadline,stepDone(t)?"done":"",t.endDate)==="overdue";
+    // One bar spanning the days it covers, rather than a separate chip per day
+    // with only the first one labelled. It is laid inside its first visible
+    // day's cell and widened across the rest, so it still sits in the grid.
+    let first=-1,last=-1;
     for(let d=0;d<NCOL;d++){
       const day=new Date(ws); day.setDate(ws.getDate()+d);
       if(day<tStart||day>tEnd) continue;
-      const isFirst=day.getTime()===Math.max(tStart.getTime(),ws.getTime());
-      const chip=document.createElement("div"); chip.className="cal-evt";
-      chip.style.cssText=`background:${col}22;border-left:3px solid ${overdue?"var(--overdue)":col};color:${overdue?"var(--overdue)":col}`;
-      chip.innerHTML=`<div class="et">${isFirst?esc(t.title):""}</div>`;
+      if(first<0)first=d; last=d;
+    }
+    if(first>=0){
+      const span=last-first+1;
+      const chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
+      chip.style.cssText=`background:${col}22;border-left:3px solid ${overdue?"var(--overdue)":col};color:${overdue?"var(--overdue)":col};`
+        +(span>1?`width:calc(${span*100}% + ${(span-1)*7}px);`:"");
+      chip.innerHTML=`<div class="et">${esc(t.title)}</div>`;
       chip.title=t.title+(t.endDate?` (through ${t.endDate.slice(0,10)})`:"");
       chip.onclick=()=>openStepInPlan(t.id);
-      alldayCells[d].appendChild(chip);
+      alldayCells[first].appendChild(chip);
     }
   });
 
@@ -3507,6 +3510,7 @@ function renderVirusLib(){
           <input class="lv_backup" data-vi="${i}" type="number" min="0" inputmode="numeric" value="${v.backupTubes!=null?v.backupTubes:""}" placeholder="backup tubes" style="flex:0 0 auto;width:92px;${IST}">
           <input class="lv_aliquot" data-vi="${i}" type="number" min="0" inputmode="numeric" value="${v.aliquotTubes!=null?v.aliquotTubes:""}" placeholder="aliquoted tubes" style="flex:0 0 auto;width:104px;${IST}">
           <input class="lv_boxnum" data-vi="${i}" value="${escAttr(v.boxNumber||"")}" placeholder="box #" style="flex:0 0 auto;width:64px;${IST}">
+          <input class="lv_color" data-vi="${i}" type="color" value="${v.color&&v.color.startsWith("#")?v.color:INJ_COLORS[i%INJ_COLORS.length]}" title="default marker colour for this virus" style="width:28px;height:28px;border:1px solid var(--line2);border-radius:6px;background:var(--panel2);padding:1px;cursor:pointer;flex:0 0 auto">
           <input class="lv_boxcolor" data-vi="${i}" type="color" value="${v.boxColor&&v.boxColor.startsWith("#")?v.boxColor:"#54e08a"}" title="box color" style="width:28px;height:28px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
           <input class="lv_boxloc" data-vi="${i}" value="${escAttr(v.boxLocation||"")}" placeholder="box location (e.g. -80 shelf 2)" style="flex:1;min-width:140px;${IST}">
           <label class="lv_orderwrap" title="Flag this virus as needing a reorder — purely a note to self, nothing else in the app reacts to it" style="display:flex;align-items:center;gap:5px;flex:0 0 auto;border:1px solid ${v.needOrder?"#8a6a2f":"var(--line2)"};background:${v.needOrder?"linear-gradient(180deg,#3a2e14,#302410)":"var(--panel2)"};color:${v.needOrder?"#ffd166":"var(--ink-dim)"};border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;white-space:nowrap">
@@ -3556,6 +3560,11 @@ function renderVirusLib(){
     if(e.target.classList.contains("lv_type")){
       v.type=e.target.value;
       if(shared) applySharedVirusChange(data=>{ const rec=data.viruses.find(x=>x.id===v.id); if(rec)rec.type=v.type; }).catch(e2=>toast("Sync failed: "+String(e2.message||e2).slice(0,80)));
+      else persist();
+    }
+    if(e.target.classList.contains("lv_color")){
+      v.color=e.target.value;
+      if(shared) applySharedVirusChange(data=>{ const rec=data.viruses.find(x=>x.id===v.id); if(rec)rec.color=v.color; }).catch(e2=>toast("Sync failed: "+String(e2.message||e2)));
       else persist();
     }
     if(e.target.classList.contains("lv_boxcolor")){
@@ -3994,7 +4003,7 @@ function readingModal(id){
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
-let animalCohort="all", animalExperiment="all", animalStatus="all", animalSearch="";
+let animalCohort="all", animalExperiment="all", animalGroup="all", animalStatus="all", animalSearch="", animalSort="name";
 const WEEK=6048e5;
 function ageWeeks(a){ if(!a.dob)return null; const end=a.sacrificed?new Date(a.sacrificed):new Date(); return Math.round((end-new Date(a.dob))/WEEK); }
 // surgery date now comes from the diary (earliest surgery-type entry dated
@@ -4165,8 +4174,15 @@ function renderAnimals(){
   const projNames=DB.projects.map(p=>[p.id,p.name||"(unnamed project)"]);
   // only the experiments of whichever project is selected, so the row stays
   // short and the two filters cannot contradict each other
-  const expNames=DB.projects.filter(p=>animalCohort==="all"||p.id===animalCohort)
-    .flatMap(p=>(p.steps||[]).map(st=>[st.id,st.title||"(unnamed experiment)"]));
+  const scopedSteps=DB.projects.filter(p=>animalCohort==="all"||p.id===animalCohort)
+    .flatMap(p=>(p.steps||[]).filter(st=>!isStep(st)));
+  const expNames=scopedSteps.map(st=>[st.id,st.title||"(unnamed experiment)"]);
+  // Groups are named per experiment, so the same name can exist in several. The
+  // filter matches on the name rather than the id, which is what you mean when
+  // you ask for "the controls".
+  const groupNames=[...new Set(scopedSteps
+    .filter(st=>animalExperiment==="all"||st.id===animalExperiment)
+    .flatMap(st=>(st.groupDefs||[]).map(g=>g.name).filter(Boolean)))].sort((a,b)=>a.localeCompare(b));
   const bar=document.createElement("div");
   bar.style.cssText="margin-bottom:16px";
   const row=(label,id,cur,opts)=>`<div class="af-row"><span class="af-label">${label}</span><div class="seg" id="${id}">${opts.map(o=>`<button data-v="${o[0]}" class="${cur===o[0]?"on":""}">${o[1]}</button>`).join("")}</div></div>`;
@@ -4181,6 +4197,8 @@ function renderAnimals(){
     </div>
     ${row("Project","a_cohort",animalCohort,[["all","All"],...projNames,["none","Unassigned"]])}
     ${expNames.length?row("Experiment","a_exp",animalExperiment,[["all","All"],...expNames]):""}
+    ${groupNames.length?row("Group","a_group",animalGroup,[["all","All"],...groupNames.map(g=>[g,g])]):""}
+    ${row("Sort","a_sort",animalSort,[["name","Name"],["dob","Born"],["added","Added"],["sac","Sacrificed"]])}
     ${row("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
 `;
   host.appendChild(bar);
@@ -4190,6 +4208,11 @@ function renderAnimals(){
       if(!st||(animalCohort!=="all"&&st.projectId!==animalCohort)){ animalExperiment="all"; DB.config.animalFilters.experiment="all"; }
     }
     persist();renderAnimals();});
+  const grpSeg=bar.querySelector("#a_group");
+  if(grpSeg)grpSeg.addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+    animalGroup=b.dataset.v;DB.config.animalFilters.group=animalGroup;persist();renderAnimals();});
+  bar.querySelector("#a_sort").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
+    animalSort=b.dataset.v;DB.config.animalFilters.sort=animalSort;persist();renderAnimals();});
   const expSeg=bar.querySelector("#a_exp");
   if(expSeg)expSeg.addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
     animalExperiment=b.dataset.v;DB.config.animalFilters.experiment=animalExperiment;persist();renderAnimals();});
@@ -4222,16 +4245,29 @@ function renderAnimals(){
     const st=allSteps().find(x=>x.id===sid); if(!st)return true;
     return (st.links||[]).some(l=>l.kind==="animal"&&l.id===a.id)||!!(st.groups||{})[a.id];
   };
+  const inGroup=(a,name)=>{
+    if(name==="all")return true;
+    return animalGroups(a.id).some(x=>x.g.name===name
+      &&(animalExperiment==="all"||x.st.id===animalExperiment));
+  };
   let list=DB.animals.filter(a=>
-    inProject(a,animalCohort) && inExperiment(a,animalExperiment) &&
+    inProject(a,animalCohort) && inExperiment(a,animalExperiment) && inGroup(a,animalGroup) &&
     (animalStatus==="all"||a.termination===animalStatus) &&
     searchMatch(a));
+  // Missing dates sort last whichever way round, so a half-filled column never
+  // buries the animals that do have one.
+  const byDate=k=>(x,y)=>{ const a=x[k]||"", b=y[k]||"";
+    if(!a&&!b)return (x.name||"").localeCompare(y.name||"");
+    if(!a)return 1; if(!b)return -1; return a.localeCompare(b); };
+  list.sort(animalSort==="dob"?byDate("dob")
+          :animalSort==="sac"?byDate("sacrificed")
+          :animalSort==="added"?((x,y)=>(x.created||0)-(y.created||0)||(x.name||"").localeCompare(y.name||""))
+          :((x,y)=>(x.name||"").localeCompare(y.name||"")));
   const cnt=(f)=>list.filter(f).length;
   const sum=document.createElement("div");
   sum.style.cssText="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:18px;font-family:var(--mono);font-size:11.5px;color:var(--ink-dim)";
-  sum.innerHTML=`<span>${list.length} animals</span><span style="color:var(--gcamp)">${cnt(a=>a.termination==="alive")} alive</span>
-    <span>surgery ${cnt(a=>hasProcEntry(a,"surgery",true))}</span><span>perfused ${cnt(a=>hasProcEntry(a,"perfusion",true))}</span>
-    <span>histology ${cnt(a=>hasProcEntry(a,"histology",true))}</span><span>microscopy ${cnt(a=>hasProcEntry(a,"microscopy",true))}</span>`;
+  sum.innerHTML=`<span>${list.length} animal${list.length!==1?"s":""}</span>
+    <span style="color:var(--gcamp)">${cnt(a=>a.termination==="alive")} alive</span>`;
   host.appendChild(sum);
 
   // Grouped by project rather than by cohort. An animal in two projects is
@@ -4471,7 +4507,11 @@ function paintDiary(container,a){
   function wireForm(host,type,editing){
     host.querySelector(".dg-cancel").onclick=()=>{ formType=null; editingId=null; draw(); };
     // shared date+time picker (same drum-scroll UI tasks use), 15-minute steps
-    let dtValue=(editing?editing.date:selDate)+(editing&&editing.time?"T"+editing.time:"");
+    // A new entry starts at 08:00 — nothing in the lab happens at midnight, and
+    // an all-day entry is still one click away by clearing the time.
+    let dtValue=editing
+      ? editing.date+(editing.time?"T"+editing.time:"")
+      : selDate+"T"+DEFAULT_ENTRY_TIME;
     let endTimeValue=editing?editing.endTime||"":"";
     const endWrap=host.querySelector(".dg-f-endwrap");
     bindDateButton(host.querySelector(".dg-f-datetime"), ()=>dtValue, v=>{
@@ -5191,6 +5231,8 @@ function procedureSectionHTML(p){
       <div class="fld" style="flex:1"><label>Cranial window</label><div class="seg" id="${p}_win"><button data-v="1">Yes</button><button data-v="0">No</button></div></div></div>
     <div id="${p}_wincoord" style="display:flex;gap:6px;align-items:center;margin:-2px 0 10px">
       <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 auto">window center</span>
+      <select id="${p}_winsite" style="flex:0 0 auto;max-width:160px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:12px">
+        <option value="">site…</option>${(DB.config.siteLib||[]).map(x=>`<option value="${escAttr(x.name)}">${esc(x.name)}</option>`).join("")}</select>
       <input id="${p}_winap" placeholder="AP" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
       <input id="${p}_winml" placeholder="ML" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
       <input id="${p}_windiam" placeholder="⌀ mm" style="flex:0 0 auto;width:64px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
@@ -5354,6 +5396,7 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
       if(!v.startsWith("__v:"))return; const nm=v.slice(4);
       const vr=activeViruses().find(x=>x.name===nm); if(!vr)return;
       injs[iv].virus=vr.name; injs[iv].type=vr.type||injs[iv].type;
+      if(vr.color)injs[iv].color=vr.color;   // the virus's own default marker colour
       paintInjs(); updatePreview();
       if(opts.offerTubeUse) offerTubeDecrement(vr.name);
       return;
@@ -5383,6 +5426,19 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
 
   const winApEl=document.getElementById(`${p}_winap`), winMlEl=document.getElementById(`${p}_winml`), winDiamEl=document.getElementById(`${p}_windiam`);
   winApEl.value=winAp; winMlEl.value=winMl; winDiamEl.value=winDiam;
+  // Picking a site fills AP/ML from the library; the fields stay editable, so it
+  // is a starting point rather than a lock. DV is ignored — a window sits on the
+  // surface, it has no depth.
+  const winSiteEl=document.getElementById(`${p}_winsite`);
+  if(winSiteEl){
+    const match=(DB.config.siteLib||[]).find(x=>String(x.ap)===String(winAp)&&String(x.ml)===String(winMl));
+    if(match)winSiteEl.value=match.name;
+    winSiteEl.addEventListener("change",()=>{
+      const site=(DB.config.siteLib||[]).find(x=>x.name===winSiteEl.value); if(!site)return;
+      winAp=String(site.ap); winMl=String(site.ml);
+      winApEl.value=winAp; winMlEl.value=winMl; updatePreview();
+    });
+  }
   winApEl.addEventListener("input",()=>{winAp=winApEl.value; updatePreview();});
   winMlEl.addEventListener("input",()=>{winMl=winMlEl.value; updatePreview();});
   winDiamEl.addEventListener("input",()=>{winDiam=winDiamEl.value; updatePreview();});
@@ -5409,6 +5465,7 @@ function animalModal(id,draft){
   const seg=(fid,on)=>`<div class="seg" id="${fid}"><button data-v="1" class="${on?"on":""}">Yes</button><button data-v="0" class="${!on?"on":""}">No</button></div>`;
   modal(`<h3>${id?"Edit":"New"} animal</h3>
     <div class="drow">${F("am_name","Name",view.name)}</div>
+    ${id?`<div class="fld"><label>Experiments &amp; groups</label><div id="am_attach"></div></div>`:""}
     <div class="drow">${F("am_cage","Cage",view.cage)}${F("am_sex","Sex",view.sex)}${F("am_strain","Strain",view.strain)}</div>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",view.dob)}</div>
@@ -5434,7 +5491,6 @@ function animalModal(id,draft){
     </div>
 
     <div class="fld"><label>Surgical comments / notes</label><textarea id="am_com">${esc(view.comments||"")}</textarea></div>
-    ${id?`<div class="fld"><label>Experiments &amp; groups</label><div id="am_attach"></div></div>`:""}
     <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
 
   // Which experiments this animal is in and which group of each. Same
@@ -5522,7 +5578,7 @@ function animalModal(id,draft){
       comments:document.getElementById("am_com").value.trim()};
     if(id){
       Object.assign(a,rec);
-    } else DB.animals.push({id:uid("a_"),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],...rec});
+    } else DB.animals.push({id:uid("a_"),created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],...rec});
     persist(); closeModal(); render(); toast(id?"Animal updated":"Animal added");
   };
   if(id)document.getElementById("am_del").onclick=()=>{ if(confirm("Delete this animal record?")){DB.animals=DB.animals.filter(x=>x.id!==id);persist();closeModal();render();toast("Deleted");}};
