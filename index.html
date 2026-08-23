@@ -292,6 +292,14 @@
   .step-date{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);flex:0 0 auto}
   .step-date.unset{color:var(--ink-faint)}
   .step-n{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto}
+  .dow-row{display:flex;gap:5px;flex-wrap:wrap}
+  .dow-row button{flex:0 0 auto;min-width:38px;border:1px solid var(--line2);background:var(--panel2);
+    color:var(--ink-dim);border-radius:7px;padding:5px 0;font-size:11.5px;cursor:pointer;font-family:var(--mono)}
+  .dow-row button:hover{color:var(--ink)}
+  .dow-row button.on{border-color:var(--gcamp);color:var(--gcamp);background:rgba(84,224,138,.1)}
+  .dow-every{display:flex;align-items:center;gap:7px;margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+  .dow-every input{width:56px;background:var(--panel2);border:1px solid var(--line2);color:var(--ink);
+    border-radius:6px;padding:4px 7px;font-size:11.5px}
   .grp-sub{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto}
   .at-pick{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
   .at-pick #at_sel{flex:1 1 auto;width:auto;min-width:160px;font-size:12px}
@@ -1944,8 +1952,18 @@ function taskSpan(t){
 // task is done once its date has passed, occurrences need no completion state —
 // past ones are finished and future ones are not, for free.
 const REPEATS=[["","Does not repeat"],["day","Every day"],["week","Every week"],
-               ["2week","Every 2 weeks"],["month","Every month"]];
-function repeatLabel(r){ if(!r||!r.every)return ""; const m=REPEATS.find(x=>x[0]===r.every); return m?m[1].toLowerCase():r.every; }
+               ["2week","Every 2 weeks"],["month","Every month"],["custom","Custom…"]];
+const DOW=["Su","Mo","Tu","We","Th","Fr","Sa"];
+function repeatLabel(r){
+  if(!r||!r.every)return "";
+  if(r.every==="custom"){
+    const d=(r.days||[]).slice().sort((a,b)=>a-b).map(i=>DOW[i]).join(", ");
+    if(!d)return "custom";
+    const iv=Math.max(1,+r.interval||1);
+    return iv>1?`${d} every ${iv} weeks`:d;
+  }
+  const m=REPEATS.find(x=>x[0]===r.every); return m?m[1].toLowerCase():r.every;
+}
 function addDaysISO(iso,n){
   const t=iso.length>10?iso.slice(11):null;
   const d=new Date(iso.slice(0,10)+"T00:00:00"); d.setDate(d.getDate()+n);
@@ -1977,6 +1995,33 @@ function taskOccurrences(t,fromISO,toISO){
     return (end.slice(0,10)>=fromISO&&t.when.slice(0,10)<=toISO)?[{t,when:t.when,endDate:t.endDate}]:[];
   }
   const out=[]; const until=t.repeat.until||null;
+  if(t.repeat.every==="custom"){
+    const days=(t.repeat.days||[]).slice().sort((a,b)=>a-b);
+    if(!days.length)return [];
+    const iv=Math.max(1,+t.repeat.interval||1);
+    const startISO=t.when.slice(0,10), time=t.when.length>10?t.when.slice(11):null;
+    // week 0 is the Sunday-based week the task starts in; occurrences fall on
+    // the chosen weekdays of every iv-th week from there
+    const anchor=new Date(startISO+"T00:00:00");
+    const w0=new Date(anchor); w0.setDate(anchor.getDate()-anchor.getDay());
+    const p2=x=>String(x).padStart(2,"0");
+    for(let w=0;w<520;w+=iv){
+      const ws2=new Date(w0); ws2.setDate(w0.getDate()+w*7);
+      if(`${ws2.getFullYear()}-${p2(ws2.getMonth()+1)}-${p2(ws2.getDate())}`>toISO)break;
+      for(const d of days){
+        const dt=new Date(ws2); dt.setDate(ws2.getDate()+d);
+        const iso=`${dt.getFullYear()}-${p2(dt.getMonth()+1)}-${p2(dt.getDate())}`;
+        if(iso<startISO)continue;
+        if(until&&iso>until)continue;
+        if(iso>toISO)continue;
+        const when=iso+(time?"T"+time:"");
+        const e=span?addDaysISO(when,span):null;
+        if((e||when).slice(0,10)>=fromISO) out.push({t,when,endDate:e});
+      }
+    }
+    out.sort((a,b)=>a.when.localeCompare(b.when));
+    return out;
+  }
   for(let i=0;i<400;i++){
     const w=stepRepeat(t.when,t.repeat,i);
     if(until&&w.slice(0,10)>until)break;
@@ -2147,6 +2192,10 @@ function taskEditor(t,after){
       <div class="fld" style="flex:1"><label>Repeat until</label>
         <button type="button" id="tk_until" class="datebtn ${t.repeat&&t.repeat.until?"":"datebtn-empty"}">${t.repeat&&t.repeat.until?fmtWhenFull(t.repeat.until):"📅 no end"}</button></div>
     </div>
+    <div class="fld" id="tk_customwrap" style="display:none"><label>On these days</label>
+      <div class="dow-row" id="tk_dow"></div>
+      <div class="dow-every"><span>repeat every</span>
+        <input id="tk_ivl" type="number" min="1" max="12" value="1"><span>week(s)</span></div></div>
     <div class="fld"><label>Part of</label>
       <select id="tk_exp"><option value="">— not attached to an experiment</option>${opts}</select></div>
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="tk_del">Delete task</button></div>
@@ -2154,8 +2203,37 @@ function taskEditor(t,after){
   bindDateButton(document.getElementById("tk_start"), ()=>t.when||"", v=>{ t.when=v||null; persist(); });
   bindDateButton(document.getElementById("tk_end"),   ()=>t.endDate||"", v=>{ t.endDate=v||null; persist(); });
   document.getElementById("tk_exp").addEventListener("change",e=>setTaskExperiment(t,e.target.value));
+  const wrap=document.getElementById("tk_customwrap"), dowBox=document.getElementById("tk_dow"),
+        ivl=document.getElementById("tk_ivl");
+  function drawRepeat(){
+    const custom=!!(t.repeat&&t.repeat.every==="custom");
+    wrap.style.display=custom?"":"none";
+    if(!custom)return;
+    const days=(t.repeat.days||[]);
+    dowBox.innerHTML=DOW.map((d,i)=>`<button type="button" data-d="${i}" class="${days.includes(i)?"on":""}">${d}</button>`).join("");
+    ivl.value=Math.max(1,+t.repeat.interval||1);
+    dowBox.querySelectorAll("button").forEach(b=>b.onclick=()=>{
+      const i=+b.dataset.d;
+      t.repeat.days=(t.repeat.days||[]).includes(i)
+        ? t.repeat.days.filter(x=>x!==i) : [...(t.repeat.days||[]),i];
+      persist(); drawRepeat(); });
+  }
+  ivl.addEventListener("change",()=>{ if(t.repeat)t.repeat.interval=Math.max(1,Math.min(12,+ivl.value||1)); persist(); drawRepeat(); });
   document.getElementById("tk_rep").addEventListener("change",e=>{
-    t.repeat=e.target.value?{every:e.target.value,until:(t.repeat&&t.repeat.until)||null}:null; persist(); });
+    const v=e.target.value;
+    if(!v){ t.repeat=null; }
+    else {
+      const keep=(t.repeat&&t.repeat.until)||null;
+      t.repeat={every:v,until:keep};
+      // seed a custom rule with the weekday the task already starts on, so it
+      // is never a repeat that produces nothing
+      if(v==="custom"){
+        const d=t.when?new Date(t.when.slice(0,10)+"T00:00:00").getDay():new Date().getDay();
+        t.repeat.days=[d]; t.repeat.interval=1;
+      }
+    }
+    persist(); drawRepeat(); });
+  drawRepeat();
   bindDateButton(document.getElementById("tk_until"), ()=>((t.repeat&&t.repeat.until)||""),
     v=>{ if(!t.repeat)t.repeat={every:"week",until:null}; t.repeat.until=v?v.slice(0,10):null; persist(); });
   document.getElementById("tk_save").onclick=()=>{
