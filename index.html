@@ -496,9 +496,14 @@
   .seg{display:flex;gap:4px;flex-wrap:wrap}
   .seg button{flex:1;background:var(--bg2);border:1px solid var(--line2);color:var(--ink-dim);padding:7px;border-radius:7px;font-size:12px}
   .seg button.on{color:#fff;border-color:currentColor}
+  .af-grid{display:grid;grid-auto-flow:column;grid-template-rows:auto auto;grid-auto-columns:minmax(120px,1fr);
+    column-gap:10px;row-gap:4px;margin-bottom:6px;overflow-x:auto;padding-bottom:2px}
+  .af-grid .af-sel{width:100%;min-width:0;background:var(--panel2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:6px 9px;font-size:12.5px}
+  .af-grid .af-sel:focus{outline:none;border-color:var(--gcamp)}
   .af-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
   .af-row .seg button{flex:0 0 auto}
   .af-label{font-family:var(--mono);font-size:10px;color:var(--ink-faint);text-transform:uppercase;width:60px;flex:0 0 auto}
+  .af-grid .af-label{width:auto;align-self:end;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .taglist{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
   .tag{display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1px solid var(--line2);border-radius:20px;padding:3px 10px;font-size:12px}
   .tag button{border:0;background:transparent;color:var(--ink-faint);font-size:13px;padding:0}
@@ -4244,7 +4249,12 @@ function renderAnimals(){
     .flatMap(st=>(st.groupDefs||[]).map(g=>g.name).filter(Boolean)))].sort((a,b)=>a.localeCompare(b));
   const bar=document.createElement("div");
   bar.style.cssText="margin-bottom:16px";
-  const row=(label,id,cur,opts)=>`<div class="af-row"><span class="af-label">${label}</span><div class="seg" id="${id}">${opts.map(o=>`<button data-v="${o[0]}" class="${cur===o[0]?"on":""}">${o[1]}</button>`).join("")}</div></div>`;
+  // One column per filter: its title, and its dropdown directly beneath. The
+  // columns wrap together, so the titles always sit on the line above their own
+  // control however narrow the window gets.
+  const col=(label,id,cur,opts)=>`<span class="af-label">${label}</span>
+    <select id="${id}" class="af-sel">${opts.map(o=>
+      `<option value="${escAttr(o[0])}" ${String(cur)===String(o[0])?"selected":""}>${esc(o[1])}</option>`).join("")}</select>`;
   bar.innerHTML=`
     <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin-bottom:10px;align-items:center">
       <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search name, cage, strain, notes, project or experiment…"
@@ -4254,28 +4264,29 @@ function renderAnimals(){
         <button class="btn accent" id="a_add">＋ Animal</button>
       </div>
     </div>
-    ${row("Project","a_cohort",animalCohort,[["all","All"],...projNames,["none","Unassigned"]])}
-    ${expNames.length?row("Experiment","a_exp",animalExperiment,[["all","All"],...expNames]):""}
-    ${groupNames.length?row("Group","a_group",animalGroup,[["all","All"],...groupNames.map(g=>[g,g])]):""}
-    ${row("Sort","a_sort",animalSort,[["name","Name"],["dob","Born"],["added","Added"],["sac","Sacrificed"]])}
-    ${row("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
+    <div class="af-grid">
+      ${col("Project","a_cohort",animalCohort,[["all","All projects"],...projNames,["none","Unassigned"]])}
+      ${expNames.length?col("Experiment","a_exp",animalExperiment,[["all","All experiments"],...expNames]):""}
+      ${groupNames.length?col("Group","a_group",animalGroup,[["all","All groups"],...groupNames.map(g=>[g,g])]):""}
+      ${col("Sort","a_sort",animalSort,[["name","Name"],["dob","Born"],["added","Added"],["sac","Sacrificed"]])}
+      ${col("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
+    </div>
 `;
   host.appendChild(bar);
-  bar.querySelector("#a_cohort").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalCohort=b.dataset.v;DB.config.animalFilters.cohort=animalCohort;
+  const onPick=(id,fn)=>{ const el=bar.querySelector("#"+id); if(el)el.addEventListener("change",e=>fn(e.target.value)); };
+  onPick("a_cohort",v=>{
+    animalCohort=v; DB.config.animalFilters.cohort=v;
+    // an experiment from a project you just filtered away no longer applies
     if(animalExperiment!=="all"){
       const st=allSteps().find(x=>x.id===animalExperiment);
-      if(!st||(animalCohort!=="all"&&st.projectId!==animalCohort)){ animalExperiment="all"; DB.config.animalFilters.experiment="all"; }
+      if(!st||(v!=="all"&&st.projectId!==v)){ animalExperiment="all"; DB.config.animalFilters.experiment="all"; }
     }
-    persist();renderAnimals();});
-  const grpSeg=bar.querySelector("#a_group");
-  if(grpSeg)grpSeg.addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
-    animalGroup=b.dataset.v;DB.config.animalFilters.group=animalGroup;persist();renderAnimals();});
-  bar.querySelector("#a_sort").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
-    animalSort=b.dataset.v;DB.config.animalFilters.sort=animalSort;persist();renderAnimals();});
-  const expSeg=bar.querySelector("#a_exp");
-  if(expSeg)expSeg.addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;
-    animalExperiment=b.dataset.v;DB.config.animalFilters.experiment=animalExperiment;persist();renderAnimals();});
-  bar.querySelector("#a_status").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;animalStatus=b.dataset.v;DB.config.animalFilters.status=animalStatus;persist();renderAnimals();});
+    persist(); renderAnimals();
+  });
+  onPick("a_exp",v=>{ animalExperiment=v; DB.config.animalFilters.experiment=v; persist(); renderAnimals(); });
+  onPick("a_group",v=>{ animalGroup=v; DB.config.animalFilters.group=v; persist(); renderAnimals(); });
+  onPick("a_sort",v=>{ animalSort=v; DB.config.animalFilters.sort=v; persist(); renderAnimals(); });
+  onPick("a_status",v=>{ animalStatus=v; DB.config.animalFilters.status=v; persist(); renderAnimals(); });
   bar.querySelector("#a_search").addEventListener("input",e=>{
     const pos=e.target.selectionStart;
     animalSearch=e.target.value;
