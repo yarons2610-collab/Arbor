@@ -1166,6 +1166,20 @@ function migrate(){                       // backfill fields added in later vers
     if(pr.notes==null)pr.notes="";
     if(pr.question==null)pr.question="";
     if(!Array.isArray(pr.steps))pr.steps=[];
+    if(!Array.isArray(pr.links))pr.links=[];
+    // A project no longer links anything itself; an experiment does. A
+    // project-level link meant "shared by every experiment here", so it folds
+    // into each of them. Projects with no experiment to fold into keep theirs
+    // in storage — projAllLinks still surfaces them on the card — rather than
+    // having them silently dropped.
+    if(!pr._linksFolded&&pr.links.length&&pr.steps.length){
+      pr.steps.forEach(st=>{
+        st.links=st.links||[];
+        pr.links.forEach(l=>{ if(!st.links.some(x=>sameLink(x,l)))st.links.push({...l}); });
+      });
+      pr.links=[];
+      pr._linksFolded=true;
+    }
     // Hypothesis, exclusions and arms belong to an experiment, not to a project —
     // a project runs several. Any text written at project level before that is
     // folded into the notes rather than silently orphaned.
@@ -2161,10 +2175,6 @@ function renderProjectPlan(id){
     });
   }
   drawSteps();
-
-  const lw=document.createElement("div"); lw.className="fld"; host.appendChild(lw);
-  lw.innerHTML=`<label>Shared across the project</label><div id="pl_links"></div>`;
-  mountLinkEditor(document.getElementById("pl_links"),pr,()=>drawSteps());
 
   const del=document.createElement("div"); del.className="drow"; del.style.marginTop="22px";
   del.innerHTML=`<button class="btn danger" id="pl_del">Delete project</button>`;
