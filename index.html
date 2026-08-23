@@ -1434,6 +1434,23 @@ function calDayDelta(fromISO,toISO){
 // the series is at least predictable, and it is said out loud.
 function commitCalMove(x,newWhen,newEnd,newDur){
   const src=x.src;
+  // A diary entry belongs to one animal on one day. Moving it here is the same
+  // edit as moving it in that animal's own diary — there is one record.
+  if(x.kind==="diary"){
+    const e=src.e;
+    if(newWhen!=null){
+      e.date=newWhen.slice(0,10);
+      e.time=newWhen.length>10?newWhen.slice(11,16):"";
+    }
+    const mins=newDur!=null?newDur:(x.duration||null);
+    if(e.time&&e.endTime&&mins){
+      const [h,m]=e.time.split(":").map(Number);
+      const t2=h*60+m+mins, p4=n=>String(n).padStart(2,"0");
+      // an end time cannot run past midnight on a single-day entry
+      e.endTime=t2>=1440?"23:59":`${p4(Math.floor(t2/60))}:${p4(t2%60)}`;
+    }
+    persist(); return true;
+  }
   if(x.kind==="exp"){
     if(newWhen!=null)src.deadline=newWhen;
     if(newEnd!==undefined)src.endDate=newEnd;
@@ -1498,6 +1515,10 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
   });
 }
 function openCalItem(x){
+  if(x.kind==="diary"){
+    const a=x.src.a; animalSearch=a.name; DB.config.animalFilters.search=a.name; persist();
+    switchTo("animals"); return;
+  }
   if(x.kind==="task"){ taskEditor(x.src,()=>{ renderTimeline(); }); return; }
   openStepInPlan(x.src.id);
 }
@@ -3318,11 +3339,9 @@ function renderTimeline(){
       chip.style.cssText=`background:${def.color}22;border-left:3px solid ${def.color};color:${def.color}`;
       chip.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
       chip.title=`${def.label} — ${an.name} — ${e.date}${isFuture?" (scheduled)":""}`;
-      chip.onclick=()=>{
-        animalSearch=an.name; DB.config.animalFilters.search=animalSearch; persist();
-        switchTo("animals");
-      };
       alldayCells[d].appendChild(chip);
+      makeAllDayDraggable(chip,{kind:"diary",id:e.id,title:`${an.name} — ${def.label}`,
+        deadline:e.date,endDate:null,duration:null,src:{a:an,e}},alldayCells,ws);
     });
   });
 
@@ -3446,9 +3465,9 @@ function renderTimeline(){
       });
       hourCells[di].cell.appendChild(evt);
     });
-    // place timed diary entries (procedures etc. logged with a specific time)
-    // in the same hourly grid - read-only (no drag/resize, unlike tasks),
-    // clicking still navigates to that animal's diary like the all-day chip does.
+    // Timed diary entries in the same hourly grid, with the same drag and resize
+    // tasks have — they were read-only, which made half the calendar movable and
+    // the other half not for no reason the user could see.
     diaryTimedEvents.forEach(({an,e,def,isFuture,dayIdx})=>{
       const [hh,mm]=e.time.split(":").map(Number);
       if(hh!==h) return;
@@ -3469,10 +3488,17 @@ function renderTimeline(){
       const timeLabel=e.endTime?`${e.time}–${e.endTime}`:e.time;
       evt.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div><div class="es">${timeLabel}</div>`;
       evt.title=`${def.label} — ${an.name} — ${e.date} ${timeLabel}${isFuture?" (scheduled)":""}`;
-      evt.onclick=()=>{
-        animalSearch=an.name; DB.config.animalFilters.search=animalSearch; persist();
-        switchTo("animals");
-      };
+      const item={kind:"diary",id:e.id,title:`${an.name} — ${def.label}`,
+        deadline:`${e.date}T${e.time}`,endDate:e.endTime?`${e.date}T${e.endTime}`:null,
+        duration:durationMins,src:{a:an,e}};
+      evt.insertAdjacentHTML("afterbegin",`<div class="cal-evt-resize cal-evt-resize-top"></div>`);
+      evt.insertAdjacentHTML("beforeend",`<div class="cal-evt-resize cal-evt-resize-bottom"></div>`);
+      evt.addEventListener("pointerdown",ev=>{
+        ev.stopPropagation();
+        const mode=ev.target.classList.contains("cal-evt-resize")
+          ?(ev.target.classList.contains("cal-evt-resize-top")?"resize-top":"resize-bottom"):"move";
+        beginTimedEventDrag(mode,item,evt,ev);
+      });
       hourCells[dayIdx].cell.appendChild(evt);
     });
     // click-to-create on hour cells
@@ -6272,7 +6298,7 @@ function openTimelineCreateModal(prefillDeadline){
   modal(`<h3>New timeline item</h3>
     <div class="fld"><label>Kind</label>
       <div class="seg" id="tc_kind">
-        <button type="button" data-v="task" class="on">Task</button>
+        <button type="button" data-v="task">Task</button>
         <button type="button" data-v="diary" ${animals.length?"":"disabled"}>Animal diary entry</button>
       </div></div>
     <div id="tc_body" class="dg-form"></div>`,{wide:true});
@@ -6371,7 +6397,8 @@ function openTimelineCreateModal(prefillDeadline){
     document.querySelectorAll("#tc_kind button").forEach(x=>x.classList.toggle("on",x===b));
     if(b.dataset.v==="task")paintTask(); else paintDiary();
   };
-  paintTask();
+  body.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:10px 0 4px">Pick what to put on this date.</div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
 }
 function paletteHTML(sel){ return DOMAIN_PALETTE.map(c=>`<span class="tag" data-c="${c}" style="cursor:pointer;border-color:${c};${c===sel?`box-shadow:0 0 0 2px ${c}`:""}"><span style="width:12px;height:12px;border-radius:3px;background:${c};display:inline-block"></span></span>`).join(""); }
 
