@@ -379,6 +379,9 @@
   .week-grid{display:grid;grid-template-columns:52px repeat(var(--cal-cols,7),minmax(0,1fr));min-width:min(640px,100%)}
   .cal-mode{margin-left:auto}
   .cal-mode button{text-transform:none;font-size:11.5px;padding:3px 10px}
+  .cal-colour{flex:0 0 auto;align-items:center}
+  .cal-colour button{text-transform:none;font-size:11.5px;padding:3px 10px}
+  .cal-colour .cc-lab{font-size:10px;color:var(--ink-faint);letter-spacing:.04em;margin-right:1px}
   .month-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
   .month-cell{background:var(--panel);min-height:96px;padding:4px 5px;display:flex;flex-direction:column;gap:2px;overflow:visible}
   .month-cell.out{opacity:.38}
@@ -758,6 +761,10 @@ if("serviceWorker" in navigator){
 }
 const KEY="arbor_workspace_v3";   // v3: retire stale v2 storage that carried old example tasks; load embedded (uploaded) data fresh
 const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
+  // What a diary entry's colour means on the Timeline: "type" gives the entry
+  // type the fill and the animal's project a thin edge, "project" gives the
+  // project everything. Tasks and experiments are project-coloured either way.
+  calColorBy:"type",
   animalFilters:{cohort:"all",experiment:"all",group:"all",status:"all",search:"",sort:"name"},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // seeded diary entry types - fully user-editable afterward (label/icon/color/
@@ -2588,10 +2595,34 @@ function animalWhere(a){
   const ps=animalProjects(a.id);
   return ps.length?(ps[0].name||"(unnamed project)"):"";
 }
-function animalColor(a){
-  const ps=animalProjects(a.id);
-  return ps.length?ps[0].color:"#5b6678";
+// Which project an animal is shown as belonging to when it is in several. This
+// used to be whichever sat first in DB.projects, so reordering projects silently
+// recoloured animals. Prefer the project that names the animal through one of
+// its experiments — a closer tie than a project-level link — and settle what is
+// left by name, so the answer never depends on storage order.
+function animalHomeProject(aid){
+  const ps=animalProjects(aid);
+  if(!ps.length)return null;
+  const distance=pr=>(pr.steps||[]).some(st=>
+    (st.links||[]).some(l=>l.kind==="animal"&&l.id===aid)||((st.groups||{})[aid]))?0:1;
+  return [...ps].sort((a,b)=>
+    distance(a)-distance(b)||String(a.name||"").localeCompare(String(b.name||"")))[0];
 }
+function animalColor(a){
+  const pr=animalHomeProject(a.id);
+  return pr?pr.color:"#5b6678";
+}
+// Two channels, two variables: what kind of entry this is (the fill, backed up
+// by the icon the chip already carries) and which project the animal belongs to
+// (a thin edge down the right). Under "project" the project takes the fill and
+// the edge goes away, so the whole calendar reads as a single variable.
+function diaryColors(an,def){
+  const pr=animalHomeProject(an.id);
+  const proj=pr?pr.color:null;
+  if((DB.config.calColorBy||"type")==="project") return {fill:proj||"#5b6678",edge:null};
+  return {fill:def.color,edge:proj};
+}
+const edgeCSS=c=>c?`border-right:3px solid ${c};`:"";
 
 // Every experiment this animal is in, the group it sits in there, and a way to
 // put it into another one.
@@ -3257,6 +3288,19 @@ function calModeSegHTML(){
   return `<div class="seg cal-mode" id="cal_mode">${["day","week","month"]
     .map(m=>`<button type="button" data-m="${m}" class="${calMode===m?"on":""}">${m[0].toUpperCase()+m.slice(1)}</button>`).join("")}</div>`;
 }
+function calColourSegHTML(){
+  const m=DB.config.calColorBy||"type";
+  return `<div class="seg cal-colour" id="cal_colour" title="What a diary entry's colour means">`
+    +`<span class="cc-lab">colour</span>${
+    [["type","Type"],["project","Project"]].map(([v,l])=>
+      `<button type="button" data-c="${v}" class="${m===v?"on":""}">${l}</button>`).join("")}</div>`;
+}
+function wireCalColourSeg(root){
+  const seg=root.querySelector("#cal_colour"); if(!seg)return;
+  seg.addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
+    if(b.dataset.c===(DB.config.calColorBy||"type"))return;
+    DB.config.calColorBy=b.dataset.c; persist(); renderTimeline(); });
+}
 function wireCalModeSeg(root){
   const seg=root.querySelector("#cal_mode"); if(!seg)return;
   seg.addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
@@ -3275,11 +3319,11 @@ function renderMonthView(host){
     <button class="cal-nav-btn today" id="cal_today">Today</button>
     <button class="cal-nav-btn" id="cal_next">›</button>
     <h2>${base.toLocaleDateString(undefined,{month:"long",year:"numeric"})}</h2>
-    ${calModeSegHTML()}`;
+    ${calModeSegHTML()}${calColourSegHTML()}`;
   nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
   nav.querySelector("#cal_next").onclick=()=>{calWeekOffset++;renderTimeline();};
   nav.querySelector("#cal_today").onclick=()=>{calWeekOffset=0;renderTimeline();};
-  wireCalModeSeg(nav);
+  wireCalModeSeg(nav); wireCalColourSeg(nav);
 
   const gridStart=new Date(base); gridStart.setDate(1-base.getDay());
   const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -3337,7 +3381,8 @@ function renderMonthView(host){
       }
       const def=diaryTypeDef(e.type);
       const chip=document.createElement("div"); chip.className="cal-evt";
-      chip.style.cssText=`background:${def.color}22;border-left:3px solid ${def.color};color:${def.color}`;
+      const dc=diaryColors(a,def);
+      chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
       chip.innerHTML=`<div class="et">${def.icon} ${esc(a.name)}${e.date>today0?" (planned)":""}</div>`;
       chip.title=`${def.label} — ${a.name} — ${e.date}`;
       chip.onclick=()=>{ animalSearch=a.name; DB.config.animalFilters.search=a.name; persist(); switchTo("animals"); };
@@ -3364,8 +3409,8 @@ function renderTimeline(){
     <button class="cal-nav-btn" id="cal_next">›</button>
     <h2>${NCOL===1?ws.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric",year:"numeric"})
                   :`${fmt(ws)} – ${fmt(we)}, ${fmtY(we)}`}</h2>
-    ${calModeSegHTML()}`;
-  wireCalModeSeg(nav);
+    ${calModeSegHTML()}${calColourSegHTML()}`;
+  wireCalModeSeg(nav); wireCalColourSeg(nav);
   nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
   nav.querySelector("#cal_next").onclick=()=>{calWeekOffset++;renderTimeline();};
   nav.querySelector("#cal_today").onclick=()=>{calWeekOffset=0;renderTimeline();};
@@ -3484,7 +3529,8 @@ function renderTimeline(){
       const isFuture=e.date>today0;
       if(e.time){ diaryTimedEvents.push({an,e,def,isFuture,dayIdx:d}); return; }
       const chip=document.createElement("div"); chip.className="cal-evt";
-      chip.style.cssText=`background:${def.color}22;border-left:3px solid ${def.color};color:${def.color}`;
+      const dc=diaryColors(an,def);
+      chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
       chip.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
       chip.title=`${def.label} — ${an.name} — ${e.date}${isFuture?" (scheduled)":""}`;
       alldayCells[d].appendChild(chip);
@@ -3632,7 +3678,8 @@ function renderTimeline(){
       const{col:colIdx,totalCols}=diaryTimedLayout.get(e.id)||{col:0,totalCols:1};
       const colPct=100/totalCols;
       const evt=document.createElement("div"); evt.className="cal-evt-timed";
-      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${def.color}dd;color:#fff;border-left:3px solid ${def.color};z-index:2`;
+      const dc=diaryColors(an,def);
+      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${dc.fill}dd;color:#fff;border-left:3px solid ${dc.fill};${edgeCSS(dc.edge)}z-index:2`;
       const timeLabel=e.endTime?`${e.time}–${e.endTime}`:e.time;
       evt.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div><div class="es">${timeLabel}</div>`;
       evt.title=`${def.label} — ${an.name} — ${e.date} ${timeLabel}${isFuture?" (scheduled)":""}`;
