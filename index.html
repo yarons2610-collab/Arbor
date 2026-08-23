@@ -365,7 +365,7 @@
   .cal-mode{margin-left:auto}
   .cal-mode button{text-transform:none;font-size:11.5px;padding:3px 10px}
   .month-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
-  .month-cell{background:var(--panel);min-height:96px;padding:4px 5px;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+  .month-cell{background:var(--panel);min-height:96px;padding:4px 5px;display:flex;flex-direction:column;gap:2px;overflow:visible}
   .month-cell.out{opacity:.38}
   .month-cell.today{box-shadow:inset 0 0 0 2px var(--amber)}
   .mc-num{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
@@ -822,7 +822,16 @@ async function gistRequest(method,path,body){
     method,cache:"no-store",headers:{"Authorization":"token "+gistToken(),
       "Accept":"application/vnd.github+json","Content-Type":"application/json"},
     body:body?JSON.stringify(body):undefined});
-  if(!r.ok){const t=await r.text();throw new Error("GitHub "+r.status+": "+t.slice(0,120));}
+  if(!r.ok){
+    const t=await r.text();
+    let detail=t.slice(0,200);
+    // GitHub answers with JSON; the message is the part worth showing
+    try{ const j=JSON.parse(t); if(j&&j.message)detail=j.message; }catch(_){}
+    const err=new Error("GitHub "+r.status+": "+detail);
+    const ra=r.headers.get("retry-after");
+    if(ra)err.retryAfter=+ra||60;
+    throw err;
+  }
   return r.status===204?null:r.json();
 }
 async function gistSave(jsonStr){
@@ -996,19 +1005,60 @@ function setSaveState(s,detail){
     synced:   ["✓ synced",         "var(--gcamp)"],
     failed:   ["⚠ save failed — export JSON backup","var(--overdue)"],
     syncwarn: ["⚠ showing local copy, not synced — export JSON backup","var(--amber)"],
+    throttled:["⏳ sync paused by GitHub — saved on this device","var(--amber)"],
   };
   const m=states[s]||states.saved; el.textContent=m[0]+(detail?" ("+detail+")":""); el.style.color=m[1]; el.dataset.state=s;
-  el.style.cursor=(s==="failed"||s==="syncwarn")?"pointer":"default";
+  el.title=detail||"";
+  el.style.cursor=(s==="failed"||s==="syncwarn"||s==="throttled")?"pointer":"default";
 }
+
+// Writing to disk is cheap and wants to happen almost immediately. Pushing the
+// whole workspace to a Gist is a network write to one resource, and GitHub
+// applies a secondary rate limit to rapid successive writes — so it waits for a
+// real pause in typing, and never fires more often than SYNC_MIN_GAP.
+const SYNC_IDLE=6000, SYNC_MIN_GAP=20000;
+let syncTimer=null, lastSyncAt=0, syncInFlight=false, syncPending=false, syncBackoffUntil=0;
 
 async function doWrite(){
   setSaveState("saving");
   try{ await window.arbor.save(DB); storageOK=true; }
   catch(e){ storageOK=false; console.error("Arbor native save failed:",e); }
-  if(gistToken()){
-    try{ await gistSave(JSON.stringify(DB)); setSaveState("synced"); }
-    catch(e){ setSaveState("failed","Gist: "+String(e).slice(0,40)); console.warn("Gist save failed",e); }
-  } else { setSaveState(storageOK?"saved":"failed"); }
+  if(gistToken()) scheduleSync(); else setSaveState(storageOK?"saved":"failed");
+}
+function scheduleSync(){
+  syncPending=true;
+  clearTimeout(syncTimer);
+  const now=Date.now();
+  const wait=Math.max(SYNC_IDLE, lastSyncAt+SYNC_MIN_GAP-now, syncBackoffUntil-now);
+  setSaveState(storageOK?"saved":"failed");
+  syncTimer=setTimeout(runSync,wait);
+}
+async function runSync(){
+  if(syncInFlight){ syncPending=true; return; }
+  if(!gistToken()){ syncPending=false; return; }
+  syncInFlight=true; syncPending=false;
+  setSaveState("saving");
+  try{
+    await gistSave(JSON.stringify(DB));
+    lastSyncAt=Date.now(); syncBackoffUntil=0; setSaveState("synced");
+  }catch(e){
+    lastSyncAt=Date.now();
+    // 403/429 from GitHub means "slow down", not "you are broken" — back off and
+    // try again rather than leaving the workspace unsynced.
+    const msg=String(e&&e.message||e);
+    const throttled=/\b(403|429)\b/.test(msg)||/rate limit|secondary/i.test(msg);
+    if(throttled){
+      syncBackoffUntil=Date.now()+(e&&e.retryAfter?e.retryAfter*1000:60000);
+      syncPending=true;
+      setSaveState("throttled");
+    } else {
+      setSaveState("failed",msg.slice(0,90));
+    }
+    console.warn("Gist save failed",e);
+  }finally{
+    syncInFlight=false;
+    if(syncPending)scheduleSync();
+  }
 }
 function persist(){ clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160); }
 async function flushSave(){ clearTimeout(saveTimer); try{ window.arbor.saveSync(DB); }catch(e){} }
@@ -2752,16 +2802,22 @@ function renderMonthView(host){
   const byDay={};
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
     if(!keys.has(e.type))return; (byDay[e.date]=byDay[e.date]||[]).push({a,e}); }));
-  // project steps belong here too — a month is exactly the scale at which you
-  // plan them, and a step that spans days shows on every day it covers
+  // Project steps belong here too — a month is exactly the scale at which you
+  // plan them. A step spanning days is ONE bar, but a month wraps, so the span
+  // is cut at each week boundary and each week's piece gets its own bar.
+  const pad=n=>String(n).padStart(2,"0");
+  const dkey=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
   allSteps().forEach(st=>{
     if(!st.deadline||!projById(st.projectId))return;
     const d0=whenDate(st.deadline); d0.setHours(0,0,0,0);
     const d1=st.endDate?new Date(whenDate(st.endDate).setHours(0,0,0,0)):new Date(d0);
-    const pad=n=>String(n).padStart(2,"0");
-    for(let d=new Date(d0); d<=d1; d.setDate(d.getDate()+1)){
-      const k=`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-      (byDay[k]=byDay[k]||[]).push({st});
+    for(let d=new Date(d0); d<=d1; ){
+      const segStart=new Date(d);
+      const segEnd=new Date(d); segEnd.setDate(segEnd.getDate()+(6-segEnd.getDay()));
+      if(segEnd>d1) segEnd.setTime(d1.getTime());
+      const span=Math.round((segEnd-segStart)/864e5)+1;
+      (byDay[dkey(segStart)]=byDay[dkey(segStart)]||[]).push({st,span});
+      d=new Date(segEnd); d.setDate(d.getDate()+1);
     }
   });
   const today0=todayDateStr();
@@ -2772,11 +2828,14 @@ function renderMonthView(host){
     const cell=document.createElement("div");
     cell.className="month-cell"+(day.getMonth()!==base.getMonth()?" out":"")+(day.getTime()===today.getTime()?" today":"");
     cell.innerHTML=`<div class="mc-num">${day.getDate()}</div>`;
-    (byDay[key]||[]).forEach(({a,e,st})=>{
+    (byDay[key]||[]).forEach(({a,e,st,span})=>{
       if(st){
         const col=stepColor(st);
-        const chip=document.createElement("div"); chip.className="cal-evt";
-        chip.style.cssText=`background:${col}22;border-left:3px solid ${col};color:${col}`;
+        const chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
+        // widen across the days it covers: each extra column adds its own width
+        // plus the grid gap and the two cell paddings that fall between them
+        chip.style.cssText=`background:${col}22;border-left:3px solid ${col};color:${col};`
+          +(span>1?`width:calc(${span*100}% + ${(span-1)*11}px);`:"");
         chip.innerHTML=`<div class="et">${esc(st.title||"(unnamed step)")}</div>`;
         chip.title=`${(projById(st.projectId)||{}).name||""} — ${st.title||""}`;
         chip.onclick=()=>openStepInPlan(st.id);
@@ -5817,12 +5876,14 @@ function showGistSetup(){
 document.getElementById("syncBtn").addEventListener("click",()=>showGistSetup());
 document.getElementById("saveState").addEventListener("click",()=>{
   const st=document.getElementById("saveState").dataset.state;
-  if(st==="failed"||st==="noapi"||st==="off"||st==="syncwarn"){
+  if(st==="failed"||st==="noapi"||st==="off"||st==="syncwarn"||st==="throttled"){
     download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");
     toast("JSON backup downloaded — import this via ⋯ to restore"); }
 });
 // best-effort flush when leaving or backgrounding the page
 window.addEventListener("beforeunload",()=>{ flushSave(); });
+// a pending sync should not wait out its idle timer while the tab is hidden
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden"&&syncPending&&gistToken()){ clearTimeout(syncTimer); runSync(); } });
 document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="hidden") doWrite(); });
 /* createAndOpenTask — single entry point for all task creation.
    Creates a minimal task record, pushes it to DB, opens the full detail panel
