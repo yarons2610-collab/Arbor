@@ -2517,6 +2517,48 @@ function animalColor(a){
 
 // Every experiment this animal is in, the group it sits in there, and a way to
 // put it into another one.
+// The same choice as mountAttachments, but for an animal that does not exist
+// yet: selections accumulate in `pending` and are written once it has an id.
+function mountPendingExperiments(host,pending){
+  const draw=()=>{
+    const all=DB.projects.flatMap(pr=>experimentsOf(pr).map(e=>({pr,e})));
+    if(!all.length){ host.innerHTML=`<div class="pc-empty">No experiments yet.</div>`; return; }
+    host.innerHTML=`${pending.map((row,i)=>{
+        const found=all.find(x=>x.e.id===row.expId); if(!found)return "";
+        return `<div class="ag-row" data-i="${i}">
+          <span class="ag-where">${esc(found.pr.name||"(unnamed project)")} <span class="ag-sep">›</span> ${esc(found.e.title||"(unnamed experiment)")}</span>
+          <select class="ag-pick"><option value="">—</option>${(found.e.groupDefs||[]).map(g=>
+            `<option value="${g.id}" ${row.groupId===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>
+          <button class="ag-del" title="Remove">✕</button>
+        </div>`;
+      }).join("")||`<div class="pc-empty">Not in any experiment yet.</div>`}
+      <div class="ag-add">
+        <select id="ag_pendsel"><option value="">＋ add to an experiment…</option>${
+          all.filter(x=>!pending.some(r=>r.expId===x.e.id))
+             .map(x=>`<option value="${x.e.id}">${esc(x.pr.name||"(unnamed)")} › ${esc(x.e.title||"(unnamed experiment)")}</option>`).join("")}</select>
+      </div>`;
+    host.querySelectorAll(".ag-row").forEach(el=>{
+      const row=pending[+el.dataset.i];
+      el.querySelector(".ag-pick").addEventListener("change",e=>{ row.groupId=e.target.value||null; });
+      el.querySelector(".ag-del").onclick=()=>{ pending.splice(+el.dataset.i,1); draw(); };
+    });
+    host.querySelector("#ag_pendsel").addEventListener("change",e=>{
+      if(!e.target.value)return;
+      pending.push({expId:e.target.value,groupId:null}); draw();
+    });
+  };
+  draw();
+}
+// write the held choices onto the experiments now that the animal has an id
+function applyPendingExperiments(aid,pending){
+  pending.forEach(row=>{
+    const found=expById(row.expId); if(!found)return;
+    const st=found.exp;
+    st.links=st.links||[];
+    if(!st.links.some(l=>l.kind==="animal"&&l.id===aid)) st.links.push({kind:"animal",id:aid});
+    if(row.groupId){ st.groups=st.groups||{}; st.groups[aid]=row.groupId; }
+  });
+}
 function mountAttachments(host,link,opts){
   const aid=link.kind==="animal"?link.id:null;
   const withGroups=!!(opts&&opts.groups)&&!!aid;
@@ -5895,7 +5937,7 @@ function animalModal(id,draft){
   const seg=(fid,on)=>`<div class="seg" id="${fid}"><button data-v="1" class="${on?"on":""}">Yes</button><button data-v="0" class="${!on?"on":""}">No</button></div>`;
   modal(`<h3>${id?"Edit":"New"} animal</h3>
     <div class="drow">${F("am_name","Name",view.name)}</div>
-    ${id?`<div class="fld"><label>Experiments &amp; groups</label><div id="am_attach"></div></div>`:""}
+    <div class="fld"><label>Experiments &amp; groups</label><div id="am_attach"></div></div>
     <div class="drow">${F("am_cage","Cage",view.cage)}${F("am_sex","Sex",view.sex)}${F("am_strain","Strain",view.strain)}</div>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",view.dob)}</div>
@@ -5923,11 +5965,15 @@ function animalModal(id,draft){
     <div class="fld"><label>Surgical comments / notes</label><textarea id="am_com">${esc(view.comments||"")}</textarea></div>
     <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
 
-  // Which experiments this animal is in and which group of each. Same
-  // assignment the experiment editor writes — read back from the experiments
-  // themselves, never stored on the animal.
-  if(id&&document.getElementById("am_attach"))
-    mountAttachments(document.getElementById("am_attach"),{kind:"animal",id},{groups:true});
+  // Which experiments this animal is in and which group of each. For an existing
+  // animal this reads and writes the experiments directly — same assignment the
+  // experiment editor owns. A new one has no id to write against yet, so the
+  // choices are held here and applied the moment it is created.
+  const pendingExp=[];
+  if(document.getElementById("am_attach")){
+    if(id) mountAttachments(document.getElementById("am_attach"),{kind:"animal",id},{groups:true});
+    else   mountPendingExperiments(document.getElementById("am_attach"),pendingExp);
+  }
 
   // dates — custom wiring instead of bindDateButton so the Born button can
   // also show age in weeks (which depends on both dates, so either one
@@ -6008,7 +6054,11 @@ function animalModal(id,draft){
       comments:document.getElementById("am_com").value.trim()};
     if(id){
       Object.assign(a,rec);
-    } else DB.animals.push({id:uid("a_"),created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],...rec});
+    } else {
+      const newId=uid("a_");
+      DB.animals.push({id:newId,created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],...rec});
+      applyPendingExperiments(newId,pendingExp);
+    }
     persist(); closeModal(); render(); toast(id?"Animal updated":"Animal added");
   };
   if(id)document.getElementById("am_del").onclick=()=>{ if(confirm("Delete this animal record?")){DB.animals=DB.animals.filter(x=>x.id!==id);persist();closeModal();render();toast("Deleted");}};
