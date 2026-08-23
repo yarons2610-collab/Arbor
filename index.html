@@ -1424,6 +1424,79 @@ function spineColor(sp){ const d=dendriteOfSpine(sp); return d?taskColor(d):"#55
 // a calendar entry is either an experiment or one occurrence of a task
 function calColor(x){ return x.kind==="task"?taskColorOf(x.src):stepColor(x.src); }
 function calDone(x){ return x.kind==="task"?(x.endDate||x.deadline).slice(0,10)<todayDateStr():stepDone(x.src); }
+// A calendar entry is a view of a record, not the record — an experiment, or one
+// occurrence of a task. Moving the chip has to write to what it stands for.
+function calDayDelta(fromISO,toISO){
+  return Math.round((new Date(toISO.slice(0,10)+"T00:00:00")-new Date(fromISO.slice(0,10)+"T00:00:00"))/864e5);
+}
+// Dragging one occurrence of a repeating task moves the whole series by the same
+// amount. Per-occurrence exceptions would need somewhere to record them; moving
+// the series is at least predictable, and it is said out loud.
+function commitCalMove(x,newWhen,newEnd,newDur){
+  const src=x.src;
+  if(x.kind==="exp"){
+    if(newWhen!=null)src.deadline=newWhen;
+    if(newEnd!==undefined)src.endDate=newEnd;
+    if(newDur!=null)src.duration=newDur;
+    persist(); return true;
+  }
+  const rep=src.repeat&&src.repeat.every;
+  if(newWhen!=null){
+    if(rep){
+      // shift the anchor by however far this occurrence moved
+      const d=calDayDelta(x.deadline,newWhen);
+      const t0=newWhen.length>10?newWhen.slice(11):null;
+      src.when=(d?addDaysISO(src.when,d):src.when).slice(0,10)+(t0?"T"+t0:"");
+      if(src.endDate&&d)src.endDate=addDaysISO(src.endDate,d);
+    } else {
+      src.when=newWhen;
+      if(newEnd!==undefined)src.endDate=newEnd;
+    }
+  } else if(newEnd!==undefined&&!rep){ src.endDate=newEnd; }
+  if(newDur!=null)src.duration=newDur;
+  persist();
+  if(rep)toast("Moved the whole repeating series");
+  return true;
+}
+// Drag an all-day bar sideways to move it, keeping its length. Pointer events so
+// it works from touch; a drag of under 4px is treated as a click, or every tap
+// would count as a move of zero days.
+function makeAllDayDraggable(chip,item,cells,weekStart){
+  chip.style.cursor="grab";
+  chip.addEventListener("pointerdown",ev=>{
+    if(ev.button)return;
+    ev.preventDefault();
+    const startX=ev.clientX, startCol=cells.findIndex(c=>c.contains(chip));
+    let moved=false, targetCol=startCol;
+    chip.setPointerCapture(ev.pointerId);
+    const colAt=x=>{ for(let i=0;i<cells.length;i++){ const r=cells[i].getBoundingClientRect();
+      if(x>=r.left&&x<=r.right)return i; } return -1; };
+    const onMove=e=>{
+      if(Math.abs(e.clientX-startX)>4)moved=true;
+      if(!moved)return;
+      chip.style.opacity=".65"; chip.style.cursor="grabbing";
+      const c=colAt(e.clientX); if(c>=0)targetCol=c;
+    };
+    const onUp=()=>{
+      chip.removeEventListener("pointermove",onMove);
+      chip.removeEventListener("pointerup",onUp);
+      chip.style.opacity=""; chip.style.cursor="grab";
+      if(!moved){ openCalItem(item); return; }
+      const delta=targetCol-startCol;
+      if(!delta){ renderTimeline(); return; }
+      const nd=new Date(weekStart); nd.setDate(weekStart.getDate()+targetCol);
+      const p4=n=>String(n).padStart(2,"0");
+      const dayISO=`${nd.getFullYear()}-${p4(nd.getMonth()+1)}-${p4(nd.getDate())}`;
+      const time=item.deadline.length>10?item.deadline.slice(11):null;
+      const newWhen=dayISO+(time?"T"+time:"");
+      const newEnd=item.endDate?addDaysISO(item.endDate,calDayDelta(item.deadline,newWhen)):undefined;
+      commitCalMove(item,newWhen,newEnd);
+      renderTimeline();
+    };
+    chip.addEventListener("pointermove",onMove);
+    chip.addEventListener("pointerup",onUp);
+  });
+}
 function openCalItem(x){
   if(x.kind==="task"){ taskEditor(x.src,()=>{ renderTimeline(); }); return; }
   openStepInPlan(x.src.id);
@@ -3215,8 +3288,8 @@ function renderTimeline(){
         +(span>1?`width:calc(${span*100}% + ${(span-1)*7}px);`:"");
       chip.innerHTML=`<div class="et">${esc(t.title)}</div>`;
       chip.title=t.title+(t.endDate?` (through ${t.endDate.slice(0,10)})`:"");
-      chip.onclick=()=>openCalItem(t);
       alldayCells[first].appendChild(chip);
+      makeAllDayDraggable(chip,t,alldayCells,ws);
     }
   });
 
@@ -3501,20 +3574,17 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
       // valid cell (e.g. released outside the grid), the task is left unchanged.
       if(dropTarget){
         const newDeadline=`${dropTarget.date}T${pad4(dropTarget.hour)}:${pad4(dropTarget.minute)}`;
-        t.deadline=newDeadline;
-        if(t.endDate) t.endDate=isoAddMinutes(newDeadline,origDuration);
+        commitCalMove(t,newDeadline,t.endDate?isoAddMinutes(newDeadline,origDuration):undefined);
       }
     } else if(mode==="resize-bottom"){
       const newDur=Math.max(origDuration+snap(dy/pxPerMin),MIN_DUR);
-      t.duration=newDur;
-      if(t.endDate) t.endDate=isoAddMinutes(t.deadline,newDur);
+      commitCalMove(t,null,t.endDate?isoAddMinutes(t.deadline,newDur):undefined,newDur);
     } else if(mode==="resize-top"){
       const newDur=Math.max(origDuration-snap(dy/pxPerMin),MIN_DUR);
       const actualDelta=origDuration-newDur;
       const ns=new Date(origStart.getTime()+actualDelta*60000);
-      t.deadline=`${ns.getFullYear()}-${pad4(ns.getMonth()+1)}-${pad4(ns.getDate())}T${pad4(ns.getHours())}:${pad4(ns.getMinutes())}`;
-      t.duration=newDur;
-      if(t.endDate) t.endDate=isoAddMinutes(t.deadline,newDur);
+      const nd=`${ns.getFullYear()}-${pad4(ns.getMonth()+1)}-${pad4(ns.getDate())}T${pad4(ns.getHours())}:${pad4(ns.getMinutes())}`;
+      commitCalMove(t,nd,t.endDate?isoAddMinutes(nd,newDur):undefined,newDur);
     }
     persist(); renderTimeline();
   }
