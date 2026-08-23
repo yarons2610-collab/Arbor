@@ -224,14 +224,14 @@
   .lit-main{flex:1;min-width:0}
   .lit-title{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .lit-link{font-family:var(--mono);font-size:10px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .lit-row button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;flex:0 0 auto}
-  .lit-row button:hover{color:var(--ink)}
+  .lit-row button,.lit-row a.lit-file{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;flex:0 0 auto;text-decoration:none;line-height:1.5}
+  .lit-row button:hover,.lit-row a.lit-file:hover{color:var(--ink)}
   .lit-row .lit-del:hover{color:var(--overdue)}
   .lf-row{display:flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
   .lf-name{flex:1;min-width:0;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .lf-name.lf-none{color:var(--ink-faint);font-style:italic}
-  .lf-row button{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;flex:0 0 auto;width:auto}
-  .lf-row button:hover{color:var(--ink)}
+  .lf-row button,.lf-row a.lf-open{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;flex:0 0 auto;width:auto;text-decoration:none;line-height:1.5}
+  .lf-row button:hover,.lf-row a.lf-open:hover{color:var(--ink)}
   .lf-note{font-size:11px;color:var(--ink-faint);margin-top:5px;line-height:1.45}
   .plan-head{display:flex;align-items:center;gap:10px;margin-bottom:18px}
   .plan-head .plan-name{flex:1;min-width:0;width:auto;font-family:var(--disp);font-size:19px;font-weight:600;background:transparent;border:1px solid transparent;border-radius:8px;padding:4px 8px;color:var(--ink)}
@@ -1519,7 +1519,7 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
       chip.style.opacity=""; chip.style.cursor="grab";
       if(!moved){ openCalItem(item); return; }
       const delta=targetCol-startCol;
-      if(!delta){ renderTimeline(); return; }
+      if(!delta) return;                 // dropped where it started: nothing changed
       const nd=new Date(weekStart); nd.setDate(weekStart.getDate()+targetCol);
       const p4=n=>String(n).padStart(2,"0");
       const dayISO=`${nd.getFullYear()}-${p4(nd.getMonth()+1)}-${p4(nd.getDate())}`;
@@ -3392,7 +3392,15 @@ function renderMonthView(host){
   }
 }
 function renderTimeline(){
-  const host=document.getElementById("timeline"); host.innerHTML="";
+  const host=document.getElementById("timeline");
+  // Where the hour grid was before this redraw. Every drag ends in a full
+  // re-render, and the "scroll to 8am" below used to re-run each time — so
+  // dropping anything anywhere threw the grid away from wherever you were
+  // working. Remembered here and put back below; 8am is only for a grid that
+  // was not on screen a moment ago.
+  const prevWrap=host.querySelector(".cal-grid-wrap");
+  const keepScroll=prevWrap?prevWrap.scrollTop:null;
+  host.innerHTML="";
   if(calMode==="month") return renderMonthView(host);
   const span=calSpan(), NCOL=span.n;
   const ws=span.start;
@@ -3719,9 +3727,12 @@ function renderTimeline(){
     }
   }
 
-  // scroll to 8am on first render
-  requestAnimationFrame(()=>{ const h8=wrap.querySelector("[data-hour='8']");
-    if(h8) wrap.scrollTop=h8.offsetTop; });
+  // put the grid back where it was, or start the day at 8am if it is new
+  requestAnimationFrame(()=>{
+    if(keepScroll!=null){ wrap.scrollTop=keepScroll; return; }
+    const h8=wrap.querySelector("[data-hour='8']");
+    if(h8) wrap.scrollTop=h8.offsetTop;
+  });
 }
 
 function isoAddMinutes(iso,mins){
@@ -4593,56 +4604,114 @@ function fileHandleDel(key){
   })).catch(()=>false);
 }
 const canPickFiles=()=>typeof window.showOpenFilePicker==="function";
+// Safari has no picker that hands back a reusable handle — not on macOS and not
+// on iOS — so there the file itself is copied into IndexedDB. It opens for good
+// afterwards, offline, on that device; the cost is that it is a snapshot taken
+// when you chose it, where a handle stays live. Chrome and Edge keep the handle.
+// Either way nothing enters DB, so neither one bloats the Gist sync.
+function pickLocalFileFallback(key){
+  return new Promise(res=>{
+    const inp=document.createElement("input");
+    inp.type="file"; inp.style.display="none"; document.body.appendChild(inp);
+    let done=false;
+    const finish=v=>{ if(done)return; done=true;
+      window.removeEventListener("focus",onFocus); inp.remove(); res(v); };
+    // a cancelled file dialog fires no event anywhere, so notice the window
+    // coming back with nothing chosen and stop waiting
+    function onFocus(){ setTimeout(()=>{ if(!inp.files||!inp.files.length)finish(null); },500); }
+    inp.addEventListener("change",async()=>{
+      const f=inp.files&&inp.files[0];
+      if(!f){ finish(null); return; }
+      try{
+        await fileHandleSet(key,f);
+        if(navigator.storage&&navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+        finish(f.name);
+      }catch(err){ toast("Could not keep that file — it may be too large"); finish(null); }
+    });
+    window.addEventListener("focus",onFocus);
+    inp.click();
+  });
+}
 async function pickLocalFile(key){
-  if(!canPickFiles())return null;
+  if(!canPickFiles()) return pickLocalFileFallback(key);
   let handle;
   try{ [handle]=await window.showOpenFilePicker({multiple:false}); }
   catch(e){ return null; }                    // the picker was cancelled
   await fileHandleSet(key,handle);
   return handle.name;
 }
-// Permission has to be granted again after a browser restart, so this can put a
-// prompt on screen before anything opens.
-async function openLocalFile(key){
-  const handle=await fileHandleGet(key);
-  if(!handle){ toast("That file was linked on another device"); return false; }
+// Turn whatever is stored for a record into a File, or null when it cannot be
+// had without asking. `interactive` allows the permission prompt a handle needs
+// after a browser restart; the quiet form is used to pre-arm a real link.
+async function localFileOf(key,interactive){
+  const stored=await fileHandleGet(key);
+  if(!stored)return null;
+  if(typeof stored.getFile!=="function") return stored;      // a copied File
   try{
-    let perm=await handle.queryPermission({mode:"read"});
-    if(perm!=="granted") perm=await handle.requestPermission({mode:"read"});
-    if(perm!=="granted"){ toast("Permission denied"); return false; }
-    const f=await handle.getFile();
-    const url=URL.createObjectURL(f);
+    let perm=await stored.queryPermission({mode:"read"});
+    if(perm!=="granted"){
+      if(!interactive)return null;
+      perm=await stored.requestPermission({mode:"read"});
+    }
+    if(perm!=="granted")return null;
+    return await stored.getFile();
+  }catch(e){ return null; }
+}
+// Make `el` genuinely open the file. A blob URL is resolved up front and hung on
+// a real link, because Safari blocks a window.open() that happens after an await
+// — the click has stopped counting as a user gesture by then. Only a handle
+// still waiting on permission falls back to opening programmatically, and that
+// case only arises in Chrome, which allows it.
+const _fileURLs=new Map();
+function releaseFileURLs(){
+  _fileURLs.forEach(u=>URL.revokeObjectURL(u)); _fileURLs.clear();
+}
+function wireFileOpener(el,key){
+  el.onclick=async e=>{
+    if(el.dataset.armed==="1")return;          // the href does the work
+    e.preventDefault();
+    const f=await localFileOf(key,true);
+    if(!f){ toast("That file was linked on another device"); return; }
+    const url=URL.createObjectURL(f); _fileURLs.set(key+":x",url);
     window.open(url,"_blank","noopener");
-    setTimeout(()=>URL.revokeObjectURL(url),60000);
-    return true;
-  }catch(e){
-    toast("Could not open it — the file may have been moved or renamed");
-    return false;
-  }
+  };
+  localFileOf(key,false).then(f=>{
+    if(!f||!el.isConnected)return;
+    const url=URL.createObjectURL(f); _fileURLs.set(key,url);
+    el.setAttribute("href",url); el.setAttribute("target","_blank");
+    el.setAttribute("rel","noopener"); el.dataset.armed="1";
+  });
+}
+async function openLocalFile(key){
+  const f=await localFileOf(key,true);
+  if(!f){ toast("Could not open it — the file may have moved, or was linked on another device"); return false; }
+  const url=URL.createObjectURL(f);
+  window.open(url,"_blank","noopener");
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+  return true;
 }
 // The local-file row, shared by a paper and a protocol. `rec` must already be
 // saved, since the handle is filed under its id.
 function mountLocalFile(host,rec,onChange){
+  const live=canPickFiles();
   const draw=()=>{
-    if(!canPickFiles()&&!rec.fileName){
-      host.innerHTML=`<div class="lf-note">This browser cannot open files from disk. Chrome or Edge on a computer can; on an iPhone, put the file somewhere with a web address and use the Link field above.</div>`;
-      return;
-    }
     host.innerHTML=`<div class="lf-row">
         ${rec.fileName?`<span class="lf-name">${esc(rec.fileName)}</span>`
                       :`<span class="lf-name lf-none">nothing chosen on this device</span>`}
-        ${rec.fileName?`<button type="button" class="lf-open">Open</button>`:""}
-        ${canPickFiles()?`<button type="button" class="lf-pick">${rec.fileName?"Change\u2026":"Choose\u2026"}</button>`:""}
+        ${rec.fileName?`<a class="lf-open" role="button">Open</a>`:""}
+        <button type="button" class="lf-pick">${rec.fileName?"Change\u2026":"Choose\u2026"}</button>
         ${rec.fileName?`<button type="button" class="lf-clear" title="Forget this file">\u2715</button>`:""}
       </div>
-      <div class="lf-note">Kept as a reference, not a copy \u2014 edits to the file show up here. It lives on this computer only, so other devices will see the name but cannot open it.</div>`;
-    const pick=host.querySelector(".lf-pick");
-    if(pick)pick.onclick=async()=>{
+      <div class="lf-note">${live
+        ? "Kept as a live reference, so edits to the file show up here."
+        : "Safari cannot hold a reference to a file, so a copy is kept inside this browser \u2014 it opens offline, but choose it again if the original changes."}
+        It lives on this device only: your other devices see the name but cannot open it.</div>`;
+    host.querySelector(".lf-pick").onclick=async()=>{
       const name=await pickLocalFile(rec.id);
       if(name){ rec.fileName=name; persist(); draw(); if(onChange)onChange(); toast("File linked"); }
     };
     const open=host.querySelector(".lf-open");
-    if(open)open.onclick=()=>openLocalFile(rec.id);
+    if(open) wireFileOpener(open,rec.id);
     const clear=host.querySelector(".lf-clear");
     if(clear)clear.onclick=async()=>{
       await fileHandleDel(rec.id); rec.fileName=""; persist(); draw(); if(onChange)onChange(); };
@@ -4669,6 +4738,7 @@ const LIBS={
 function renderLib(kind,hostId){
   const cfg=LIBS[kind];
   const host=document.getElementById(hostId); if(!host)return;
+  releaseFileURLs();                     // the previous draw's blob URLs are dead
   host.innerHTML="";
   const top=document.createElement("div");
   top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px";
@@ -4690,14 +4760,14 @@ function renderLib(kind,hostId){
         <div class="lit-title">${esc(r.title||"(untitled)")}</div>
         ${sub?`<div class="lit-link">${esc(sub)}</div>`:""}
       </div>
-      ${r.fileName?`<button class="lit-file" title="Open the file on this computer">📄</button>`:""}
+      ${r.fileName?`<a class="lit-file" role="button" title="Open the file on this computer">📄</a>`:""}
       ${r.link?`<button class="lit-open" title="Open the link">↗</button>`:""}
       <button class="lit-edit" title="Edit">✎</button>
       <button class="lit-del" title="Delete">✕</button>`;
     const open=row.querySelector(".lit-open");
     if(open)open.onclick=()=>window.open(/^https?:\/\//i.test(r.link)?r.link:"https://"+r.link,"_blank","noopener");
     const file=row.querySelector(".lit-file");
-    if(file)file.onclick=()=>openLocalFile(r.id);
+    if(file)wireFileOpener(file,r.id);
     row.querySelector(".lit-edit").onclick=()=>libModal(kind,r.id);
     row.querySelector(".lit-del").onclick=()=>{
       if(!confirm(`Delete "${r.title||"this "+cfg.noun}"?`))return;
