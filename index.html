@@ -2658,6 +2658,41 @@ function mountPendingExperiments(host,pending){
   };
   draw();
 }
+// The same holding pattern, for a protocol or paper being created: until it is
+// saved there is nothing for an experiment to point at, so the choices are kept
+// here and written the moment it has an id. No groups — only an animal sits in
+// one of those.
+function mountPendingLinks(host,pending){
+  const draw=()=>{
+    const all=DB.projects.flatMap(pr=>experimentsOf(pr).map(e=>({pr,e})));
+    if(!all.length){ host.innerHTML=`<div class="pc-empty">No experiments yet.</div>`; return; }
+    host.innerHTML=`${pending.map((expId,i)=>{
+        const found=all.find(x=>x.e.id===expId); if(!found)return "";
+        return `<div class="ag-row" data-i="${i}">
+          <span class="ag-where">${esc(found.pr.name||"(unnamed project)")} <span class="ag-sep">›</span> ${esc(found.e.title||"(unnamed experiment)")}</span>
+          <button class="ag-del" title="Remove">✕</button>
+        </div>`;
+      }).join("")||`<div class="pc-empty">Not in any experiment yet.</div>`}
+      <div class="ag-add">
+        <select id="ag_pendlink"><option value="">＋ add to an experiment…</option>${
+          all.filter(x=>!pending.includes(x.e.id))
+             .map(x=>`<option value="${x.e.id}">${esc(x.pr.name||"(unnamed)")} › ${esc(x.e.title||"(unnamed experiment)")}</option>`).join("")}</select>
+      </div>`;
+    host.querySelectorAll(".ag-row").forEach(el=>{
+      el.querySelector(".ag-del").onclick=()=>{ pending.splice(+el.dataset.i,1); draw(); };
+    });
+    host.querySelector("#ag_pendlink").addEventListener("change",e=>{
+      if(!e.target.value)return; pending.push(e.target.value); draw(); });
+  };
+  draw();
+}
+function applyPendingLinks(link,pending){
+  pending.forEach(expId=>{
+    const found=expById(expId); if(!found)return;
+    const st=found.exp;
+    if(!(st.links||[]).some(l=>sameLink(l,link))) (st.links=st.links||[]).push({...link});
+  });
+}
 // write the held choices onto the experiments now that the animal has an id
 function applyPendingExperiments(aid,pending){
   pending.forEach(row=>{
@@ -4604,6 +4639,18 @@ function fileHandleDel(key){
   })).catch(()=>false);
 }
 const canPickFiles=()=>typeof window.showOpenFilePicker==="function";
+// A file chosen for a record that was then cancelled leaves its handle behind
+// under an id nothing refers to. Swept at startup rather than tracked; skipped
+// when there are no records at all, so an empty or not-yet-loaded workspace can
+// never be read as "everything here is an orphan".
+function pruneOrphanFiles(){
+  const live=new Set([...(DB.readings||[]),...(DB.protocols||[])].map(x=>x.id));
+  if(!live.size)return;
+  fileDB().then(db=>{
+    const rq=db.transaction(FILE_STORE,"readonly").objectStore(FILE_STORE).getAllKeys();
+    rq.onsuccess=()=>{ (rq.result||[]).forEach(k=>{ if(!live.has(k)) fileHandleDel(k); }); };
+  }).catch(()=>{});
+}
 // Safari has no picker that hands back a reusable handle — not on macOS and not
 // on iOS — so there the file itself is copied into IndexedDB. It opens for good
 // afterwards, offline, on that device; the cost is that it is a snapshot taken
@@ -4781,23 +4828,28 @@ function renderLib(kind,hostId){
 function libModal(kind,id){
   const cfg=LIBS[kind];
   const r=id?cfg.list().find(x=>x.id===id):null;
+  // A new record is given its id straight away, so the file picker has something
+  // to file the handle under and the experiment list has something to name. It
+  // does not join the library until Save, and a handle left behind by a cancelled
+  // add is swept by pruneOrphanFiles() at the next start.
+  const rec=r||{id:uid(cfg.prefix),title:"",link:"",fileName:"",added:Date.now()};
+  const pending=[];
   modal(`<h3>${r?esc(cfg.Noun):"New "+esc(cfg.noun)}</h3>
-    <div class="fld"><label>Title</label><input id="r_title" value="${escAttr(r?r.title:"")}" autofocus></div>
-    <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(r?(r.link||""):"")}"></div>
-    ${r?`<div class="fld"><label>File on this computer</label><div id="r_file"></div></div>`:""}
-    ${r?`<div class="fld"><label>Experiments</label><div id="r_attach"></div></div>`:""}
+    <div class="fld"><label>Title</label><input id="r_title" value="${escAttr(rec.title||"")}" autofocus></div>
+    <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(rec.link||"")}"></div>
+    <div class="fld"><label>File on this computer</label><div id="r_file"></div></div>
+    <div class="fld"><label>Experiments</label><div id="r_attach"></div></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="r_save">Save</button></div>`);
-  if(r){
-    mountLocalFile(document.getElementById("r_file"),r);
-    mountAttachments(document.getElementById("r_attach"),{kind,id:r.id});
-  }
+  mountLocalFile(document.getElementById("r_file"),rec);
+  if(r) mountAttachments(document.getElementById("r_attach"),{kind,id:rec.id});
+  else  mountPendingLinks(document.getElementById("r_attach"),pending);
   document.getElementById("r_save").onclick=()=>{
     const title=document.getElementById("r_title").value.trim();
     if(!title){ toast("Title can't be empty"); return; }
-    const link=document.getElementById("r_link").value.trim();
-    if(r){ r.title=title; r.link=link; }
-    else cfg.list().push({id:uid(cfg.prefix),title,link,fileName:"",added:Date.now()});
+    rec.title=title;
+    rec.link=document.getElementById("r_link").value.trim();
+    if(!r){ cfg.list().push(rec); applyPendingLinks({kind,id:rec.id},pending); }
     persist(); closeModal();
     if(currentView==="materials")renderMaterials();
     else if(kind==="reading")renderReading();
@@ -7187,7 +7239,7 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
   try{
     const src=await loadDB();   // "gist" | "local" | "none"
     if(src==="none") seed();
-    migrate(); render();
+    migrate(); render(); pruneOrphanFiles();
     // Save locally always (captures any seed/migration changes) — but NEVER push
     // to the Gist automatically on boot. Boot used to always call doWrite(), which
     // pushes to the Gist whenever a token exists, regardless of whether the load
