@@ -270,8 +270,9 @@
   .exp-card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;margin-bottom:8px}
   .exp-card.done{opacity:.72}
   .exp-top{display:flex;align-items:center;gap:8px}
-  .exp-caret{border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:10px;padding:0 2px;flex:0 0 auto}
-  .exp-caret:disabled{opacity:.35;cursor:default}
+  .exp-caret{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);cursor:pointer;
+    font-family:var(--mono);font-size:9.5px;padding:2px 8px;border-radius:6px;flex:0 0 auto}
+  .exp-caret:hover{color:var(--ink)}
   .exp-name{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
   .exp-name:hover{color:var(--ink)}
   .exp-tick{color:var(--gcamp);font-size:11px;flex:0 0 auto}
@@ -2131,10 +2132,12 @@ function linkFromValue(kind,v){
   if(kind==="material"){ const i=v.indexOf("::"); return {kind:"material",cat:v.slice(0,i),id:v.slice(i+2)}; }
   return {kind,id:v};
 }
-function mountLinkEditor(host,owner,onChange){
+function mountLinkEditor(host,owner,onChange,opts){
+  const kinds=LINK_GROUPS.filter(g=>
+    (!opts||!opts.only||opts.only.includes(g.kind))&&(!opts||!opts.exclude||!opts.exclude.includes(g.kind)));
   const draw=()=>{
     owner.links=owner.links||[];
-    host.innerHTML=LINK_GROUPS.map(g=>{
+    host.innerHTML=kinds.map(g=>{
       const mine=owner.links.map((l,i)=>({l,i})).filter(x=>x.l.kind===g.kind);
       const opts=linkOptions(g.kind);
       const flat=g.kind==="material"
@@ -2242,6 +2245,39 @@ function taskEditor(t,after){
     if(!confirm(`Delete the task "${t.title||"(unnamed)"}"?`))return;
     deleteTask(t.id); closeModal(); if(after)after(); };
 }
+// Which animals this experiment uses, and which group each is in. Its own
+// window because the assignment list grows with the cohort and was making the
+// experiment editor scroll for a page.
+function animalsModal(pr,st,after){
+  modal(`<h3>Animals &amp; assignment</h3>
+    <div class="fld"><label>Animals in this experiment</label><div id="an_links"></div></div>
+    <div class="fld"><label>Assignment</label><div id="an_groups"></div></div>
+    <div class="actions"><button class="btn accent" id="an_done">Done</button></div>`,{wide:true});
+
+  const draw=()=>{
+    const box=document.getElementById("an_groups");
+    const list=animalsForStep(pr,st);
+    if(!list.length){ box.innerHTML=`<div class="pc-empty">Add animals above to assign them.</div>`; return; }
+    if(!(st.groupDefs||[]).length){ box.innerHTML=`<div class="pc-empty">This experiment has no groups yet — add one in the experiment first.</div>`; return; }
+    st.groups=st.groups||{};
+    const row=a=>`<div class="grp-row" data-a="${a.id}">
+      <span class="grp-name">${esc(a.name)}</span>
+      <select class="grp-pick"><option value="">—</option>${st.groupDefs.map(g=>
+        `<option value="${g.id}" ${st.groups[a.id]===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>
+    </div>`;
+    // clustered by group, each arm its own block
+    const clusters=[...st.groupDefs.map(g=>({items:list.filter(a=>st.groups[a.id]===g.id)})),
+                    {items:list.filter(a=>!st.groups[a.id])}];
+    box.innerHTML=clusters.filter(c=>c.items.length)
+      .map(c=>`<div class="grp-cluster">${c.items.map(row).join("")}</div>`).join("");
+    box.querySelectorAll(".grp-row").forEach(r=>r.querySelector(".grp-pick").addEventListener("change",e=>{
+      if(e.target.value)st.groups[r.dataset.a]=e.target.value; else delete st.groups[r.dataset.a];
+      persist(); draw(); }));
+  };
+  mountLinkEditor(document.getElementById("an_links"),st,draw,{only:["animal"]});
+  draw();
+  document.getElementById("an_done").onclick=()=>{ closeModal(); experimentModal(pr,st,after); };
+}
 function experimentModal(pr,st,after){
   const animals=()=>animalsForStep(pr,st);
   modal(`<h3>Experiment</h3>
@@ -2300,9 +2336,17 @@ function experimentModal(pr,st,after){
         removeGroup(st,g.id); drawGroupDefs(); drawGroups(); };
     });
   }
+  // The per-animal assignment is the longest thing in this editor and the least
+  // often changed, so it moves behind a button — the group DEFINITIONS stay
+  // here, since they are the experiment's design.
   function drawGroups(){
     const box=document.getElementById("sm_groups");
     const list=animals();
+    const tally=stepGroupTally(pr,st);
+    box.innerHTML=`<button class="btn ghost" id="sm_openanimals">🐁 Animals &amp; assignment</button>
+      <span class="gp-lab" style="margin-left:10px">${list.length} animal${list.length!==1?"s":""}${(st.groupDefs||[]).length?" · "+esc(tally.text):""}</span>`;
+    box.querySelector("#sm_openanimals").onclick=()=>{ save(); animalsModal(pr,st,after); };
+    return;
     if(!list.length){
       box.innerHTML=`<div class="pc-empty">Add animals below, or to the project, to assign them to a group.</div>`;
       return; }
@@ -2329,7 +2373,7 @@ function experimentModal(pr,st,after){
   drawGroupDefs(); drawGroups();
   document.getElementById("sm_addgroup").onclick=()=>{ addGroup(st,""); drawGroupDefs(); drawGroups(); };
 
-  mountLinkEditor(document.getElementById("sm_links"),st,()=>{ drawGroupDefs(); drawGroups(); });
+  mountLinkEditor(document.getElementById("sm_links"),st,()=>{ drawGroupDefs(); drawGroups(); },{exclude:["animal"]});
   document.getElementById("sm_del").onclick=()=>{
     if(!confirm(`Delete "${st.title||"this experiment"}"?${stepsUnder(pr,st.id).length?"\n\nIts nested experiments go too.":""}`))return;
     deleteStep(pr,st.id); closeModal(); if(after)after(); };
@@ -2484,7 +2528,6 @@ function renderProjectPlan(id){
       const nLinks=(st.links||[]).length;
       return `<div class="exp-card${stepDone(st)?" done":""}" data-id="${st.id}">
         <div class="exp-top">
-          <button class="exp-caret" ${kids.length?"":"disabled"}>${kids.length?(open?"▾":"▸"):"·"}</button>
           <span class="exp-name">${esc(st.title||"(unnamed experiment)")}</span>
           ${stepDone(st)?`<span class="exp-tick" title="has a result">✓</span>`:""}
           <button class="exp-open">Open</button>
@@ -2495,7 +2538,7 @@ function renderProjectPlan(id){
           ${st.deadline?`<span class="em-date">${esc(stepSpan(st))}</span>`:""}
           ${(st.groupDefs||[]).length?`<span class="em-arms ${grp.ok?"ok":""}">${esc(grp.text)}</span>`:""}
           ${nLinks?`<span>${nLinks} linked</span>`:""}
-          ${kids.length?`<span>${kids.length} task${kids.length!==1?"s":""}</span>`:""}
+          ${kids.length?`<button class="exp-caret">${open?"▾":"▸"} ${kids.length} task${kids.length!==1?"s":""}</button>`:""}
         </div>
         ${open&&kids.length?`<div class="step-list">${kids.map(stepRow).join("")}</div>`:""}
       </div>`;
@@ -4306,7 +4349,14 @@ function daysSurg(a){ const sd=surgeryDate(a); if(!sd)return null; const end=a.s
 function diaryTypeDefs(){ return [...(DB.config.diaryTypes||[])].sort((a,b)=>(a.label||"").localeCompare(b.label||"")); }
 function diaryTypeDef(key){ return diaryTypeDefs().find(t=>t.key===key) || {key,label:key||"—",icon:"❔",color:"var(--ink-faint)",timeline:false,fields:[]}; }
 function diaryWeightEntries(a){ return (a.diary||[]).filter(e=>e.type==="weight").sort((x,y)=>x.date.localeCompare(y.date)||x.created-y.created); }
-function latestWeight(a){ const w=diaryWeightEntries(a); return w.length?w[w.length-1].data.grams:null; }
+// The newest entry that actually carries a value. Reading the last one blindly
+// meant a single weight entry saved without grams — which is what happened
+// while the Weight entry type was missing — hid every real weight before it.
+function latestWeight(a){
+  const w=diaryWeightEntries(a);
+  for(let i=w.length-1;i>=0;i--){ const g=w[i].data&&w[i].data.grams; if(g!=null&&g!=="")return g; }
+  return null;
+}
 // %/absolute change for one weight entry vs. the recording right before it
 // and vs. this animal's very first recording — null fields when there's
 // nothing to compare against (first-ever entry, or a previous weight of 0).
