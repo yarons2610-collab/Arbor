@@ -2714,20 +2714,29 @@ function mountPendingExperiments(host,pending){
 // here and written the moment it has an id. No groups — only an animal sits in
 // one of those.
 function mountPendingLinks(host,pending){
+  // Same "p:"/"e:" split as mountAttachments, kept in the modal until there is
+  // something for a project or experiment to point at.
   const draw=()=>{
-    const all=DB.projects.flatMap(pr=>experimentsOf(pr).map(e=>({pr,e})));
-    if(!all.length){ host.innerHTML=`<div class="pc-empty">No experiments yet.</div>`; return; }
-    host.innerHTML=`${pending.map((expId,i)=>{
-        const found=all.find(x=>x.e.id===expId); if(!found)return "";
+    if(!DB.projects.length){ host.innerHTML=`<div class="pc-empty">No projects yet.</div>`; return; }
+    const rowLabel=v=>{
+      if(v.startsWith("p:")){ const pr=projById(v.slice(2)); return pr?`${esc(pr.name||"(unnamed project)")} <span class="ag-sep">›</span> <em>the project in general</em>`:null; }
+      const found=expById(v.slice(2)); return found?`${esc(found.pr.name||"(unnamed)")} <span class="ag-sep">›</span> ${esc(found.exp.title||"(unnamed experiment)")}`:null;
+    };
+    host.innerHTML=`${pending.map((v,i)=>{
+        const label=rowLabel(v); if(!label)return "";
         return `<div class="ag-row" data-i="${i}">
-          <span class="ag-where">${esc(found.pr.name||"(unnamed project)")} <span class="ag-sep">›</span> ${esc(found.e.title||"(unnamed experiment)")}</span>
+          <span class="ag-where">${label}</span>
           <button class="ag-del" title="Remove">✕</button>
         </div>`;
-      }).join("")||`<div class="pc-empty">Not in any experiment yet.</div>`}
+      }).join("")||`<div class="pc-empty">Not linked to any project yet.</div>`}
       <div class="ag-add">
-        <select id="ag_pendlink"><option value="">＋ add to an experiment…</option>${
-          all.filter(x=>!pending.includes(x.e.id))
-             .map(x=>`<option value="${x.e.id}">${esc(x.pr.name||"(unnamed)")} › ${esc(x.e.title||"(unnamed experiment)")}</option>`).join("")}</select>
+        <select id="ag_pendlink"><option value="">＋ add to a project or experiment…</option>${
+          DB.projects.map(pr=>{
+            const own=pending.includes("p:"+pr.id) ? "" : `<option value="p:${pr.id}">the project in general</option>`;
+            const exps=experimentsOf(pr).filter(e=>!pending.includes("e:"+e.id))
+              .map(e=>`<option value="e:${e.id}">${esc(e.title||"(unnamed experiment)")}</option>`).join("");
+            return (own||exps) ? `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">${own}${exps}</optgroup>` : "";
+          }).join("")}</select>
       </div>`;
     host.querySelectorAll(".ag-row").forEach(el=>{
       el.querySelector(".ag-del").onclick=()=>{ pending.splice(+el.dataset.i,1); draw(); };
@@ -2738,10 +2747,15 @@ function mountPendingLinks(host,pending){
   draw();
 }
 function applyPendingLinks(link,pending){
-  pending.forEach(expId=>{
-    const found=expById(expId); if(!found)return;
-    const st=found.exp;
-    if(!(st.links||[]).some(l=>sameLink(l,link))) (st.links=st.links||[]).push({...link});
+  pending.forEach(v=>{
+    if(v.startsWith("p:")){
+      const pr=projById(v.slice(2)); if(!pr)return;
+      if(!(pr.links||[]).some(l=>sameLink(l,link))) (pr.links=pr.links||[]).push({...link});
+    } else {
+      const found=expById(v.slice(2)); if(!found)return;
+      const st=found.exp;
+      if(!(st.links||[]).some(l=>sameLink(l,link))) (st.links=st.links||[]).push({...link});
+    }
   });
 }
 // write the held choices onto the experiments now that the animal has an id
@@ -2757,23 +2771,36 @@ function applyPendingExperiments(aid,pending){
 function mountAttachments(host,link,opts){
   const aid=link.kind==="animal"?link.id:null;
   const withGroups=!!(opts&&opts.groups)&&!!aid;
+  // A row is either an experiment the record is on, or the project itself —
+  // "the project in general", for something that is the project's without
+  // being any one experiment's. The two used to be conflated: a project-level
+  // link showed as a ghost row under every one of that project's experiments,
+  // and its ✕ filtered st.links, which the link was never in, so it could
+  // never actually be removed.
   const draw=()=>{
     const rows=[];
-    DB.projects.forEach(pr=>(pr.steps||[]).forEach(st=>{
-      const onStep=(st.links||[]).some(l=>sameLink(l,link))||(withGroups&&!!(st.groups||{})[aid]);
-      const onProj=(pr.links||[]).some(l=>sameLink(l,link));
-      if(onStep||onProj)rows.push({pr,st});
-    }));
+    DB.projects.forEach(pr=>{
+      if((pr.links||[]).some(l=>sameLink(l,link))) rows.push({pr,st:null});
+      (pr.steps||[]).forEach(st=>{
+        const onStep=(st.links||[]).some(l=>sameLink(l,link))||(withGroups&&!!(st.groups||{})[aid]);
+        if(onStep) rows.push({pr,st});
+      });
+    });
     host.innerHTML=`${rows.length?rows.map((r,i)=>`<div class="ag-row" data-i="${i}">
-        <span class="ag-where">${esc(r.pr.name||"(unnamed project)")} <span class="ag-sep">\u203a</span> ${esc(r.st.title||"(unnamed experiment)")}</span>
-        ${withGroups?`<select class="ag-pick"><option value="">\u2014</option>${(r.st.groupDefs||[]).map(g=>
+        <span class="ag-where">${esc(r.pr.name||"(unnamed project)")} <span class="ag-sep">›</span> ${
+          r.st?esc(r.st.title||"(unnamed experiment)"):`<em>the project in general</em>`}</span>
+        ${(withGroups&&r.st)?`<select class="ag-pick"><option value="">—</option>${(r.st.groupDefs||[]).map(g=>
           `<option value="${g.id}" ${(r.st.groups||{})[aid]===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>`:""}
-        <button class="ag-del" title="Remove from this experiment">\u2715</button>
-      </div>`).join(""):`<div class="pc-empty">Not in any experiment yet.</div>`}
+        <button class="ag-del" title="${r.st?"Remove from this experiment":"Remove from the project"}">✕</button>
+      </div>`).join(""):`<div class="pc-empty">Not linked to any project yet.</div>`}
       <div class="ag-add">
-        <select id="ag_sel"><option value="">\uff0b add to an experiment\u2026</option>${
-          DB.projects.flatMap(pr=>(pr.steps||[]).map(st=>
-            `<option value="${pr.id}::${st.id}">${esc(pr.name||"(unnamed)")} \u203a ${esc(st.title||"(unnamed experiment)")}</option>`)).join("")}</select>
+        <select id="ag_sel"><option value="">＋ add to a project or experiment…</option>${
+          DB.projects.map(pr=>{
+            const own=(pr.links||[]).some(l=>sameLink(l,link)) ? "" : `<option value="p:${pr.id}">the project in general</option>`;
+            const exps=experimentsOf(pr).filter(st=>!(st.links||[]).some(l=>sameLink(l,link)))
+              .map(st=>`<option value="e:${pr.id}::${st.id}">${esc(st.title||"(unnamed experiment)")}</option>`).join("");
+            return (own||exps) ? `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">${own}${exps}</optgroup>` : "";
+          }).join("")}</select>
       </div>`;
     host.querySelectorAll(".ag-row").forEach(el=>{
       const r=rows[+el.dataset.i];
@@ -2786,15 +2813,24 @@ function mountAttachments(host,link,opts){
           (r.st.links=r.st.links||[]).push({...link});
         persist(); draw(); });
       el.querySelector(".ag-del").onclick=()=>{
-        r.st.links=(r.st.links||[]).filter(l=>!sameLink(l,link));
-        if(aid&&r.st.groups)delete r.st.groups[aid];
+        if(r.st){
+          r.st.links=(r.st.links||[]).filter(l=>!sameLink(l,link));
+          if(aid&&r.st.groups)delete r.st.groups[aid];
+        } else {
+          r.pr.links=(r.pr.links||[]).filter(l=>!sameLink(l,link));
+        }
         persist(); draw(); };
     });
     host.querySelector("#ag_sel").addEventListener("change",e=>{
-      if(!e.target.value)return;
-      const [pid,sid]=e.target.value.split("::");
-      const pr=projById(pid), st=pr&&(pr.steps||[]).find(x=>x.id===sid); if(!st)return;
-      if(!(st.links||[]).some(l=>sameLink(l,link)))(st.links=st.links||[]).push({...link});
+      const v=e.target.value; if(!v)return;
+      if(v.startsWith("p:")){
+        const pr=projById(v.slice(2)); if(!pr)return;
+        if(!(pr.links||[]).some(l=>sameLink(l,link)))(pr.links=pr.links||[]).push({...link});
+      } else {
+        const [pid,sid]=v.slice(2).split("::");
+        const pr=projById(pid), st=pr&&(pr.steps||[]).find(x=>x.id===sid); if(!st)return;
+        if(!(st.links||[]).some(l=>sameLink(l,link)))(st.links=st.links||[]).push({...link});
+      }
       persist(); draw(); });
   };
   draw();
@@ -4937,7 +4973,7 @@ function libModal(kind,id){
     <div class="fld"><label>Title</label><input id="r_title" value="${escAttr(rec.title||"")}" autofocus></div>
     <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(rec.link||"")}"></div>
     <div class="fld"><label>File on this computer</label><div id="r_file"></div></div>
-    <div class="fld"><label>Experiments</label><div id="r_attach"></div></div>
+    <div class="fld"><label>Projects &amp; experiments</label><div id="r_attach"></div></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="r_save">Save</button></div>`);
   mountLocalFile(document.getElementById("r_file"),rec);
@@ -6439,7 +6475,7 @@ function animalModal(id,draft){
   const seg=(fid,on)=>`<div class="seg" id="${fid}"><button data-v="1" class="${on?"on":""}">Yes</button><button data-v="0" class="${!on?"on":""}">No</button></div>`;
   modal(`<h3>${id?"Edit":"New"} animal</h3>
     <div class="drow">${F("am_name","Name",view.name)}</div>
-    <div class="fld"><label>Experiments &amp; groups</label><div id="am_attach"></div></div>
+    <div class="fld"><label>Projects, experiments &amp; groups</label><div id="am_attach"></div></div>
     <div class="drow">${F("am_cage","Cage",view.cage)}${F("am_sex","Sex",view.sex)}${F("am_strain","Strain",view.strain)}</div>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",view.dob)}</div>
