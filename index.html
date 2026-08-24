@@ -153,6 +153,11 @@
   .dg-entry .dg-erow{display:flex;align-items:center;gap:6px}
   .dg-entry .dg-esum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-dim)}
   .dg-entry button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:1px 7px;font-size:11px;cursor:pointer;flex:0 0 auto}
+  .dg-entry.done{opacity:.6}
+  /* .dg-entry button above would otherwise win on specificity and square off
+     what needs to stay a circle */
+  .dg-entry .step-dot{width:15px;height:15px;border-radius:50%;padding:0;border:1.5px solid var(--line2);background:transparent}
+  .dg-entry .step-dot.on{background:var(--gcamp);border-color:var(--gcamp)}
   .dg-detail{margin-top:6px;padding-top:6px;border-top:1px dashed var(--line2)}
   .dg-form input,.dg-form select,.dg-form textarea{background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:5px 8px;font-size:12px;width:100%;box-sizing:border-box}
   .dg-form textarea{min-height:44px;resize:vertical;font-family:inherit}
@@ -292,9 +297,14 @@
   .step-list{margin-top:8px;border-top:1px solid var(--line);padding-top:6px}
   .step-line{display:flex;align-items:center;gap:9px;padding:5px 6px;border-radius:6px;cursor:pointer}
   .step-line:hover{background:rgba(255,255,255,.05)}
-  .step-dot{width:12px;flex:0 0 auto;font-size:10px;color:var(--ink-faint);text-align:center}
+  .step-dot{width:15px;height:15px;flex:0 0 auto;font-size:9px;color:var(--ink-faint);text-align:center;
+    line-height:1;border:1.5px solid var(--line2);border-radius:50%;background:transparent;
+    padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+  .step-dot:hover{border-color:var(--gcamp)}
   .step-line.done{opacity:.6}
-  .step-line.done .step-dot{color:var(--gcamp)}
+  .step-line.done .step-dot{color:#08240f;background:var(--gcamp);border-color:var(--gcamp)}
+  /* the same toggle, standalone — for the Upcoming & due list, which isn't a .step-line row */
+  .step-dot.on{color:#08240f;background:var(--gcamp);border-color:var(--gcamp)}
   .step-title{flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .step-date{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);flex:0 0 auto}
   .step-date.unset{color:var(--ink-faint)}
@@ -412,6 +422,9 @@
   .cal-evt{border-radius:5px;padding:2px 5px;font-size:11px;line-height:1.3;cursor:pointer;overflow:hidden;position:relative;transition:.1s}
   .cal-evt:hover{filter:brightness(1.18)}
   .cal-evt .et{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cal-evt-ck{display:inline-block;vertical-align:-1px;width:9px;height:9px;border-radius:50%;
+    border:1.3px solid currentColor;background:transparent;margin-right:4px;padding:0;cursor:pointer}
+  .cal-evt-ck.on{background:currentColor}
   .cal-evt .es{font-family:var(--mono);font-size:9px;opacity:.8}
   .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:none}
   .cal-evt-timed:hover{filter:brightness(1.18)}
@@ -1312,6 +1325,7 @@ function migrate(){                       // backfill fields added in later vers
   DB.schedule.forEach(t=>{
     if(!Array.isArray(t.links))t.links=[];
     if(t.repeat===undefined)t.repeat=null;
+    if(!Array.isArray(t.doneOccurrences))t.doneOccurrences=[];
     // an experiment that has since been deleted leaves the task in its project
     if(t.experimentId&&!expById(t.experimentId)) t.experimentId=null;
     // a project that has since been deleted leaves it unassigned
@@ -1473,7 +1487,20 @@ function spineColor(sp){ const d=dendriteOfSpine(sp); return d?taskColor(d):"#55
 // a step on the calendar opens the plan it belongs to
 // a calendar entry is either an experiment or one occurrence of a task
 function calColor(x){ return x.kind==="task"?taskColorOf(x.src):stepColor(x.src); }
-function calDone(x){ return x.kind==="task"?(x.endDate||x.deadline).slice(0,10)<todayDateStr():stepDone(x.src); }
+// A repeating task has many occurrences sharing one record, so "done" cannot
+// live as a single flag on the task — it is a set of the occurrences (by their
+// own when-string) that have actually been checked off. A non-repeating task
+// just ends up with a set of zero or one. Time passing puts nothing in this
+// set by itself; only the checkmark does.
+function occDone(t,when){ return !!when && (t.doneOccurrences||[]).includes(when); }
+function setOccDone(t,when,val){
+  if(!t||!when)return;
+  const set=new Set(t.doneOccurrences||[]);
+  if(val)set.add(when); else set.delete(when);
+  t.doneOccurrences=[...set];
+  persist();
+}
+function calDone(x){ return x.kind==="task"?occDone(x.src,x.deadline):stepDone(x.src); }
 // A calendar entry is a view of a record, not the record — an experiment, or one
 // occurrence of a task. Moving the chip has to write to what it stands for.
 function calDayDelta(fromISO,toISO){
@@ -1914,25 +1941,32 @@ const DEFAULT_ENTRY_TIME="08:00";
 const NOTIFY_TASK_LOOKAHEAD_DAYS=3, NOTIFY_DIARY_LOOKAHEAD_DAYS=7;
 function addDays(dateStr,n){ const d=new Date(dateStr+"T00:00:00"); d.setDate(d.getDate()+n);
   const pad=x=>String(x).padStart(2,"0"); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
+// A task used to fall out of this list the instant its date passed, whether
+// or not it actually happened — the clock was standing in for a confirmation
+// nobody had given. It now stays here, genuinely overdue, until its checkmark
+// is clicked; the lookback is bounded (30 days for tasks, the same window
+// diary already used for looking ahead) so a long-neglected daily item does
+// not resurrect its entire history, just what is still recent enough to act on.
 function upcomingNotifications(){
   const today=todayDateStr();
   const taskHorizon=addDays(today,NOTIFY_TASK_LOOKAHEAD_DAYS);
+  const taskLookback=addDays(today,-30);
   const tasks=[
     ...allSteps().filter(x=>x.deadline&&!stepDone(x)&&x.deadline.slice(0,10)<=taskHorizon&&projById(x.projectId))
-      .map(x=>({t:{id:x.id,title:x.title,deadline:x.deadline,endDate:x.endDate,projectId:x.projectId},
+      .map(x=>({kind:"exp",t:{id:x.id,title:x.title,deadline:x.deadline,endDate:x.endDate,projectId:x.projectId},
                 overdue:dueClass(x.deadline,"",x.endDate)==="overdue"})),
-    ...taskList().flatMap(t=>taskOccurrences(t,addDays(today,-30),taskHorizon)
-      .filter(o=>!((o.endDate||o.when).slice(0,10)<today))
-      .slice(0,1)
-      .map(o=>({t:{id:t.id,title:t.title,deadline:o.when,endDate:o.endDate,projectId:t.projectId},
+    ...taskList().flatMap(t=>taskOccurrences(t,taskLookback,taskHorizon)
+      .filter(o=>!occDone(t,o.when))
+      .map(o=>({kind:"task",t:{id:t.id,title:t.title,deadline:o.when,endDate:o.endDate,projectId:t.projectId},
                 overdue:dueClass(o.when,"",o.endDate)==="overdue"})))
   ].sort((x,y)=>x.t.deadline.localeCompare(y.t.deadline));
+  const diaryLookback=addDays(today,-NOTIFY_DIARY_LOOKAHEAD_DAYS);
   const diaryHorizon=addDays(today,NOTIFY_DIARY_LOOKAHEAD_DAYS);
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(d=>d.timeline).map(d=>d.key));
   const diaryItems=[];
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(!timelineTypeKeys.has(e.type))return;
-    if(e.date>=today&&e.date<=diaryHorizon) diaryItems.push({a,e});
+    if(!timelineTypeKeys.has(e.type)||e.done)return;
+    if(e.date>=diaryLookback&&e.date<=diaryHorizon) diaryItems.push({a,e});
   }));
   diaryItems.sort((x,y)=>x.e.date.localeCompare(y.e.date));
   return {tasks,diaryItems};
@@ -1947,28 +1981,53 @@ function updateNotifyNudge(){
   btn.title=n>0?`${n} upcoming/due item${n!==1?"s":""}`:"Nothing due";
 }
 function openNotificationsModal(){
-  const {tasks,diaryItems}=upcomingNotifications();
-  const today=todayDateStr();
-  const taskRows=tasks.map(({t,overdue})=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
-    <span style="width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:${overdue?"var(--overdue)":"var(--amber)"}"></span>
-    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title||"(unnamed step)")} <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)">${esc((projById(t.projectId)||{}).name||"")}</span></span>
-    <span style="font-family:var(--mono);font-size:10.5px;color:${overdue?"var(--overdue)":"var(--ink-faint)"};flex:0 0 auto">${overdue?"overdue · ":""}${fmtWhenFull(t.deadline)}</span>
-    <button class="ntf-opentask" data-id="${t.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
-  </div>`).join("");
-  const diaryRows=diaryItems.map(({a,e})=>{ const def=diaryTypeDef(e.type);
-    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
-    <span style="flex:0 0 auto">${def.icon}</span>
-    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)} — ${esc(def.label)}</span>
-    <span style="font-family:var(--mono);font-size:10.5px;color:${e.date===today?"var(--amber)":"var(--ink-faint)"};flex:0 0 auto">${e.date===today?"today":e.date}${e.time?" "+e.time:""}</span>
-    <button class="ntf-openanimal" data-name="${escAttr(a.name)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
-  </div>`; }).join("");
-  modal(`<h3>Upcoming &amp; due</h3>
-    <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px">Steps (overdue, or due within ${NOTIFY_TASK_LOOKAHEAD_DAYS} days)</div>
-    ${taskRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
-    <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:14px 0 6px">Animal diary — scheduled within ${NOTIFY_DIARY_LOOKAHEAD_DAYS} days</div>
-    ${diaryRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
-    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+  // A checkmark click needs the list to refresh without reopening the modal —
+  // modal() only replaces #modal's innerHTML, so calling it again on every
+  // checkmark would stack a fresh, un-removed click listener on the same node
+  // each time, and a session of checking off several items would eventually
+  // fire "open" more than once per click. One listener, attached once; draw()
+  // only ever touches the content.
+  const draw=()=>{
+    const {tasks,diaryItems}=upcomingNotifications();
+    const today=todayDateStr();
+    // A plain task gets the same checkmark everything else does — clicking it
+    // confirms that occurrence and the row drops out of this list on the next
+    // draw. An experiment (kind "exp") keeps none here: its accountability is
+    // already the outcome field, a real record of what happened rather than a
+    // box, and a second, weaker "done" concept beside it would only confuse
+    // which one is authoritative.
+    const taskRows=tasks.map(({kind,t,overdue})=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+      ${kind==="task"?`<button type="button" class="step-dot" data-ck-task="${t.id}" data-ck-when="${escAttr(t.deadline)}" title="Mark done"></button>`
+                     :`<span style="width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:${overdue?"var(--overdue)":"var(--amber)"}"></span>`}
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title||"(unnamed step)")} <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)">${esc((projById(t.projectId)||{}).name||"")}</span></span>
+      <span style="font-family:var(--mono);font-size:10.5px;color:${overdue?"var(--overdue)":"var(--ink-faint)"};flex:0 0 auto">${overdue?"overdue · ":""}${fmtWhenFull(t.deadline)}</span>
+      <button class="ntf-opentask" data-id="${t.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
+    </div>`).join("");
+    const diaryRows=diaryItems.map(({a,e})=>{ const def=diaryTypeDef(e.type);
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+      <button type="button" class="step-dot" data-ck-diary="${e.id}" title="Mark done"></button>
+      <span style="flex:0 0 auto">${def.icon}</span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)} — ${esc(def.label)}</span>
+      <span style="font-family:var(--mono);font-size:10.5px;color:${e.date===today?"var(--amber)":"var(--ink-faint)"};flex:0 0 auto">${e.date===today?"today":e.date}${e.time?" "+e.time:""}</span>
+      <button class="ntf-openanimal" data-name="${escAttr(a.name)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
+    </div>`; }).join("");
+    document.getElementById("modal").innerHTML=`<h3>Upcoming &amp; due</h3>
+      <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px">Steps (overdue, or due within ${NOTIFY_TASK_LOOKAHEAD_DAYS} days)</div>
+      ${taskRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
+      <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:14px 0 6px">Animal diary — scheduled within ${NOTIFY_DIARY_LOOKAHEAD_DAYS} days</div>
+      ${diaryRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
+      <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`;
+  };
+  modal("",{wide:true});
+  draw();
   document.getElementById("modal").addEventListener("click",e=>{
+    const ck=e.target.closest(".step-dot");
+    if(ck){
+      if(ck.dataset.ckTask){ const t=taskOf(ck.dataset.ckTask); if(t)setOccDone(t,ck.dataset.ckWhen,true); }
+      else if(ck.dataset.ckDiary){ const found=diaryEntryById(ck.dataset.ckDiary); if(found){ found.e.done=true; persist(); } }
+      updateNotifyNudge(); draw();
+      return;
+    }
     const ot=e.target.closest(".ntf-opentask"), oa=e.target.closest(".ntf-openanimal");
     if(ot){ closeModal(); const tk=taskOf(ot.dataset.id); if(tk)taskEditor(tk,()=>render()); else openStepInPlan(ot.dataset.id); }
     else if(oa){ closeModal(); animalSearch=oa.dataset.name; DB.config.animalFilters.search=animalSearch; persist(); switchTo("animals"); }
@@ -2089,7 +2148,14 @@ function tasksFor(expId){ return taskList().filter(t=>t.experimentId===expId); }
 function expById(id){ for(const pr of DB.projects){ const e=(pr.steps||[]).find(x=>x.id===id&&!x.parentId); if(e)return {pr,exp:e}; } return null; }
 // A task is finished once its date has gone by; an unscheduled one never is.
 // An experiment is finished when you have written down what happened.
-const taskDone=t=>{ const w=t.endDate||t.when; return !!w&&w.slice(0,10)<todayDateStr(); };
+// A diary row reaching this (see diaryTasksForStep) carries the real diary
+// entry's own id, so it is looked up and asked directly rather than guessed at
+// from a date. A real task is asked whether its own anchor occurrence — t.when
+// — has been checked off.
+const taskDone=t=>{
+  if(String(t.id||"").startsWith("d_")){ const found=diaryEntryById(t.id); return !!(found&&found.e.done); }
+  return occDone(t,t.when);
+};
 const stepDone=st=>!!String(st.outcome||"").trim();
 function taskColorOf(t){
   const pr=t.projectId?projById(t.projectId):null;
@@ -2216,7 +2282,7 @@ function nextOccurrence(t){
 }
 function addTask(init){
   const t={id:uid("tk_"),title:"",when:null,endDate:null,duration:null,
-           projectId:null,experimentId:null,repeat:null,links:[],created:Date.now(),...(init||{})};
+           projectId:null,experimentId:null,repeat:null,links:[],doneOccurrences:[],created:Date.now(),...(init||{})};
   taskList().push(t); persist(); return t;
 }
 function deleteTask(id){ DB.schedule=taskList().filter(x=>x.id!==id); persist(); }
@@ -2904,12 +2970,31 @@ function renderProjectPlan(id){
   const stepRow=st=>{
     if(st._header) return `<div class="step-group-hdr">${esc(st._header)}</div>`;
     const fin=taskDone(st);
+    // The dot is a real toggle now, not just a readout — clicking it is the
+    // whole point of replacing "the date passed" with "someone confirmed it".
     return `<div class="step-line${fin?" done":""}" data-id="${st.id}">
-      <span class="step-dot">${fin?"✓":""}</span>
+      <button type="button" class="step-dot" title="${fin?"Done — click to undo":"Mark done"}">${fin?"✓":""}</button>
       <span class="step-title">${esc(st.title||"(unnamed task)")}</span>
       ${st.repeat?`<span class="step-n">↻ ${esc(repeatLabel(st.repeat))}</span>`:""}
       ${st.when?`<span class="step-date">${esc(taskSpan(st))}</span>`:`<span class="step-date unset">not scheduled</span>`}
     </div>`;
+  };
+  // shared by both task lists below: toggling the dot flips the right thing
+  // (a diary entry's own `done`, or a task's confirmation at its own date)
+  // without also firing the row's "open" click.
+  const wireStepDot=(el,redraw)=>{
+    const dot=el.querySelector(".step-dot"); if(!dot)return;
+    dot.onclick=ev=>{
+      ev.stopPropagation();
+      if(el.dataset.id.startsWith("d_")){
+        const found=diaryEntryById(el.dataset.id); if(!found)return;
+        found.e.done=!found.e.done; persist();
+      } else {
+        const t=taskOf(el.dataset.id); if(!t)return;
+        setOccDone(t,t.when,!occDone(t,t.when));
+      }
+      redraw();
+    };
   };
   // Sort orders the flat list or, under a grouping, each cluster on its own;
   // group buckets by whichever animal a diary row names (a scheduled task
@@ -2958,6 +3043,7 @@ function renderProjectPlan(id){
     };
     box.innerHTML=roots.map(st=>card(st,0)).join("");
     box.querySelectorAll(".step-line").forEach(el=>{
+      wireStepDot(el,()=>renderProjectPlan(id));
       // a diary row's id keeps the "d_" it was created with; a scheduled task
       // keeps "tk_" — enough to tell which editor a click should open
       if(el.dataset.id.startsWith("d_")){
@@ -3001,6 +3087,7 @@ function renderProjectPlan(id){
     }
     box.innerHTML=list.map(stepRow).join("");
     box.querySelectorAll(".step-line").forEach(el=>{
+      wireStepDot(el,drawProjTasks);
       const k=taskOf(el.dataset.id); if(!k)return;
       el.onclick=()=>taskEditor(k,()=>renderProjectPlan(id));
     });
@@ -3585,8 +3672,14 @@ function renderMonthView(host){
         const st=it.st, col=calColor(st);
         chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
         chip.style.cssText=`background:${col}22;border-left:3px solid ${col};color:${col}`;
-        chip.innerHTML=`<div class="et">${esc(st.title||"(unnamed task)")}</div>`;
+        // A plain task gets a checkmark right on the chip; an experiment does
+        // not — it is already accountable through its outcome field.
+        const ckHTML=st.kind==="task"
+          ?`<button type="button" class="cal-evt-ck${calDone(st)?" on":""}" title="${calDone(st)?"Done — click to undo":"Mark done"}"></button>`:"";
+        chip.innerHTML=`<div class="et">${ckHTML}${esc(st.title||"(unnamed task)")}</div>`;
         chip.title=`${(projById(st.projectId)||{}).name||""} — ${st.title||""}`;
+        if(st.kind==="task") chip.querySelector(".cal-evt-ck").onclick=e=>{
+          e.stopPropagation(); setOccDone(st.src,st.deadline,!calDone(st)); renderTimeline(); };
         chip.onclick=()=>openCalItem(st);
       } else {
         const {a,e}=it, def=diaryTypeDef(e.type), dc=diaryColors(a,def);
@@ -3719,8 +3812,18 @@ function renderTimeline(){
       const chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
       chip.style.cssText=`background:${col}22;border-left:3px solid ${overdue?"var(--overdue)":col};color:${overdue?"var(--overdue)":col};`
         +(span>1?`width:calc(${span*100}% + ${(span-1)*7}px);`:"");
-      chip.innerHTML=`<div class="et">${esc(t.title)}</div>`;
+      const ckHTML=t.kind==="task"
+        ?`<button type="button" class="cal-evt-ck${calDone(t)?" on":""}" title="${calDone(t)?"Done — click to undo":"Mark done"}"></button>`:"";
+      chip.innerHTML=`<div class="et">${ckHTML}${esc(t.title)}</div>`;
       chip.title=t.title+(t.endDate?` (through ${t.endDate.slice(0,10)})`:"");
+      if(t.kind==="task"){
+        const ck=chip.querySelector(".cal-evt-ck");
+        // stop the drag from ever engaging for a tap on the checkbox — its own
+        // pointerdown listener is on the whole chip, so it has to be blocked
+        // before that, not just on click
+        ck.addEventListener("pointerdown",e=>e.stopPropagation());
+        ck.addEventListener("click",e=>{ e.stopPropagation(); setOccDone(t.src,t.deadline,!calDone(t)); renderTimeline(); });
+      }
       alldayCells[first].appendChild(chip);
       makeAllDayDraggable(chip,t,alldayCells,ws);
     }
@@ -3867,7 +3970,9 @@ function renderTimeline(){
       evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
       const timeStr=dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
       const durLabel=durationMins!==60?` (${durationMins}m)`:"";
-      evt.innerHTML=`<div class="cal-evt-resize cal-evt-resize-top"></div><div class="et">${esc(t.title)}</div><div class="es">${timeStr}${durLabel}</div><div class="cal-evt-resize cal-evt-resize-bottom"></div>`;
+      const ckHTML=t.kind==="task"
+        ?`<button type="button" class="cal-evt-ck${calDone(t)?" on":""}" title="${calDone(t)?"Done — click to undo":"Mark done"}"></button>`:"";
+      evt.innerHTML=`<div class="cal-evt-resize cal-evt-resize-top"></div><div class="et">${ckHTML}${esc(t.title)}</div><div class="es">${timeStr}${durLabel}</div><div class="cal-evt-resize cal-evt-resize-bottom"></div>`;
       // Pointer Events (not mousedown) so this works from touch too — mobile never
       // fires mousemove/mouseup during a touch-drag gesture, which is why dragging
       // had no effect at all on the phone (the whole feature was mouse-only).
@@ -3876,6 +3981,11 @@ function renderTimeline(){
         const mode=e.target.classList.contains("cal-evt-resize")?(e.target.classList.contains("cal-evt-resize-top")?"resize-top":"resize-bottom"):"move";
         beginTimedEventDrag(mode,t,evt,e);
       });
+      if(t.kind==="task"){
+        const ck=evt.querySelector(".cal-evt-ck");
+        ck.addEventListener("pointerdown",e=>e.stopPropagation());
+        ck.addEventListener("click",e=>{ e.stopPropagation(); setOccDone(t.src,t.deadline,!calDone(t)); renderTimeline(); });
+      }
       hourCells[di].cell.appendChild(evt);
     });
     // Timed diary entries in the same hourly grid, with the same drag and resize
@@ -5725,8 +5835,9 @@ function paintDiary(container,a){
       </div>
       <div class="dg-list">
         ${formType?"":(dayEntries.length? dayEntries.map(e=>{const open=expandedIds.has(e.id);return`
-          <div class="dg-entry" style="border-left:3px solid ${diaryTypeDef(e.type).color}">
+          <div class="dg-entry${e.done?" done":""}" style="border-left:3px solid ${diaryTypeDef(e.type).color}">
             <div class="dg-erow">
+              <button type="button" class="step-dot dg-done${e.done?" on":""}" data-id="${e.id}" title="${e.done?"Done — click to undo":"Mark done"}">${e.done?"✓":""}</button>
               <span>${diaryTypeDef(e.type).icon}</span>
               <span class="dg-esum" title="${escAttr(diaryEntrySummary(e,a))}">${esc(diaryEntrySummary(e,a))}</span>
               <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
@@ -5766,6 +5877,11 @@ function paintDiary(container,a){
   // delegated on the container (a stable node across draw() calls, which only
   // replace its innerHTML) so this doesn't need re-binding on every redraw
   container.addEventListener("click", e=>{
+    const doneBtn=e.target.closest(".dg-done");
+    if(doneBtn){
+      const entry=a.diary.find(x=>x.id===doneBtn.dataset.id); if(!entry)return;
+      entry.done=!entry.done; persist(); draw(); return;
+    }
     const viewBtn=e.target.closest(".dg-view"), editBtn=e.target.closest(".dg-edit"), delBtn=e.target.closest(".dg-del");
     if(viewBtn){
       const id=viewBtn.dataset.id;
