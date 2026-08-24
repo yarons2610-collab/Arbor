@@ -57,6 +57,12 @@
   .readbtn .cnt{margin-left:6px;font-family:var(--mono);font-size:11px;background:var(--gold);color:#241c00;border-radius:10px;padding:1px 7px;font-weight:600}
   .readbtn:not(.due) .cnt{background:var(--line2);color:var(--ink-dim)}
   @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,209,102,0)}50%{box-shadow:0 0 0 4px rgba(255,209,102,.12)}}
+  /* the events bell reads as its own thing, not a second copy of the tasks
+     one — cyan throughout instead of gold, its own pulse colour to match */
+  .event-nudge.due{border-color:var(--cyan);color:var(--cyan);animation:pulse-cyan 2.4s ease-in-out infinite}
+  .event-nudge .cnt{background:var(--cyan);color:#04262a}
+  .event-nudge:not(.due) .cnt{background:var(--line2);color:var(--ink-dim)}
+  @keyframes pulse-cyan{0%,100%{box-shadow:0 0 0 0 rgba(63,208,214,0)}50%{box-shadow:0 0 0 4px rgba(63,208,214,.14)}}
   #topCollapseBtn,#topReveal{display:none}
 
   .main{flex:1;position:relative;overflow:hidden}
@@ -448,6 +454,7 @@
   .cal-evt-ck{display:inline-block;vertical-align:-1px;width:9px;height:9px;border-radius:50%;
     border:1.3px solid currentColor;background:transparent;margin-right:4px;padding:0;cursor:pointer}
   .cal-evt-ck.on{background:currentColor}
+  .cal-evt-evicon{font-size:9px;margin-right:2px}
   .cal-evt .es{font-family:var(--mono);font-size:9px;opacity:.8}
   .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:none}
   .cal-evt-timed:hover{filter:brightness(1.18)}
@@ -456,6 +463,11 @@
      original slot, not the block actually being moved */
   .cal-evt-timed.dragging{box-shadow:0 6px 18px rgba(0,0,0,.45);cursor:grabbing;z-index:50}
   .cal-evt-ghost{opacity:.32;pointer-events:none}
+  /* dashed, not solid — nothing has been created yet, this is only a preview
+     of what dragging here would default to */
+  .cal-create-preview{border:2px dashed var(--gcamp);border-radius:5px;background:rgba(84,224,138,.15);
+    color:var(--gcamp);font-size:11px;padding:2px 5px;pointer-events:none;z-index:15;overflow:hidden;box-sizing:border-box}
+  .cal-create-preview .et{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* the moment a touch-and-hold is recognized, before any movement — visible
      confirmation that the hold registered and it is now safe to drag */
   /* the moment a hold is recognized, before any movement — a real lift off
@@ -733,6 +745,7 @@
     </div>
     <div class="spacer"></div>
     <button class="readbtn" id="notifyNudge" title="Upcoming/due items" style="display:none">🔔<span class="cnt" id="notifyCnt">0</span></button>
+    <button class="readbtn event-nudge" id="eventNudge" title="Upcoming/due events" style="display:none">📅<span class="cnt" id="eventCnt">0</span></button>
     <button class="readbtn" id="readNudge" title="Unread mandatory reading" style="display:none">📚 Reading<span class="cnt" id="readCnt">0</span></button>
     <button class="btn ghost" id="expCal" title="Export scheduled tasks as an .ics calendar file">↗ Calendar</button>
     <span id="saveState" title="Save status — click to download a backup if auto-save is off" style="font-family:var(--mono);font-size:11px;padding:0 6px;user-select:none"></span>
@@ -936,6 +949,14 @@ let DB={domains:[],tasks:[],spines:[],projects:[],schedule:[],readings:[],invent
   sharedVirusCache:{viruses:[],deletedIds:[],fetchedAt:0}, // local read-through cache of the shared virus file
   config:{...DEFAULT_CONFIG}};
 const DOMAIN_PALETTE=["#54e08a","#ff5f92","#f2b756","#3fd0d6","#a98cff","#ff8a6b","#7db4ff","#e0d454"];
+// Google Calendar's own 11 event colours, by name and hex — picked specifically
+// so a color chosen here looks like a deliberate, familiar choice rather than
+// an arbitrary swatch, for anyone coming from that calendar.
+const GCAL_COLORS=[
+  ["#7986cb","Lavender"],["#33b679","Sage"],["#8e24aa","Grape"],["#e67c73","Flamingo"],
+  ["#f6bf26","Banana"],["#f4511e","Tangerine"],["#039be5","Peacock"],["#616161","Graphite"],
+  ["#3f51b5","Blueberry"],["#0b8043","Basil"],["#d50000","Tomato"]
+];
 // which research domain each colony cohort feeds
 // default cohort→domain seed (used only to build DB.cohorts on first run) —
 // left empty for a clean shared build; a fresh workspace just gets whatever
@@ -2014,7 +2035,8 @@ function switchTo(v){
 }
 function render(){
   updateReadNudge();
-  updateNotifyNudge();
+  updateNotifyNudge(false);
+  updateNotifyNudge(true);
   if(currentView==="projects")renderProjects();
   else if(currentView==="arbor")renderArbor();
   else if(currentView==="outline")renderOutline();
@@ -2045,7 +2067,12 @@ function addDays(dateStr,n){ const d=new Date(dateStr+"T00:00:00"); d.setDate(d.
 // is clicked; the lookback is bounded (30 days for tasks, the same window
 // diary already used for looking ahead) so a long-neglected daily item does
 // not resurrect its entire history, just what is still recent enough to act on.
-function upcomingNotifications(){
+// One mechanism, parameterized by which bell is asking, rather than two
+// near-identical copies. An event never shows up in the tasks bell and a
+// task never shows up in the events one — they're split entirely by
+// t.isEvent — and diary entries are lab-only, so they exist for neither bell
+// when wantEvents is true.
+function upcomingNotifications(wantEvents){
   const today=todayDateStr();
   const taskHorizon=addDays(today,NOTIFY_TASK_LOOKAHEAD_DAYS);
   const taskLookback=addDays(today,-30);
@@ -2055,11 +2082,12 @@ function upcomingNotifications(){
   // honest to say about being "due". Easy to bring back if that changes: this
   // is the one line that added it.
   const tasks=[
-    ...taskList().flatMap(t=>taskOccurrences(t,taskLookback,taskHorizon)
+    ...taskList().filter(t=>!!t.isEvent===!!wantEvents).flatMap(t=>taskOccurrences(t,taskLookback,taskHorizon)
       .filter(o=>!occDone(t,o.when))
       .map(o=>({kind:"task",t:{id:t.id,title:t.title,deadline:o.when,endDate:o.endDate,projectId:t.projectId},
                 overdue:dueClass(o.when,"",o.endDate)==="overdue"})))
   ].sort((x,y)=>x.t.deadline.localeCompare(y.t.deadline));
+  if(wantEvents) return {tasks,diaryItems:[]};
   const diaryLookback=addDays(today,-NOTIFY_DIARY_LOOKAHEAD_DAYS);
   const diaryHorizon=addDays(today,NOTIFY_DIARY_LOOKAHEAD_DAYS);
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(d=>d.timeline).map(d=>d.key));
@@ -2071,16 +2099,16 @@ function upcomingNotifications(){
   diaryItems.sort((x,y)=>x.e.date.localeCompare(y.e.date));
   return {tasks,diaryItems};
 }
-function updateNotifyNudge(){
-  const {tasks,diaryItems}=upcomingNotifications();
+function updateNotifyNudge(wantEvents){
+  const {tasks,diaryItems}=upcomingNotifications(wantEvents);
   const n=tasks.length+diaryItems.length;
-  const btn=document.getElementById("notifyNudge");
-  document.getElementById("notifyCnt").textContent=n;
+  const btn=document.getElementById(wantEvents?"eventNudge":"notifyNudge");
+  document.getElementById(wantEvents?"eventCnt":"notifyCnt").textContent=n;
   btn.style.display=n>0?"":"none";
   btn.classList.toggle("due",tasks.some(x=>x.overdue));
-  btn.title=n>0?`${n} upcoming/due item${n!==1?"s":""}`:"Nothing due";
+  btn.title=n>0?`${n} upcoming/due ${wantEvents?"event":"item"}${n!==1?"s":""}`:"Nothing due";
 }
-function openNotificationsModal(){
+function openNotificationsModal(wantEvents){
   // A checkmark click needs the list to refresh without reopening the modal —
   // modal() only replaces #modal's innerHTML, so calling it again on every
   // checkmark would stack a fresh, un-removed click listener on the same node
@@ -2088,7 +2116,7 @@ function openNotificationsModal(){
   // fire "open" more than once per click. One listener, attached once; draw()
   // only ever touches the content.
   const draw=()=>{
-    const {tasks,diaryItems}=upcomingNotifications();
+    const {tasks,diaryItems}=upcomingNotifications(wantEvents);
     const today=todayDateStr();
     // A plain task gets the same checkmark everything else does — clicking it
     // confirms that occurrence and the row drops out of this list on the next
@@ -2099,7 +2127,7 @@ function openNotificationsModal(){
     const taskRows=tasks.map(({kind,t,overdue})=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
       ${kind==="task"?`<button type="button" class="step-dot" data-ck-task="${t.id}" data-ck-when="${escAttr(t.deadline)}" title="Mark done"></button>`
                      :`<span style="width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:${overdue?"var(--overdue)":"var(--amber)"}"></span>`}
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title||"(unnamed step)")} <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)">${esc((projById(t.projectId)||{}).name||"")}</span></span>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title||"(unnamed step)")}${wantEvents?"":` <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)">${esc((projById(t.projectId)||{}).name||"")}</span>`}</span>
       <span style="font-family:var(--mono);font-size:10.5px;color:${overdue?"var(--overdue)":"var(--ink-faint)"};flex:0 0 auto">${overdue?"overdue · ":""}${fmtWhenFull(t.deadline)}</span>
       <button class="ntf-opentask" data-id="${t.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
     </div>`).join("");
@@ -2111,11 +2139,11 @@ function openNotificationsModal(){
       <span style="font-family:var(--mono);font-size:10.5px;color:${e.date===today?"var(--amber)":"var(--ink-faint)"};flex:0 0 auto">${e.date===today?"today":e.date}${e.time?" "+e.time:""}</span>
       <button class="ntf-openanimal" data-name="${escAttr(a.name)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
     </div>`; }).join("");
-    document.getElementById("modal").innerHTML=`<h3>Upcoming &amp; due</h3>
-      <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px">Tasks (overdue, or due within ${NOTIFY_TASK_LOOKAHEAD_DAYS} days)</div>
+    document.getElementById("modal").innerHTML=`<h3>${wantEvents?"Upcoming events":"Upcoming & due"}</h3>
+      <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px">${wantEvents?"Events":"Tasks"} (overdue, or due within ${NOTIFY_TASK_LOOKAHEAD_DAYS} days)</div>
       ${taskRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
-      <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:14px 0 6px">Animal diary — scheduled within ${NOTIFY_DIARY_LOOKAHEAD_DAYS} days</div>
-      ${diaryRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
+      ${wantEvents?"":`<div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:14px 0 6px">Animal diary — scheduled within ${NOTIFY_DIARY_LOOKAHEAD_DAYS} days</div>
+      ${diaryRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}`}
       <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`;
   };
   modal("",{wide:true});
@@ -2125,7 +2153,7 @@ function openNotificationsModal(){
     if(ck){
       if(ck.dataset.ckTask){ const t=taskOf(ck.dataset.ckTask); if(t)setOccDone(t,ck.dataset.ckWhen,true); }
       else if(ck.dataset.ckDiary){ const found=diaryEntryById(ck.dataset.ckDiary); if(found){ found.e.done=true; persist(); } }
-      updateNotifyNudge(); draw();
+      updateNotifyNudge(wantEvents); draw();
       return;
     }
     const ot=e.target.closest(".ntf-opentask"), oa=e.target.closest(".ntf-openanimal");
@@ -2133,7 +2161,8 @@ function openNotificationsModal(){
     else if(oa){ closeModal(); animalSearch=oa.dataset.name; DB.config.animalFilters.search=animalSearch; persist(); switchTo("animals"); }
   });
 }
-document.getElementById("notifyNudge").addEventListener("click",openNotificationsModal);
+document.getElementById("notifyNudge").addEventListener("click",()=>openNotificationsModal(false));
+document.getElementById("eventNudge").addEventListener("click",()=>openNotificationsModal(true));
 // The top bar — tabs included — collapses to a single thin reveal strip, for
 // a phone screen where every row of chrome is a row the Timeline doesn't get.
 // Collapsing hides real navigation, so the strip that brings it back is never
@@ -2265,10 +2294,18 @@ const taskDone=t=>{
 };
 const stepDone=st=>!!String(st.outcome||"").trim();
 function taskColorOf(t){
+  if(t.color) return t.color;           // an explicit choice always wins over anything derived
   const pr=t.projectId?projById(t.projectId):null;
   if(pr)return pr.color;
   const e=t.experimentId?expById(t.experimentId):null;
   return e?e.pr.color:"#7db4ff";        // unassigned tasks get their own colour
+}
+// The small marker that tells an event apart from a task at a glance on the
+// calendar itself, not just in its own bell — shared by all three chip
+// renderers (week/day timed, all-day strip, month) so it can't drift between
+// them the way copy-pasted markup tends to.
+function eventIconHTML(realTask){
+  return realTask&&realTask.isEvent?`<span class="cal-evt-evicon" title="Event">📌</span>`:"";
 }
 // Minutes between two when-strings, counting a date-only value as midnight.
 function minutesBetween(a,b){
@@ -2389,7 +2426,8 @@ function nextOccurrence(t){
 }
 function addTask(init){
   const t={id:uid("tk_"),title:"",when:null,endDate:null,duration:null,
-           projectId:null,experimentId:null,repeat:null,links:[],doneOccurrences:[],created:Date.now(),...(init||{})};
+           projectId:null,experimentId:null,repeat:null,links:[],doneOccurrences:[],
+           isEvent:false,color:null,created:Date.now(),...(init||{})};
   taskList().push(t); persist(); return t;
 }
 function deleteTask(id){ DB.schedule=taskList().filter(x=>x.id!==id); persist(); }
@@ -2570,7 +2608,7 @@ function taskEditor(t,after){
         `<option value="e:${e.id}" ${t.experimentId===e.id?"selected":""}>${esc(e.title||"(unnamed experiment)")}</option>`).join("")
       +`</optgroup>`;
   }).join("");
-  modal(`<h3>Task</h3>
+  modal(`<h3>${t.isEvent?"Event":"Task"}</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
     <div class="drow">
       <div class="fld" style="flex:1"><label>When</label>
@@ -2588,8 +2626,13 @@ function taskEditor(t,after){
       <div class="dow-row" id="tk_dow"></div>
       <div class="dow-every"><span>repeat every</span>
         <input id="tk_ivl" type="number" min="1" max="12" value="1"><span>week(s)</span></div></div>
-    <div class="fld"><label>Part of</label>
-      <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>
+    <div class="fld"><label>Colour</label>
+      <div class="taglist" id="tk_colors">
+        <span class="tag" data-c="" style="cursor:pointer;${!t.color?"box-shadow:0 0 0 2px var(--ink-dim)":""}">Automatic</span>
+        ${GCAL_COLORS.map(([hex,name])=>`<span class="tag" data-c="${hex}" title="${esc(name)}" style="cursor:pointer;border-color:${hex};${t.color===hex?`box-shadow:0 0 0 2px ${hex}`:""}"><span style="width:12px;height:12px;border-radius:3px;background:${hex};display:inline-block"></span></span>`).join("")}
+      </div></div>
+    ${t.isEvent?"":`<div class="fld"><label>Part of</label>
+      <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>`}
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="tk_del">Delete task</button></div>
     <div class="actions"><button class="btn accent" id="tk_save">Done</button></div>`,{wide:true});
   // The end follows the start the way it does in a calendar: an end already set
@@ -2614,7 +2657,16 @@ function taskEditor(t,after){
   // opening an unset end starts it at the suggestion rather than at today
   bindDateButton(document.getElementById("tk_end"), ()=>t.endDate||suggestEnd(t.when)||"",
     v=>{ t.endDate=v||null; persist(); });
-  document.getElementById("tk_exp").addEventListener("change",e=>setTaskTarget(t,e.target.value));
+  // an event has no "Part of" field at all — nothing to attach to a project
+  const tkExp=document.getElementById("tk_exp");
+  if(tkExp) tkExp.addEventListener("change",e=>setTaskTarget(t,e.target.value));
+  document.getElementById("tk_colors").addEventListener("click",e=>{
+    const tag=e.target.closest(".tag"); if(!tag)return;
+    t.color=tag.dataset.c||null; persist();
+    document.querySelectorAll("#tk_colors .tag").forEach(x=>{
+      x.style.boxShadow=(x===tag)?(tag.dataset.c?`0 0 0 2px ${tag.dataset.c}`:"0 0 0 2px var(--ink-dim)"):"";
+    });
+  });
   const wrap=document.getElementById("tk_customwrap"), dowBox=document.getElementById("tk_dow"),
         ivl=document.getElementById("tk_ivl");
   function drawRepeat(){
@@ -3783,7 +3835,7 @@ function renderMonthView(host){
         // not — it is already accountable through its outcome field.
         const ckHTML=st.kind==="task"
           ?`<button type="button" class="cal-evt-ck${calDone(st)?" on":""}" title="${calDone(st)?"Done — click to undo":"Mark done"}"></button>`:"";
-        chip.innerHTML=`<div class="et">${ckHTML}${esc(st.title||"(unnamed task)")}</div>`;
+        chip.innerHTML=`<div class="et">${ckHTML}${eventIconHTML(st.src)}${esc(st.title||"(unnamed task)")}</div>`;
         chip.title=`${(projById(st.projectId)||{}).name||""} — ${st.title||""}`;
         if(st.kind==="task") chip.querySelector(".cal-evt-ck").onclick=e=>{
           e.stopPropagation(); setOccDone(st.src,st.deadline,!calDone(st)); renderTimeline(); };
@@ -3939,7 +3991,7 @@ function renderTimeline(){
         +(span>1?`width:calc(${span*100}% + ${(span-1)*7}px);`:"");
       const ckHTML=t.kind==="task"
         ?`<button type="button" class="cal-evt-ck${calDone(t)?" on":""}" title="${calDone(t)?"Done — click to undo":"Mark done"}"></button>`:"";
-      chip.innerHTML=`<div class="et">${ckHTML}${esc(t.title)}</div>`;
+      chip.innerHTML=`<div class="et">${ckHTML}${eventIconHTML(t.src)}${esc(t.title)}</div>`;
       chip.title=t.title+(t.endDate?` (through ${t.endDate.slice(0,10)})`:"");
       if(t.kind==="task"){
         const ck=chip.querySelector(".cal-evt-ck");
@@ -4097,7 +4149,7 @@ function renderTimeline(){
       const durLabel=durationMins!==60?` (${durationMins}m)`:"";
       const ckHTML=t.kind==="task"
         ?`<button type="button" class="cal-evt-ck${calDone(t)?" on":""}" title="${calDone(t)?"Done — click to undo":"Mark done"}"></button>`:"";
-      evt.innerHTML=`<div class="cal-evt-resize cal-evt-resize-top"></div><div class="et">${ckHTML}${esc(t.title)}</div><div class="es">${timeStr}${durLabel}</div><div class="cal-evt-resize cal-evt-resize-bottom"></div>`;
+      evt.innerHTML=`<div class="cal-evt-resize cal-evt-resize-top"></div><div class="et">${ckHTML}${eventIconHTML(t.src)}${esc(t.title)}</div><div class="es">${timeStr}${durLabel}</div><div class="cal-evt-resize cal-evt-resize-bottom"></div>`;
       // Pointer Events (not mousedown) so this works from touch too — mobile never
       // fires mousemove/mouseup during a touch-drag gesture, which is why dragging
       // had no effect at all on the phone (the whole feature was mouse-only).
@@ -4150,15 +4202,8 @@ function renderTimeline(){
       });
       hourCells[dayIdx].cell.appendChild(evt);
     });
-    // click-to-create on hour cells
-    hourCells.forEach(({cell,day})=>{
-      cell.addEventListener("click",e=>{
-        if(e.target!==cell&&!e.target.classList.contains("cal-hour-cell")) return;
-        const pad=n=>String(n).padStart(2,"0");
-        const dl=`${day.getFullYear()}-${pad(day.getMonth()+1)}-${pad(day.getDate())}T${pad(h)}:00`;
-        openTimelineCreateModal(dl);
-      });
-    });
+    // click-to-create on hour cells; drag-to-create sets a duration first
+    hourCells.forEach(({cell,day})=>wireHourCellCreate(cell,day,h));
     // now-line on current hour
     if(calWeekOffset===0){
       const now=new Date(); const nowDay=now.getDay();
@@ -4184,6 +4229,62 @@ function renderTimeline(){
 function isoAddMinutes(iso,mins){
   const d=whenDate(iso), nd=new Date(d.getTime()+mins*60000), pad4=n=>String(n).padStart(2,"0");
   return `${nd.getFullYear()}-${pad4(nd.getMonth()+1)}-${pad4(nd.getDate())}T${pad4(nd.getHours())}:${pad4(nd.getMinutes())}`;
+}
+// Clicking an empty hour cell creates something at the exact minute clicked;
+// dragging first previews a time range and carries it into the create picker
+// as the default start/end — untouched from there unless changed in the next
+// window. No hold gate here the way an existing event's own drag has one:
+// there's nothing sitting under an empty cell to accidentally disturb, so a
+// small movement threshold is enough to tell "creating here" from "dragging a
+// range", on mouse and touch alike.
+function wireHourCellCreate(cell,day,h0){
+  const p2=n=>String(n).padStart(2,"0");
+  const dayISO=`${day.getFullYear()}-${p2(day.getMonth()+1)}-${p2(day.getDate())}`;
+  const minOf=w=>{ const hh=+w.slice(11,13),mm=+w.slice(14,16); return hh*60+mm; };
+  cell.addEventListener("pointerdown",downEvent=>{
+    if(downEvent.button||downEvent.target!==cell) return;
+    downEvent.preventDefault();
+    const startX=downEvent.clientX, startY=downEvent.clientY;
+    const cr=cell.getBoundingClientRect(), rowH=cr.height;
+    let moved=false, previewEl=null;
+    const wholeAt=clientY=>{
+      const minsFromCellTop=((clientY-cr.top)/rowH)*60;
+      const totalMin=Math.min(Math.max(Math.round((h0*60+minsFromCellTop)/15)*15,0),24*60-15);
+      return `${dayISO}T${p2(Math.floor(totalMin/60))}:${p2(totalMin%60)}`;
+    };
+    const startWhen=wholeAt(startY);
+    function paintPreview(curWhen){
+      const a=startWhen<curWhen?startWhen:curWhen, b=startWhen<curWhen?curWhen:startWhen;
+      if(a===b){ if(previewEl){ previewEl.remove(); previewEl=null; } return; }
+      if(!previewEl){ previewEl=document.createElement("div"); previewEl.className="cal-create-preview"; document.body.appendChild(previewEl); }
+      const topPx=cr.top+(minOf(a)-h0*60)/60*rowH;
+      previewEl.style.cssText=`position:fixed;left:${cr.left}px;width:${cr.width}px;top:${topPx}px;height:${Math.max((minOf(b)-minOf(a))/60*rowH,10)}px`;
+      previewEl.innerHTML=`<div class="et">${a.slice(11,16)} – ${b.slice(11,16)}</div>`;
+    }
+    function cleanup(){
+      document.removeEventListener("pointermove",onMove);
+      document.removeEventListener("pointerup",onUp);
+      document.removeEventListener("pointercancel",onCancel);
+      if(previewEl){ previewEl.remove(); previewEl=null; }
+    }
+    function onMove(e){
+      const dx=e.clientX-startX, dy=e.clientY-startY;
+      if(!moved){ if(Math.abs(dx)<=DRAG_WIGGLE_PX&&Math.abs(dy)<=DRAG_WIGGLE_PX) return; moved=true; }
+      paintPreview(wholeAt(e.clientY));
+    }
+    function onUp(e){
+      cleanup();
+      if(!moved){ openTimelineCreateModal(startWhen); return; }
+      const curWhen=wholeAt(e.clientY);
+      if(curWhen===startWhen){ openTimelineCreateModal(startWhen); return; }
+      const a=startWhen<curWhen?startWhen:curWhen, b=startWhen<curWhen?curWhen:startWhen;
+      openTimelineCreateModal(a,b);
+    }
+    function onCancel(){ cleanup(); }
+    document.addEventListener("pointermove",onMove);
+    document.addEventListener("pointerup",onUp);
+    document.addEventListener("pointercancel",onCancel);
+  });
 }
 // drag a timed timeline event: mode "move" drags the whole block to a new day/time slot,
 // "resize-top"/"resize-bottom" drags an edge to change start time / duration.
@@ -7348,9 +7449,9 @@ function createAndOpenTask(opts){
 
 // Clicking a calendar slot makes a task there and opens it — no intermediate
 // "what kind of thing is this" step, and no experiment required up front.
-function openNewTaskModal(prefillDeadline){
+function openNewTaskModal(prefillDeadline,prefillEnd,isEvent){
   const when=prefillDeadline||todayDateStr()+"T"+DEFAULT_ENTRY_TIME;
-  const t=addTask({when,endDate:suggestEnd(when)});
+  const t=addTask({when,endDate:prefillEnd||suggestEnd(when),isEvent:!!isEvent});
   taskEditor(t,()=>{ if(currentView==="timeline")renderTimeline(); else render(); });
 }
 function addSpine(dendriteId,init){
@@ -7364,22 +7465,29 @@ function addSpine(dendriteId,init){
 // than the per-animal diary. This modal offers the real choice: a plain task,
 // or a diary entry — same types/fields as the Animals tab diary, and always
 // tied to a specific animal — created directly from wherever was clicked.
-function openTimelineCreateModal(prefillDeadline){
+function openTimelineCreateModal(prefillDeadline,prefillEnd){
   const date=(prefillDeadline||todayDateStr()).slice(0,10);
   const time=prefillDeadline&&hasTime(prefillDeadline)?prefillDeadline.slice(11,16):"";
+  const endTime=prefillEnd&&hasTime(prefillEnd)?prefillEnd.slice(11,16):"";
   const animals=[...DB.animals].sort((x,y)=>x.name.localeCompare(y.name));
   modal(`<h3>New timeline item</h3>
     <div class="fld"><label>Kind</label>
       <div class="seg" id="tc_kind">
         <button type="button" data-v="task">Task</button>
+        <button type="button" data-v="event">Event</button>
         <button type="button" data-v="diary" ${animals.length?"":"disabled"}>Animal diary entry</button>
       </div></div>
     <div id="tc_body" class="dg-form"></div>`,{wide:true});
   const body=document.getElementById("tc_body");
 
-  // A task needs nothing decided here, so this goes straight to the task itself
-  // rather than making you read a paragraph and press Continue.
-  function paintTask(){ closeModal(); openNewTaskModal(prefillDeadline); }
+  // Neither a task nor an event needs anything decided here, so both go
+  // straight to their own editor rather than making you read a paragraph and
+  // press Continue. An event is a task in every mechanical sense — same
+  // record, same calendar, same drag/repeat/colour — with two differences:
+  // it can't be attached to a project, and it counts toward its own bell
+  // instead of the tasks one.
+  function paintTask(){ closeModal(); openNewTaskModal(prefillDeadline,prefillEnd,false); }
+  function paintEvent(){ closeModal(); openNewTaskModal(prefillDeadline,prefillEnd,true); }
 
   function paintDiary(){
     if(!animals.length){ body.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:10px 0">No animals yet — add one on the Animals tab first.</div>`; return; }
@@ -7401,7 +7509,7 @@ function openTimelineCreateModal(prefillDeadline){
       <label style="margin-top:6px;display:block">Note</label><textarea id="tc_note"></textarea>
       <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="tc_save">Save</button></div>`;
 
-    let dtValue=date+(time?"T"+time:""), endTimeValue="";
+    let dtValue=date+(time?"T"+time:""), endTimeValue=time?endTime:"";
     const dtBtn=document.getElementById("tc_dt");
     dtBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${fmtWhenFull(dtValue)}`;
     const endWrap=document.getElementById("tc_endwrap");
@@ -7410,6 +7518,14 @@ function openTimelineCreateModal(prefillDeadline){
       if(!hasTime(dtValue)) endTimeValue="";
     }, 15);
     bindTimeButton(document.getElementById("tc_endtime"), ()=>endTimeValue, v=>{ endTimeValue=v||""; }, 15);
+    // bindTimeButton only repaints the label once the picker is actually
+    // used — an end time carried in from a create-drag needs painting once
+    // up front, or it's correct internally but invisible until you open it
+    if(endTimeValue){
+      const endBtn=document.getElementById("tc_endtime");
+      endBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">🕐</span>${endTimeValue}`;
+      endBtn.classList.remove("datebtn-empty");
+    }
 
     const typeSel=document.getElementById("tc_type"), fieldsHost=document.getElementById("tc_fields");
     function paintFields(){
@@ -7468,7 +7584,7 @@ function openTimelineCreateModal(prefillDeadline){
   document.getElementById("tc_kind").onclick=e=>{
     const b=e.target.closest("button"); if(!b||b.disabled)return;
     document.querySelectorAll("#tc_kind button").forEach(x=>x.classList.toggle("on",x===b));
-    if(b.dataset.v==="task")paintTask(); else paintDiary();
+    if(b.dataset.v==="task")paintTask(); else if(b.dataset.v==="event")paintEvent(); else paintDiary();
   };
   body.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:10px 0 4px">Pick what to put on this date.</div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
