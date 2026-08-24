@@ -299,6 +299,9 @@
   .step-date{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);flex:0 0 auto}
   .step-date.unset{color:var(--ink-faint)}
   .step-n{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto}
+  .step-group-hdr{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--ink-faint);padding:8px 6px 3px;cursor:default}
+  .step-group-hdr:first-child{padding-top:0}
   .dow-row{display:flex;gap:5px;flex-wrap:wrap}
   .dow-row button{flex:0 0 auto;min-width:38px;border:1px solid var(--line2);background:var(--panel2);
     color:var(--ink-dim);border-radius:7px;padding:5px 0;font-size:11.5px;cursor:pointer;font-family:var(--mono)}
@@ -789,6 +792,8 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // type the fill and the animal's project a thin edge, "project" gives the
   // project everything. Tasks and experiments are project-coloured either way.
   calColorBy:"type",
+  // How an experiment's combined task+diary list is ordered and clustered.
+  expTaskSort:"alpha", expTaskGroup:"none",
   animalFilters:{cohort:"all",experiment:"all",group:"all",status:"all",search:"",sort:"name"},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // seeded diary entry types - fully user-editable afterward (label/icon/color/
@@ -2262,7 +2267,8 @@ function diaryTasksForStep(pr,st){
     const def=diaryTypeDef(e.type);
     out.push({ id:e.id, title:`${a.name} — ${def.label}`,
       when:e.time?`${e.date}T${e.time}`:e.date,
-      endDate:e.endTime?`${e.date}T${e.endTime}`:null, repeat:null });
+      endDate:e.endTime?`${e.date}T${e.endTime}`:null, repeat:null,
+      _animal:a.name, _type:def.label });
   }));
   return out;
 }
@@ -2828,14 +2834,33 @@ function renderProjectPlan(id){
   q.querySelector("#pl_q").addEventListener("input",e=>{ pr.question=e.target.value; persist(); });
 
   const sw=document.createElement("div"); sw.className="fld"; host.appendChild(sw);
-  sw.innerHTML=`<label>Experiments</label><div id="pl_steps"></div>
+  sw.innerHTML=`<label>Experiments</label>
+    <div class="af-sortbar" style="margin-bottom:8px">
+      <span class="af-label">↕ Sort</span>
+      <select id="pl_sort" class="af-sel">
+        <option value="alpha">A–Z</option>
+        <option value="date">Date</option>
+      </select>
+      <span class="af-label" style="margin-left:8px">Group</span>
+      <select id="pl_group" class="af-sel">
+        <option value="none">None</option>
+        <option value="animal">By mouse</option>
+        <option value="type">By entry type</option>
+      </select>
+    </div>
+    <div id="pl_steps"></div>
     <button class="btn ghost" id="pl_addstep" style="margin-top:10px">＋ Experiment</button>`;
   sw.querySelector("#pl_addstep").onclick=()=>{ const st=addStep(pr,null); stepModal(pr,st,()=>renderProjectPlan(id)); };
+  const sortSel=sw.querySelector("#pl_sort"), groupSel=sw.querySelector("#pl_group");
+  sortSel.value=DB.config.expTaskSort||"alpha"; groupSel.value=DB.config.expTaskGroup||"none";
+  sortSel.addEventListener("change",()=>{ DB.config.expTaskSort=sortSel.value; persist(); drawSteps(); });
+  groupSel.addEventListener("change",()=>{ DB.config.expTaskGroup=groupSel.value; persist(); drawSteps(); });
 
   // A task renders as a slimmer row: what it is, when, and how often. It has no
   // + of its own — tasks do not nest. Shared by the rows inside an experiment
   // and by the project's own list below them.
   const stepRow=st=>{
+    if(st._header) return `<div class="step-group-hdr">${esc(st._header)}</div>`;
     const fin=taskDone(st);
     return `<div class="step-line${fin?" done":""}" data-id="${st.id}">
       <span class="step-dot">${fin?"✓":""}</span>
@@ -2844,6 +2869,24 @@ function renderProjectPlan(id){
       ${st.when?`<span class="step-date">${esc(taskSpan(st))}</span>`:`<span class="step-date unset">not scheduled</span>`}
     </div>`;
   };
+  // Sort orders the flat list or, under a grouping, each cluster on its own;
+  // group buckets by whichever animal a diary row names (a scheduled task
+  // names none, so it collects under "General") or by entry type (where a
+  // scheduled task collects under "Tasks"). One shared preference — set here,
+  // it holds for every experiment on every project, the same as the calendar's
+  // own colour switch.
+  const sortCmp=(a,b)=>(DB.config.expTaskSort==="date")
+    ? (String(a.when||"9999").localeCompare(String(b.when||"9999"))||String(a.title||"").localeCompare(String(b.title||"")))
+    : String(a.title||"").localeCompare(String(b.title||""));
+  function sortAndGroup(raw){
+    const mode=DB.config.expTaskGroup||"none";
+    if(mode==="none") return [...raw].sort(sortCmp);
+    const keyOf=mode==="animal" ? (x=>x._animal||"General") : (x=>x._type||"Tasks");
+    const buckets={};
+    raw.forEach(x=>{ const k=keyOf(x); (buckets[k]=buckets[k]||[]).push(x); });
+    return Object.keys(buckets).sort((a,b)=>a.localeCompare(b))
+      .flatMap(k=>[{_header:k},...buckets[k].sort(sortCmp)]);
+  }
   function drawSteps(){
     const box=document.getElementById("pl_steps");
     const roots=stepsUnder(pr,null);
@@ -2851,11 +2894,9 @@ function renderProjectPlan(id){
     const card=(st,depth)=>{
       // Scheduled tasks and the animals' own diary entries, together — a diary
       // entry is as much a record of what happened in this experiment as a
-      // task is of what is planned. Alphabetical rather than by date, since the
-      // two now share one list and a date is not a common yardstick between
-      // "not yet scheduled" and "logged this morning".
-      const kids=[...tasksFor(st.id),...diaryTasksForStep(pr,st)]
-        .sort((a,b)=>String(a.title||"").localeCompare(String(b.title||"")));
+      // task is of what is planned.
+      const rawKids=[...tasksFor(st.id),...diaryTasksForStep(pr,st)];
+      const kids=sortAndGroup(rawKids);
       const open=openSteps.has(st.id), grp=stepGroupTally(pr,st);
       return `<div class="exp-card${stepDone(st)?" done":""}" data-id="${st.id}">
         <div class="exp-top">
@@ -2868,7 +2909,7 @@ function renderProjectPlan(id){
         <div class="exp-meta">
           ${st.deadline?`<span class="em-date">${esc(stepSpan(st))}</span>`:""}
           ${(st.groupDefs||[]).length?`<span class="em-arms ${grp.ok?"ok":""}">${esc(grp.text)}</span>`:""}
-          ${kids.length?`<button class="exp-caret">${open?"▾":"▸"} ${kids.length} task${kids.length!==1?"s":""}</button>`:""}
+          ${rawKids.length?`<button class="exp-caret">${open?"▾":"▸"} ${rawKids.length} task${rawKids.length!==1?"s":""}</button>`:""}
         </div>
         ${open&&kids.length?`<div class="step-list">${kids.map(stepRow).join("")}</div>`:""}
       </div>`;
