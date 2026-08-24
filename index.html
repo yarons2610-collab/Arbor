@@ -57,6 +57,7 @@
   .readbtn .cnt{margin-left:6px;font-family:var(--mono);font-size:11px;background:var(--gold);color:#241c00;border-radius:10px;padding:1px 7px;font-weight:600}
   .readbtn:not(.due) .cnt{background:var(--line2);color:var(--ink-dim)}
   @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,209,102,0)}50%{box-shadow:0 0 0 4px rgba(255,209,102,.12)}}
+  #topCollapseBtn,#topReveal{display:none}
 
   .main{flex:1;position:relative;overflow:hidden}
   .view{position:absolute;inset:0;overflow:auto}
@@ -423,6 +424,9 @@
   /* all-day row */
   .cal-allday-gutter{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:4px 4px 4px 6px;font-family:var(--mono);font-size:9px;color:var(--ink-faint);display:flex;align-items:flex-start;justify-content:flex-end}
   .cal-allday-cell{border-right:1px solid var(--line);border-bottom:2px solid var(--line2);padding:3px 3px;min-height:28px;display:flex;flex-direction:column;gap:2px;overflow:visible}
+  .cal-allday-cell.collapsed{display:none}
+  .cal-allday-toggle{cursor:pointer;font-family:var(--mono)}
+  .cal-allday-toggle:hover{color:var(--ink)}
   .cal-evt-span{position:relative;z-index:2}
   /* hour rows */
   .cal-hour-gutter{border-right:1px solid var(--line);padding:0 6px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);text-align:right;height:var(--cal-hour-h);display:flex;align-items:flex-start;padding-top:3px;box-sizing:border-box}
@@ -603,6 +607,13 @@
   .mat-subview.hidden{display:none}
   /* ── MOBILE (≤600px) ─────────────────────────────────────────────────────── */
   @media(max-width:600px){
+    /* .wrap's 26px side padding plus a 90px bottom pad is sized for a page of
+       cards that wants breathing room and space to scroll past the last one —
+       right for Projects or Materials, wrong for Timeline, which is a table
+       that wants every pixel and manages its own scrolling internally. That
+       padding alone was costing the grid 52px of width and 116px of height
+       before it drew a single hour. */
+    #timeline.wrap{padding:0}
     /* The Timeline is what this whole pass is about, and the app's own
        chrome — a repeated title, full-size buttons — was costing it more
        height than the actual hour grid was left with. The phone's own home
@@ -613,6 +624,13 @@
     .tabs{order:-1;width:100%;justify-content:stretch}
     .tab{flex:1;padding:5px 2px;font-size:11px;white-space:nowrap}
     #expCal,#readNudge{display:none}
+    /* the whole top bar, tabs included, can fold away to a thin strip — the
+       strip itself is never hidden, so navigation is always one tap back */
+    #topCollapseBtn{display:inline-flex}
+    .app.top-collapsed #topBar{display:none}
+    .app.top-collapsed #topReveal{display:flex;width:100%;justify-content:center;align-items:center;
+      background:var(--bg2);border:0;border-bottom:1px solid var(--line);color:var(--ink-faint);
+      font-size:11px;cursor:pointer;padding:3px 0;padding-top:max(env(safe-area-inset-top),4px)}
     .top .btn,.top .readbtn{padding:3px 8px;font-size:10.5px}
     #saveState{font-size:9px;padding:0 3px}
     /* detail: full-width slide-up sheet */
@@ -688,7 +706,8 @@
 </style>
 
 <div class="app">
-  <div class="top">
+  <button type="button" id="topReveal" class="top-reveal" title="Show the top bar">▾</button>
+  <div class="top" id="topBar">
     <div class="brand"><h1>Arbor</h1><span class="sub">Segev · Schiller lab</span></div>
     <div class="tabs" id="tabs">
       <button class="tab" data-v="projects">Projects</button>
@@ -704,6 +723,7 @@
     <span id="saveState" title="Save status — click to download a backup if auto-save is off" style="font-family:var(--mono);font-size:11px;padding:0 6px;user-select:none"></span>
     <button class="btn ghost" id="syncBtn" title="Sync across devices via GitHub">⇄ Sync</button>
     <button class="btn ghost" id="menuBtn" title="Backup / restore">⋯</button>
+    <button type="button" class="btn ghost" id="topCollapseBtn" title="Hide the top bar">︿</button>
   </div>
 
   <div class="main">
@@ -841,6 +861,9 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   calColorBy:"type",
   // How an experiment's combined task+diary list is ordered and clustered.
   expTaskSort:"alpha", expTaskGroup:"none",
+  // Whether the Timeline's all-day strip and the app's own top bar are
+  // collapsed to reclaim vertical space, mainly relevant on a phone.
+  calAlldayCollapsed:false, topCollapsed:false,
   animalFilters:{cohort:"all",experiment:"all",group:"all",status:"all",search:"",sort:"name"},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // seeded diary entry types - fully user-editable afterward (label/icon/color/
@@ -2072,6 +2095,13 @@ function openNotificationsModal(){
   });
 }
 document.getElementById("notifyNudge").addEventListener("click",openNotificationsModal);
+// The top bar — tabs included — collapses to a single thin reveal strip, for
+// a phone screen where every row of chrome is a row the Timeline doesn't get.
+// Collapsing hides real navigation, so the strip that brings it back is never
+// itself hidden; one tap is always enough to undo this.
+function syncTopCollapsed(){ document.querySelector(".app").classList.toggle("top-collapsed",!!DB.config.topCollapsed); }
+document.getElementById("topCollapseBtn").addEventListener("click",()=>{ DB.config.topCollapsed=true; persist(); syncTopCollapsed(); });
+document.getElementById("topReveal").addEventListener("click",()=>{ DB.config.topCollapsed=false; persist(); syncTopCollapsed(); });
 
 /* ---------- PROJECTS ----------
    A project is a research question and the series of experiments run to answer
@@ -3818,10 +3848,21 @@ function renderTimeline(){
     alldayGrid.appendChild(hdr);
   }
   // all-day row in the sticky zone
-  alldayGrid.appendChild(Object.assign(document.createElement("div"),{className:"cal-allday-gutter",textContent:"all-day"}));
+  // The label doubles as the collapse toggle: the row is real content on a
+  // day with several running experiments, and real clutter on a day with
+  // none of the hours visible left to show for it. Collapsing hides the
+  // cells (still real, still holding whatever's in them) rather than the
+  // events themselves — nothing is lost, just not drawn until reopened.
+  const alldayCollapsed=!!DB.config.calAlldayCollapsed;
+  const alldayToggle=document.createElement("button");
+  alldayToggle.type="button"; alldayToggle.className="cal-allday-gutter cal-allday-toggle";
+  alldayToggle.textContent=alldayCollapsed?"all-day ▸":"all-day ▾";
+  alldayToggle.title=alldayCollapsed?"Show all-day events":"Hide all-day events";
+  alldayToggle.onclick=()=>{ DB.config.calAlldayCollapsed=!alldayCollapsed; persist(); renderTimeline(); };
+  alldayGrid.appendChild(alldayToggle);
   const alldayCells=[];
   for(let d=0;d<NCOL;d++){
-    const cell=document.createElement("div"); cell.className="cal-allday-cell";
+    const cell=document.createElement("div"); cell.className="cal-allday-cell"+(alldayCollapsed?" collapsed":"");
     alldayGrid.appendChild(cell); alldayCells.push(cell);
   }
   // scrolling grid gets a gutter spacer to align with the allday zone
@@ -7728,7 +7769,7 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
   try{
     const src=await loadDB();   // "gist" | "local" | "none"
     if(src==="none") seed();
-    migrate(); render(); pruneOrphanFiles();
+    migrate(); render(); pruneOrphanFiles(); syncTopCollapsed();
     // Save locally always (captures any seed/migration changes) — but NEVER push
     // to the Gist automatically on boot. Boot used to always call doWrite(), which
     // pushes to the Gist whenever a token exists, regardless of whether the load
