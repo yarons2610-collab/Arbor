@@ -1972,10 +1972,12 @@ function upcomingNotifications(){
   const today=todayDateStr();
   const taskHorizon=addDays(today,NOTIFY_TASK_LOOKAHEAD_DAYS);
   const taskLookback=addDays(today,-30);
+  // Experiments used to appear here too, gated on !stepDone (an outcome
+  // written). Pulled out: an experiment has no real completion criteria at
+  // this point — no due date that actually means "late" — so it had nothing
+  // honest to say about being "due". Easy to bring back if that changes: this
+  // is the one line that added it.
   const tasks=[
-    ...allSteps().filter(x=>x.deadline&&!stepDone(x)&&x.deadline.slice(0,10)<=taskHorizon&&projById(x.projectId))
-      .map(x=>({kind:"exp",t:{id:x.id,title:x.title,deadline:x.deadline,endDate:x.endDate,projectId:x.projectId},
-                overdue:dueClass(x.deadline,"",x.endDate)==="overdue"})),
     ...taskList().flatMap(t=>taskOccurrences(t,taskLookback,taskHorizon)
       .filter(o=>!occDone(t,o.when))
       .map(o=>({kind:"task",t:{id:t.id,title:t.title,deadline:o.when,endDate:o.endDate,projectId:t.projectId},
@@ -2033,7 +2035,7 @@ function openNotificationsModal(){
       <button class="ntf-openanimal" data-name="${escAttr(a.name)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
     </div>`; }).join("");
     document.getElementById("modal").innerHTML=`<h3>Upcoming &amp; due</h3>
-      <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px">Steps (overdue, or due within ${NOTIFY_TASK_LOOKAHEAD_DAYS} days)</div>
+      <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px">Tasks (overdue, or due within ${NOTIFY_TASK_LOOKAHEAD_DAYS} days)</div>
       ${taskRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
       <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:14px 0 6px">Animal diary — scheduled within ${NOTIFY_DIARY_LOOKAHEAD_DAYS} days</div>
       ${diaryRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
