@@ -35,7 +35,7 @@
   ::-webkit-scrollbar{width:10px;height:10px}
   ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px}
   ::-webkit-scrollbar-track{background:transparent}
-  .app{display:flex;flex-direction:column;height:100vh}
+  .app{display:flex;flex-direction:column;height:100vh;height:100dvh}
 
   .top{display:flex;align-items:center;gap:16px;padding:12px 18px;padding-top:calc(12px + max(env(safe-area-inset-top),24px));border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--bg2),var(--bg))}
   .brand{display:flex;align-items:baseline;gap:10px;user-select:none}
@@ -538,6 +538,7 @@
 
   .scrim{position:absolute;inset:0;background:rgba(4,6,10,.6);backdrop-filter:blur(3px);z-index:40;display:none;align-items:center;justify-content:center}
   .scrim.open{display:flex}
+  .scrim:not(.open) .modal-x{display:none!important}
   .modal{width:460px;max-width:92vw;max-height:88vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:16px;padding:22px;box-shadow:0 30px 80px -30px #000}
   .modal h3{font-family:var(--disp);margin:0 0 16px;font-size:17px}
   .modal .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
@@ -545,6 +546,7 @@
      the native bottom-right resize handle since one screen's "wide enough" isn't another's */
   .modal.modal-wide{width:760px;min-width:460px;max-width:96vw;resize:horizontal}
   .modal-back{font-family:var(--mono);font-size:11px;color:var(--ink-dim);background:transparent;border:0;cursor:pointer;padding:2px 0;margin-bottom:10px;display:inline-flex;align-items:center;gap:5px}
+  .modal-x{display:none}
   .modal-back:hover{color:var(--ink)}
   .toast{position:absolute;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--panel2);border:1px solid var(--line2);color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;z-index:60;pointer-events:none}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
@@ -572,20 +574,42 @@
     #expCal,#readNudge{display:none}
     #saveState{font-size:9px;padding:0 3px}
     /* detail: full-width slide-up sheet */
-    .detail{width:100%!important;top:auto;bottom:0;height:82vh;border-left:none;
+    .detail{width:100%!important;top:auto;bottom:0;height:82vh;height:82dvh;border-left:none;
       border-top:1px solid var(--line2);border-radius:16px 16px 0 0;
       transform:translateY(100%)}
     .detail.open{transform:translateY(0)}
-    /* modals: bottom sheet */
+    /* modals: bottom sheet. A form long enough to push Cancel/Save past the
+       fold used to be closable only by scrolling all the way down to them —
+       murky under a phone keyboard that vh does not account for. This floats
+       above the sheet regardless of its height or scroll position, so there is
+       always a way out without hunting for it. */
+    .modal-x{display:flex;align-items:center;justify-content:center;
+      position:fixed;top:calc(env(safe-area-inset-top) + 10px);right:14px;z-index:41;
+      width:32px;height:32px;border-radius:50%;border:1px solid var(--line2);
+      background:var(--panel);color:var(--ink-dim);font-size:14px;cursor:pointer;
+      box-shadow:0 6px 18px -6px #000}
     .modal{width:100%!important;max-width:100%!important;min-width:0!important;padding:16px;
+      padding-bottom:calc(16px + env(safe-area-inset-bottom));
       border-radius:16px 16px 0 0;position:fixed;bottom:0;left:0;right:0;
-      max-height:92vh;margin:0;resize:none}
+      max-height:92vh;max-height:92dvh;margin:0;resize:none}
     .scrim{align-items:flex-end}
     /* short utility modals (e.g. the "⋯" backup/restore menu): centered popup
        instead of a bottom sheet — a 3-button menu pinned to the bottom reads as
        stranded at the bottom of the screen rather than as a deliberate dialog */
     .modal.modal-center{position:fixed;bottom:auto;top:50%;left:50%;right:auto;
-      transform:translate(-50%,-50%);width:88%!important;border-radius:16px;max-height:80vh}
+      transform:translate(-50%,-50%);width:88%!important;border-radius:16px;max-height:80vh;max-height:80dvh}
+    /* calendar nav bar: Day/Week/Month plus the colour switch made this row
+       wide enough to wrap on a phone, and every extra row here is a row the
+       hourly grid loses — this is the toolbar the user opens the Timeline to
+       get past. Tighter padding and type, the "colour" label text dropped
+       (the buttons still read as Type/Project on their own), and a wrap
+       allowed rather than silently clipped if it still does not fit. */
+    .cal-nav-bar{padding:7px 10px;gap:6px;row-gap:6px;flex-wrap:wrap}
+    .cal-nav-bar h2{font-size:13px;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .cal-nav-btn{padding:4px 9px;font-size:12px}
+    .cal-mode,.cal-colour{flex:0 0 auto}
+    .cal-mode button,.cal-colour button{padding:2px 7px;font-size:10.5px}
+    .cal-colour .cc-lab{display:none}
     /* calendar popover: full-width */
     .cal-pop{position:fixed!important;left:8px!important;right:8px!important;
       width:auto!important;top:auto!important;bottom:8px!important}
@@ -673,7 +697,7 @@
         <div class="dom-tag" id="dDomTag"></div><h3 id="dTitleView">—</h3></div>
       <div class="body" id="dBody"></div>
     </aside>
-    <div class="scrim" id="scrim"><div class="modal" id="modal"></div></div>
+    <div class="scrim" id="scrim"><button type="button" class="modal-x" id="modalX" aria-label="Close">✕</button><div class="modal" id="modal"></div></div>
     <div class="toast" id="toast"></div>
   </div>
 </div>
@@ -2221,6 +2245,27 @@ function deleteStep(pr,id){
 // Which animals this experiment can assign to an arm: the ones it links itself,
 // plus everything its project links — so a cohort linked once at the top is
 // assignable in every experiment without linking it again each time.
+// A diary entry (a weight, a surgery, a training session…) belongs to the
+// experiment through the animal it was logged for — the same test animalsForStep
+// already uses to decide who is in the experiment. Wrapped to the same shape as
+// a scheduled task (title/when/endDate/repeat) so stepRow, taskDone and taskSpan
+// all work on it unchanged; its id keeps the diary entry's own "d_" prefix so a
+// click can tell the two apart.
+function diaryEntryById(id){
+  for(const a of DB.animals){ const e=(a.diary||[]).find(x=>x.id===id); if(e)return {a,e}; }
+  return null;
+}
+function diaryTasksForStep(pr,st){
+  const animals=animalsForStep(pr,st);
+  const out=[];
+  animals.forEach(a=>(a.diary||[]).forEach(e=>{
+    const def=diaryTypeDef(e.type);
+    out.push({ id:e.id, title:`${a.name} — ${def.label}`,
+      when:e.time?`${e.date}T${e.time}`:e.date,
+      endDate:e.endTime?`${e.date}T${e.endTime}`:null, repeat:null });
+  }));
+  return out;
+}
 function animalsForStep(pr,st){
   const ids=new Set(), fromLinks=ls=>(ls||[]).forEach(l=>{
     if(l.kind==="animal")ids.add(l.id);
@@ -2804,8 +2849,14 @@ function renderProjectPlan(id){
     const roots=stepsUnder(pr,null);
     if(!roots.length){ box.innerHTML=`<div class="pc-empty">No experiments yet.</div>`; return; }
     const card=(st,depth)=>{
-      const kids=tasksFor(st.id), open=openSteps.has(st.id), grp=stepGroupTally(pr,st);
-      const nLinks=(st.links||[]).length;
+      // Scheduled tasks and the animals' own diary entries, together — a diary
+      // entry is as much a record of what happened in this experiment as a
+      // task is of what is planned. Alphabetical rather than by date, since the
+      // two now share one list and a date is not a common yardstick between
+      // "not yet scheduled" and "logged this morning".
+      const kids=[...tasksFor(st.id),...diaryTasksForStep(pr,st)]
+        .sort((a,b)=>String(a.title||"").localeCompare(String(b.title||"")));
+      const open=openSteps.has(st.id), grp=stepGroupTally(pr,st);
       return `<div class="exp-card${stepDone(st)?" done":""}" data-id="${st.id}">
         <div class="exp-top">
           <span class="exp-name">${esc(st.title||"(unnamed experiment)")}</span>
@@ -2817,7 +2868,6 @@ function renderProjectPlan(id){
         <div class="exp-meta">
           ${st.deadline?`<span class="em-date">${esc(stepSpan(st))}</span>`:""}
           ${(st.groupDefs||[]).length?`<span class="em-arms ${grp.ok?"ok":""}">${esc(grp.text)}</span>`:""}
-          ${nLinks?`<span>${nLinks} linked</span>`:""}
           ${kids.length?`<button class="exp-caret">${open?"▾":"▸"} ${kids.length} task${kids.length!==1?"s":""}</button>`:""}
         </div>
         ${open&&kids.length?`<div class="step-list">${kids.map(stepRow).join("")}</div>`:""}
@@ -2825,6 +2875,14 @@ function renderProjectPlan(id){
     };
     box.innerHTML=roots.map(st=>card(st,0)).join("");
     box.querySelectorAll(".step-line").forEach(el=>{
+      // a diary row's id keeps the "d_" it was created with; a scheduled task
+      // keeps "tk_" — enough to tell which editor a click should open
+      if(el.dataset.id.startsWith("d_")){
+        const found=diaryEntryById(el.dataset.id); if(!found)return;
+        el.onclick=()=>{ animalSearch=found.a.name; DB.config.animalFilters.search=found.a.name;
+          persist(); switchTo("animals"); };
+        return;
+      }
       const t=taskOf(el.dataset.id); if(!t)return;
       el.onclick=()=>taskEditor(t,()=>renderProjectPlan(id));
     });
@@ -6626,6 +6684,7 @@ function modal(h,opts){ const s=document.getElementById("scrim"); const m=docume
   m.className="modal"+(opts&&opts.center?" modal-center":"")+(opts&&opts.wide?" modal-wide":""); m.innerHTML=h; s.classList.add("open"); return s; }
 function closeModal(){ document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(document.getElementById("modal")); }
 // Modals close only via Cancel / ✕ / Save — NOT by clicking outside, so a stray click never discards an edit.
+document.getElementById("modalX").onclick=()=>closeModal();
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
   // a modal sits above the detail panel, so it gets the key first
