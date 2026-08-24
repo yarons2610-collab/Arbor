@@ -457,7 +457,10 @@
   /* the moment a hold is recognized, before any movement — a real lift off
      the surface, not just a colour change, so it reads unmistakably as "this
      is now picked up" the way Google Calendar's own long-press does */
-  .cal-evt-timed,.cal-evt{transition:transform .12s ease-out,box-shadow .12s ease-out}
+  /* a small overshoot rather than a flat ease-out — the lift settles with a
+     touch of bounce instead of just arriving, which reads as noticeably
+     smoother for a "picked up" motion than easing straight to the target */
+  .cal-evt-timed,.cal-evt{transition:transform .18s cubic-bezier(.34,1.56,.64,1),box-shadow .18s ease-out}
   .cal-evt-timed.holding,.cal-evt.holding{transform:scale(1.07);box-shadow:0 10px 24px rgba(0,0,0,.5);z-index:20}
   .cal-evt-timed.dragging.drag-invalid{opacity:.35}
   .cal-evt-timed .et{font-weight:600;font-size:11px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -1656,6 +1659,7 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
       }
       if(Math.abs(dx)>DRAG_WIGGLE_PX)moved=true;
       if(!moved)return;
+      chip.style.transition="none";     // don't animate the pop away right as real dragging starts moving it
       chip.classList.remove("holding");
       chip.style.opacity=".65"; chip.style.cursor="grabbing";
       const c=colAt(e.clientX); if(c>=0)targetCol=c;
@@ -4196,8 +4200,13 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
   const holdTimer=isTouch?setTimeout(()=>{ armed=true; evtEl.classList.add("holding"); },DRAG_HOLD_MS):null;
   function snap(m){ return Math.round(m/SNAP_MIN)*SNAP_MIN; }
   function lift(){
-    evtEl.classList.remove("holding");
+    // measured while still popped, so the fixed-position ghost starts at
+    // exactly the size that was already on screen — measuring after removing
+    // "holding" was capturing the un-popped size an instant before the ghost
+    // appeared, which snapped it visibly smaller right as the drag began
     rect=evtEl.getBoundingClientRect();
+    evtEl.style.transition="none";    // the explicit size below replaces the pop instantly; animating "holding" away at the same time only fights it
+    evtEl.classList.remove("holding");
     evtEl.classList.add("dragging");
     evtEl.style.position="fixed";
     evtEl.style.left=rect.left+"px"; evtEl.style.top=rect.top+"px";
