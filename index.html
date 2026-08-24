@@ -225,6 +225,14 @@
   .pc-iname{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pc-idet{font-family:var(--mono);font-size:9.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .lit-list{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .note-toolbar{display:flex;gap:6px;margin-bottom:6px}
+  .note-toolbar button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
+  .note-toolbar button:hover{color:var(--ink)}
+  .note-body{min-height:180px;max-height:360px;overflow:auto;background:var(--bg2);border:1px solid var(--line2);
+    border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.5;color:var(--ink)}
+  .note-body:focus{outline:none;border-color:var(--gcamp)}
+  .note-body ul,.note-body ol{margin:4px 0;padding-left:22px}
+  .note-body:empty:before{content:attr(data-ph);color:var(--ink-faint)}
   .lit-row{display:flex;align-items:center;gap:8px;background:var(--panel);padding:9px 12px}
   .lit-main{flex:1;min-width:0}
   .lit-title{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -424,7 +432,14 @@
   /* event chips */
   .cal-evt{border-radius:5px;padding:2px 5px;font-size:11px;line-height:1.3;cursor:pointer;overflow:hidden;position:relative;transition:.1s}
   .cal-evt:hover{filter:brightness(1.18)}
-  .cal-evt .et{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* A narrow week-view day column leaves a title almost no horizontal room —
+     forcing it onto one line then truncating left next to nothing but an
+     ellipsis, which is what "I can't read anything" was. Google Calendar's
+     own answer is to let a title wrap and use the block's height instead of
+     fighting for width on one line; -webkit-line-clamp gives the same
+     multi-line-then-ellipsis behavior (supported by every engine this app
+     actually runs in — Safari and Chromium both ship WebKit's box model). */
+  .cal-evt .et{font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .cal-evt-ck{display:inline-block;vertical-align:-1px;width:9px;height:9px;border-radius:50%;
     border:1.3px solid currentColor;background:transparent;margin-right:4px;padding:0;cursor:pointer}
   .cal-evt-ck.on{background:currentColor}
@@ -433,7 +448,7 @@
   .cal-evt-timed:hover{filter:brightness(1.18)}
   .cal-evt-timed.dragging{opacity:.85;box-shadow:0 6px 18px rgba(0,0,0,.45);cursor:grabbing;z-index:50}
   .cal-evt-timed.dragging.drag-invalid{opacity:.35}
-  .cal-evt-timed .et{font-weight:600;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cal-evt-timed .et{font-weight:600;font-size:11px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .cal-evt-timed .es{font-family:var(--mono);font-size:9px;opacity:.8}
   .cal-evt-resize{position:absolute;left:0;right:0;height:6px;cursor:ns-resize;z-index:3}
   .cal-evt-resize-top{top:-2px}
@@ -5179,6 +5194,20 @@ function protocolModal(id){ libModal("protocol",id); }
 /* ---------- NOTES ----------
    Deliberately unstructured: no project, no experiment, no animal — the one
    place in Arbor that does not ask what something belongs to. */
+// Body is stored as HTML now, so a bulleted or numbered list can actually be
+// a list rather than a typed dash. A note saved before this existed has a
+// plain-text body and no `rich` flag; noteBodyHTML() escapes that safely into
+// equivalent-looking HTML on the way in, and every note is `rich` from its
+// next save onward, so this conversion only ever happens once per old note.
+function noteBodyHTML(n){
+  if(!n) return "";
+  if(n.rich) return n.body||"";
+  return esc(n.body||"").replace(/\n/g,"<br>");
+}
+function noteBodyPreview(n){
+  const tmp=document.createElement("div"); tmp.innerHTML=noteBodyHTML(n);
+  return (tmp.textContent||"").replace(/\s+/g," ").trim();
+}
 function renderNotes(){
   const host=document.getElementById("notes"); host.innerHTML="";
   const top=document.createElement("div");
@@ -5194,10 +5223,13 @@ function renderNotes(){
   const list=document.createElement("div"); list.className="lit-list"; host.appendChild(list);
   [...DB.notes].sort((a,b)=>(b.updated||0)-(a.updated||0)).forEach(n=>{
     const row=document.createElement("div"); row.className="lit-row";
-    const preview=(n.body||"").split("\n").find(l=>l.trim())||"";
-    row.innerHTML=`<div class="lit-main" style="cursor:pointer">
-        <div class="lit-title">${esc(n.title||"(untitled)")}</div>
-        ${preview?`<div class="lit-link">${esc(preview.slice(0,140))}</div>`:""}
+    const preview=noteBodyPreview(n);
+    row.innerHTML=`<div class="lit-main" style="cursor:pointer;display:flex;align-items:center;gap:8px">
+        ${n.drawing?`<img src="${n.drawing}" style="width:28px;height:28px;object-fit:cover;border-radius:5px;border:1px solid var(--line2);flex:0 0 auto;background:#fff">`:""}
+        <div style="min-width:0">
+          <div class="lit-title">${esc(n.title||"(untitled)")}</div>
+          ${preview?`<div class="lit-link">${esc(preview.slice(0,140))}</div>`:""}
+        </div>
       </div>
       <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto;white-space:nowrap">${n.updated?new Date(n.updated).toLocaleDateString():""}</span>
       <button class="lit-del" title="Delete">✕</button>`;
@@ -5209,20 +5241,100 @@ function renderNotes(){
     list.appendChild(row);
   });
 }
-function noteModal(id){
+// A small pad, not a full drawing app: pointer down/move/up onto a canvas,
+// one pen, a clear button. The result is a PNG data URL — kept on the note
+// like any other field, not a separate attachment, since a note's sketch is
+// part of the note.
+function noteDrawModal(existing,onSave,onCancel){
+  modal(`<h3>Drawing</h3>
+    <div style="border:1px solid var(--line2);border-radius:8px;overflow:hidden;touch-action:none;background:#fff">
+      <canvas id="nd_canvas" width="640" height="420" style="width:100%;height:auto;display:block;cursor:crosshair"></canvas>
+    </div>
+    <div class="drow" style="margin-top:10px"><button type="button" class="btn ghost" id="nd_clear">Clear</button></div>
+    <div class="actions"><button class="btn ghost" id="nd_cancel">Cancel</button>
+      <button class="btn accent" id="nd_save">Save drawing</button></div>`,{wide:true});
+  const canvas=document.getElementById("nd_canvas"), ctx=canvas.getContext("2d");
+  const blank=()=>{ ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height); };
+  blank();
+  ctx.strokeStyle="#111"; ctx.lineWidth=3; ctx.lineCap="round"; ctx.lineJoin="round";
+  if(existing){ const img=new Image(); img.onload=()=>ctx.drawImage(img,0,0,canvas.width,canvas.height); img.src=existing; }
+  let drawing=false,lastX=0,lastY=0;
+  const posOf=e=>{ const r=canvas.getBoundingClientRect();
+    return {x:(e.clientX-r.left)*(canvas.width/r.width), y:(e.clientY-r.top)*(canvas.height/r.height)}; };
+  canvas.addEventListener("pointerdown",e=>{ e.preventDefault(); canvas.setPointerCapture(e.pointerId);
+    drawing=true; const p=posOf(e); lastX=p.x; lastY=p.y;
+    ctx.beginPath(); ctx.arc(p.x,p.y,ctx.lineWidth/2,0,Math.PI*2); ctx.fillStyle=ctx.strokeStyle; ctx.fill(); });
+  canvas.addEventListener("pointermove",e=>{ if(!drawing)return; e.preventDefault();
+    const p=posOf(e); ctx.beginPath(); ctx.moveTo(lastX,lastY); ctx.lineTo(p.x,p.y); ctx.stroke(); lastX=p.x; lastY=p.y; });
+  const stop=()=>{ drawing=false; };
+  canvas.addEventListener("pointerup",stop); canvas.addEventListener("pointercancel",stop);
+  document.getElementById("nd_clear").onclick=blank;
+  // Neither button here calls closeModal(): both hand back to whichever note
+  // editor opened this pad, via onSave/onCancel, and that editor decides what
+  // the modal shows next. Calling closeModal() here as well — even after that
+  // handoff had already redrawn the note editor back into #modal — closed the
+  // whole thing a moment later, undoing the redraw and losing the drawing.
+  document.getElementById("nd_save").onclick=()=>onSave(canvas.toDataURL("image/png"));
+  document.getElementById("nd_cancel").onclick=()=>onCancel();
+}
+// `over` seeds the editor from something other than the saved record — the
+// title, body and drawing exactly as they stood a moment ago, before the
+// drawing pad replaced #modal's content and took those fields with it. A
+// plain noteModal(id) (over omitted) always seeds from the saved record,
+// which is what opening a note normally means.
+function noteModal(id,over){
   const n=id?DB.notes.find(x=>x.id===id):null;
+  const titleSeed=over?over.title:(n?n.title:"");
+  const bodySeed=over?over.bodyHTML:noteBodyHTML(n);
+  let pendingDrawing=over?over.drawing:(n?n.drawing||null:null);
   modal(`<h3>${n?"Note":"New note"}</h3>
-    <div class="fld"><label>Title</label><input id="n_title" value="${escAttr(n?n.title:"")}" autofocus></div>
-    <div class="fld"><label>Note</label><textarea id="n_body" rows="14">${esc(n?n.body:"")}</textarea></div>
+    <div class="fld"><label>Title</label><input id="n_title" value="${escAttr(titleSeed||"")}" autofocus></div>
+    <div class="fld"><label>Note</label>
+      <div class="note-toolbar">
+        <button type="button" id="n_ul" title="Bullet list">• List</button>
+        <button type="button" id="n_ol" title="Numbered list">1. List</button>
+      </div>
+      <div id="n_body" class="note-body" contenteditable="true" data-ph="Write here…">${bodySeed||""}</div>
+    </div>
+    <div class="fld"><label>Drawing</label><div id="n_drawwrap"></div></div>
     ${n?`<div class="drow" style="margin-top:14px"><button class="btn danger" id="n_del">Delete note</button></div>`:""}
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="n_save">Save</button></div>`,{wide:true});
+  const bodyEl=document.getElementById("n_body");
+  // mousedown, not click: click fires after focus has already left the
+  // contenteditable, taking its selection with it, and execCommand needs
+  // that selection to know where to insert the list
+  document.getElementById("n_ul").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("insertUnorderedList"); });
+  document.getElementById("n_ol").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("insertOrderedList"); });
+  const drawWrap=document.getElementById("n_drawwrap");
+  const drawDraw=()=>{
+    drawWrap.innerHTML=pendingDrawing
+      ? `<img src="${pendingDrawing}" style="max-width:240px;width:100%;border-radius:8px;border:1px solid var(--line2);display:block;margin-bottom:6px;background:#fff">
+         <button type="button" class="btn ghost" id="n_redraw" style="font-size:11px">Edit drawing</button>
+         <button type="button" class="btn ghost" id="n_rmdraw" style="font-size:11px;margin-left:6px">Remove</button>`
+      : `<button type="button" class="btn ghost" id="n_adddraw" style="font-size:11px">✏️ Add a drawing</button>`;
+    const add=drawWrap.querySelector("#n_adddraw"), edit=drawWrap.querySelector("#n_redraw"), rm=drawWrap.querySelector("#n_rmdraw");
+    // captured now, before noteDrawModal's own modal() call overwrites the
+    // very inputs these read — reading them lazily from inside the callback
+    // would find nothing left to read
+    const openPad=existingDrawing=>{
+      const keep={title:document.getElementById("n_title").value, bodyHTML:document.getElementById("n_body").innerHTML, drawing:pendingDrawing};
+      noteDrawModal(existingDrawing,
+        d=>noteModal(id,{...keep,drawing:d}),
+        ()=>noteModal(id,keep));
+    };
+    if(add) add.onclick=()=>openPad(null);
+    if(edit) edit.onclick=()=>openPad(pendingDrawing);
+    if(rm) rm.onclick=()=>{ pendingDrawing=null; drawDraw(); };
+  };
+  drawDraw();
   document.getElementById("n_save").onclick=()=>{
     const title=document.getElementById("n_title").value.trim();
-    const body=document.getElementById("n_body").value;
-    if(!title&&!body.trim()){ toast("Nothing to save"); return; }
-    if(n){ n.title=title; n.body=body; n.updated=Date.now(); }
-    else DB.notes.push({id:uid("note_"),title,body,updated:Date.now(),created:Date.now()});
+    const body=document.getElementById("n_body").innerHTML;
+    const bodyEmpty=!document.getElementById("n_body").textContent.trim();
+    if(!title&&bodyEmpty&&!pendingDrawing){ toast("Nothing to save"); return; }
+    if(n){ n.title=title; n.body=body; n.rich=true; n.drawing=pendingDrawing; n.updated=Date.now(); }
+    else DB.notes.push({id:uid("note_"),title,body,rich:true,drawing:pendingDrawing,updated:Date.now(),created:Date.now()});
     persist(); closeModal(); renderNotes();
     toast(n?"Note updated":"Note added");
   };
