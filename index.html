@@ -388,7 +388,10 @@
      than just the draggable chips. */
   .cal-outer{display:flex;flex-direction:column;height:100%;overflow:hidden;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
   .cal-allday-zone{flex-shrink:0;border-bottom:2px solid var(--line2);background:var(--bg)}
-  .cal-grid-wrap{flex:1;overflow:auto;padding:0}
+  /* One source of truth for the hour row's height, read by the resize-drag
+     math in JS via getComputedStyle so the two can never drift apart the way
+     a duplicated magic number would. */
+  .cal-grid-wrap{flex:1;overflow:auto;padding:0;--cal-hour-h:52px}
   .week-grid{display:grid;grid-template-columns:52px repeat(var(--cal-cols,7),minmax(0,1fr));min-width:min(640px,100%)}
   .cal-mode{margin-left:auto}
   .cal-mode button{text-transform:none;font-size:11.5px;padding:3px 10px}
@@ -414,8 +417,8 @@
   .cal-allday-cell{border-right:1px solid var(--line);border-bottom:2px solid var(--line2);padding:3px 3px;min-height:28px;display:flex;flex-direction:column;gap:2px;overflow:visible}
   .cal-evt-span{position:relative;z-index:2}
   /* hour rows */
-  .cal-hour-gutter{border-right:1px solid var(--line);padding:0 6px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);text-align:right;height:52px;display:flex;align-items:flex-start;padding-top:3px;box-sizing:border-box}
-  .cal-hour-cell{border-right:1px solid var(--line);border-top:1px solid var(--line);height:52px;position:relative;box-sizing:border-box;cursor:cell}
+  .cal-hour-gutter{border-right:1px solid var(--line);padding:0 6px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);text-align:right;height:var(--cal-hour-h);display:flex;align-items:flex-start;padding-top:3px;box-sizing:border-box}
+  .cal-hour-cell{border-right:1px solid var(--line);border-top:1px solid var(--line);height:var(--cal-hour-h);position:relative;box-sizing:border-box;cursor:cell}
   .cal-hour-cell.today{background:rgba(84,224,138,.025)}
   .cal-hour-cell:last-child{border-right:0}
   /* event chips */
@@ -585,11 +588,17 @@
   .mat-subview.hidden{display:none}
   /* ── MOBILE (≤600px) ─────────────────────────────────────────────────────── */
   @media(max-width:600px){
-    .top{flex-wrap:wrap;gap:8px;padding:8px 10px;padding-top:calc(8px + max(env(safe-area-inset-top),24px))}
-    .brand h1{font-size:15px} .brand .sub{display:none}
+    /* The Timeline is what this whole pass is about, and the app's own
+       chrome — a repeated title, full-size buttons — was costing it more
+       height than the actual hour grid was left with. The phone's own home
+       screen and browser tab already say which app this is, so the wordmark
+       goes; the sync controls stay but drop to icon size. */
+    .top{flex-wrap:wrap;gap:6px;padding:6px 10px;padding-top:calc(6px + max(env(safe-area-inset-top),24px))}
+    .brand{display:none}
     .tabs{order:-1;width:100%;justify-content:stretch}
-    .tab{flex:1;padding:6px 2px;font-size:11px;white-space:nowrap}
+    .tab{flex:1;padding:5px 2px;font-size:11px;white-space:nowrap}
     #expCal,#readNudge{display:none}
+    .top .btn,.top .readbtn{padding:3px 8px;font-size:10.5px}
     #saveState{font-size:9px;padding:0 3px}
     /* detail: full-width slide-up sheet */
     .detail{width:100%!important;top:auto;bottom:0;height:82vh;height:82dvh;border-left:none;
@@ -635,6 +644,12 @@
        a narrower gutter plus minmax(0,1fr) day columns let all 7 days compress
        to fit any phone width; vertical scroll through the hours is unaffected */
     .week-grid{min-width:0;width:100%;grid-template-columns:34px repeat(var(--cal-cols,7),minmax(0,1fr))}
+    /* a 52px hour was the other big cost here — a phone showed only 7-8 hours
+       of the day without scrolling. 38px (still legible, still tall enough
+       for a 15-minute drag to snap somewhere visible) gets close to a full
+       day in view. The resize-drag math reads this same variable, so a drag
+       never falls out of step with what the row actually measures. */
+    .cal-grid-wrap{--cal-hour-h:38px}
     .month-cell{min-height:64px}
     .cal-grid-wrap{overflow-x:hidden}
     .cal-hour-gutter{font-size:8px;padding:0 2px}
@@ -665,6 +680,7 @@
       <button class="tab" data-v="timeline">Timeline</button>
       <button class="tab" data-v="materials">Materials</button>
       <button class="tab on" data-v="animals">Animals</button>
+      <button class="tab" data-v="notes">Notes</button>
     </div>
     <div class="spacer"></div>
     <button class="readbtn" id="notifyNudge" title="Upcoming/due items" style="display:none">🔔<span class="cnt" id="notifyCnt">0</span></button>
@@ -689,6 +705,7 @@
     </div>
     <div class="view hidden wrap" id="outline"></div>
     <div class="view hidden wrap" id="timeline"></div>
+    <div class="view hidden wrap" id="notes"></div>
     <div class="view hidden" id="materials">
       <div class="mat-subtabs" id="matSubTabs">
         <button class="mat-stab on" data-ms="diarytypes">Entry Types</button>
@@ -1144,6 +1161,9 @@ function migrate(){                       // backfill fields added in later vers
   if(!DB.readings)DB.readings=[];
   // Protocols are literature's twin: a titled pointer to where the method lives.
   if(!DB.protocols)DB.protocols=[];
+  // Notes belong to nothing else — a place for anything that doesn't fit a
+  // project, an animal, or an experiment.
+  if(!DB.notes)DB.notes=[];
   if(!DB.sharedVirusCache)DB.sharedVirusCache={viruses:[],deletedIds:[],fetchedAt:0};
   DB.readings.forEach(r=>{ if(!r.track)r.track="core"; if(!r.added)r.added=Date.now(); });
   if(!DB.config)DB.config={...DEFAULT_CONFIG};
@@ -1925,6 +1945,7 @@ function render(){
   else if(currentView==="materials")renderMaterials();
   else if(currentView==="reading")renderReading();
   else if(currentView==="animals")renderAnimals();
+  else if(currentView==="notes")renderNotes();
 }
 function updateReadNudge(){
   const n=0; const btn=document.getElementById("readNudge");   // literature has no read state any more
@@ -4066,7 +4087,11 @@ function isoAddMinutes(iso,mins){
 function beginTimedEventDrag(mode,t,evtEl,downEvent){
   downEvent.preventDefault();
   const startX=downEvent.clientX, startY=downEvent.clientY;
-  const pxPerMin=52/60, MIN_DUR=15, SNAP_MIN=15;
+  // Read from the CSS variable rather than hardcoded, so a shrunk mobile row
+  // height (see the mobile media query) can never fall out of step with what
+  // a drag actually computes — a duplicated number here would silently
+  // miscalibrate every drag the moment the two diverged.
+  const pxPerMin=(parseFloat(getComputedStyle(evtEl).getPropertyValue("--cal-hour-h"))||52)/60, MIN_DUR=15, SNAP_MIN=15;
   const origStart=whenDate(t.deadline);
   const origDuration=t.duration||(t.endDate?Math.max((whenDate(t.endDate)-origStart)/60000,MIN_DUR):60);
   const pad4=n=>String(n).padStart(2,"0");
@@ -5148,6 +5173,62 @@ function renderReading(hostId){ renderLib("reading",hostId||"reading"); }
 function readingModal(id){ libModal("reading",id); }
 function renderProtocols(hostId){ renderLib("protocol",hostId||"ms-protocols"); }
 function protocolModal(id){ libModal("protocol",id); }
+
+/* ---------- NOTES ----------
+   Deliberately unstructured: no project, no experiment, no animal — the one
+   place in Arbor that does not ask what something belongs to. */
+function renderNotes(){
+  const host=document.getElementById("notes"); host.innerHTML="";
+  const top=document.createElement("div");
+  top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px";
+  top.innerHTML=`<button class="btn accent" id="addNote" style="margin-left:auto;font-size:12px">＋ Note</button>`;
+  host.appendChild(top);
+  top.querySelector("#addNote").onclick=()=>noteModal();
+  if(!DB.notes.length){
+    host.appendChild(Object.assign(document.createElement("div"),
+      {className:"empty",textContent:"Nothing here yet — a place for anything that doesn't belong to a project, an animal, or an experiment."}));
+    return;
+  }
+  const list=document.createElement("div"); list.className="lit-list"; host.appendChild(list);
+  [...DB.notes].sort((a,b)=>(b.updated||0)-(a.updated||0)).forEach(n=>{
+    const row=document.createElement("div"); row.className="lit-row";
+    const preview=(n.body||"").split("\n").find(l=>l.trim())||"";
+    row.innerHTML=`<div class="lit-main" style="cursor:pointer">
+        <div class="lit-title">${esc(n.title||"(untitled)")}</div>
+        ${preview?`<div class="lit-link">${esc(preview.slice(0,140))}</div>`:""}
+      </div>
+      <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto;white-space:nowrap">${n.updated?new Date(n.updated).toLocaleDateString():""}</span>
+      <button class="lit-del" title="Delete">✕</button>`;
+    row.querySelector(".lit-main").onclick=()=>noteModal(n.id);
+    row.querySelector(".lit-del").onclick=()=>{
+      if(!confirm(`Delete "${n.title||"this note"}"?`))return;
+      DB.notes=DB.notes.filter(x=>x.id!==n.id); persist(); renderNotes(); toast("Note deleted");
+    };
+    list.appendChild(row);
+  });
+}
+function noteModal(id){
+  const n=id?DB.notes.find(x=>x.id===id):null;
+  modal(`<h3>${n?"Note":"New note"}</h3>
+    <div class="fld"><label>Title</label><input id="n_title" value="${escAttr(n?n.title:"")}" autofocus></div>
+    <div class="fld"><label>Note</label><textarea id="n_body" rows="14">${esc(n?n.body:"")}</textarea></div>
+    ${n?`<div class="drow" style="margin-top:14px"><button class="btn danger" id="n_del">Delete note</button></div>`:""}
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn accent" id="n_save">Save</button></div>`,{wide:true});
+  document.getElementById("n_save").onclick=()=>{
+    const title=document.getElementById("n_title").value.trim();
+    const body=document.getElementById("n_body").value;
+    if(!title&&!body.trim()){ toast("Nothing to save"); return; }
+    if(n){ n.title=title; n.body=body; n.updated=Date.now(); }
+    else DB.notes.push({id:uid("note_"),title,body,updated:Date.now(),created:Date.now()});
+    persist(); closeModal(); renderNotes();
+    toast(n?"Note updated":"Note added");
+  };
+  if(n) document.getElementById("n_del").onclick=()=>{
+    if(!confirm(`Delete "${n.title||"this note"}"?`))return;
+    DB.notes=DB.notes.filter(x=>x.id!==n.id); persist(); closeModal(); renderNotes(); toast("Note deleted");
+  };
+}
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
 let animalCohort="all", animalExperiment="all", animalGroup="all", animalStatus="all", animalSearch="", animalSort="name";
