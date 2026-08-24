@@ -385,8 +385,10 @@
   .cal-colour{flex:0 0 auto;align-items:center}
   .cal-colour button{text-transform:none;font-size:11.5px;padding:3px 10px}
   .cal-colour .cc-lab{font-size:10px;color:var(--ink-faint);letter-spacing:.04em;margin-right:1px}
-  .month-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
-  .month-cell{background:var(--panel);min-height:96px;padding:4px 5px;display:flex;flex-direction:column;gap:2px;overflow:visible}
+  .month-body{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line)}
+  .month-hdr-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line)}
+  .month-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:min-content;gap:2px 1px;background:var(--line)}
+  .month-cell{background:var(--panel);min-height:96px;padding:4px 5px}
   .month-cell.out{opacity:.38}
   .month-cell.today{box-shadow:inset 0 0 0 2px var(--amber)}
   .mc-num{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
@@ -1536,8 +1538,12 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
     chip.setPointerCapture(ev.pointerId);
     const colAt=x=>{ for(let i=0;i<cells.length;i++){ const r=cells[i].getBoundingClientRect();
       if(x>=r.left&&x<=r.right)return i; } return -1; };
+    // A tap that wobbles a few pixels used to cross this line and get
+    // treated as a drag, so an ordinary click could nudge a task without
+    // meaning to. Widened rather than adding a confirmation step — the
+    // gesture just has to be a little more deliberate before it commits.
     const onMove=e=>{
-      if(Math.abs(e.clientX-startX)>4)moved=true;
+      if(Math.abs(e.clientX-startX)>9)moved=true;
       if(!moved)return;
       chip.style.opacity=".65"; chip.style.cursor="grabbing";
       const c=colAt(e.clientX); if(c>=0)targetCol=c;
@@ -3497,19 +3503,36 @@ function renderMonthView(host){
 
   const gridStart=new Date(base); gridStart.setDate(1-base.getDay());
   const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const grid=document.createElement("div"); grid.className="month-grid"; outer.appendChild(grid);
-  DAYS.forEach(d=>grid.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",innerHTML:`<div class="dow">${d}</div>`})));
+  const body=document.createElement("div"); body.className="month-body"; outer.appendChild(body);
+  const hdrRow=document.createElement("div"); hdrRow.className="month-hdr-row"; body.appendChild(hdrRow);
+  DAYS.forEach(d=>hdrRow.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",innerHTML:`<div class="dow">${d}</div>`})));
 
   const keys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
-  const byDay={};
-  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(!keys.has(e.type))return; (byDay[e.date]=byDay[e.date]||[]).push({a,e}); }));
-  // Project steps belong here too — a month is exactly the scale at which you
-  // plan them. A step spanning days is ONE bar, but a month wraps, so the span
-  // is cut at each week boundary and each week's piece gets its own bar.
   const pad=n=>String(n).padStart(2,"0");
   const dkey=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
   const gEnd=new Date(gridStart); gEnd.setDate(gEnd.getDate()+41);
+
+  // Every chip — a diary entry (always one day) or an experiment/task segment
+  // clipped to a week (it may run for several) — becomes one {colStart,span}
+  // item in the week it falls in. Packed into the fewest tracks that keep any
+  // two overlapping-in-date items off the same track, the same idea the hourly
+  // grid already uses for two tasks sharing an hour, generalized across a
+  // whole week instead of a single hour. A multi-week bar and a plain Monday
+  // task used to be positioned independently within their own day's stack and
+  // could land on the same pixel row purely by coincidence — this is what was
+  // producing the illegible overlap.
+  const weeks=Array.from({length:6},()=>[]);
+  const place=(diffDays,span,item)=>{
+    if(diffDays<0||diffDays>41)return;
+    const weekIdx=Math.floor(diffDays/7);
+    const colStart=diffDays-weekIdx*7;
+    weeks[weekIdx].push({...item,colStart,span:Math.min(span,7-colStart)});
+  };
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
+    if(!keys.has(e.type))return;
+    const d=whenDate(e.date); d.setHours(0,0,0,0);
+    place(Math.round((d-gridStart)/864e5),1,{kind:"diary",a,e});
+  }));
   const monthItems=[
     ...allSteps().filter(x=>x.deadline&&projById(x.projectId))
       .map(x=>({kind:"exp",title:x.title,deadline:x.deadline,endDate:x.endDate,src:x})),
@@ -3524,42 +3547,60 @@ function renderMonthView(host){
       const segEnd=new Date(d); segEnd.setDate(segEnd.getDate()+(6-segEnd.getDay()));
       if(segEnd>d1) segEnd.setTime(d1.getTime());
       const span=Math.round((segEnd-segStart)/864e5)+1;
-      (byDay[dkey(segStart)]=byDay[dkey(segStart)]||[]).push({st,span});
+      place(Math.round((segStart-gridStart)/864e5),span,{kind:"step",st});
       d=new Date(segEnd); d.setDate(d.getDate()+1);
     }
   });
+  weeks.forEach(items=>{
+    // widest first: a multi-day bar claims its track before the single-day
+    // items around it have to be routed around it, which is what keeps a
+    // long-running experiment on one steady row all month rather than hopping
+    // tracks as shorter items come and go beside it
+    items.sort((a,b)=>a.colStart-b.colStart||b.span-a.span);
+    const tracks=[];
+    items.forEach(it=>{
+      it.colEnd=it.colStart+it.span-1;
+      let t=tracks.findIndex(occ=>!occ.some(o=>it.colStart<=o.colEnd&&it.colEnd>=o.colStart));
+      if(t<0){ tracks.push([]); t=tracks.length-1; }
+      tracks[t].push(it); it.track=t;
+    });
+    items._trackCount=tracks.length;
+  });
+
   const today0=todayDateStr();
-  for(let i=0;i<42;i++){
-    const day=new Date(gridStart); day.setDate(gridStart.getDate()+i);
-    const pad=n=>String(n).padStart(2,"0");
-    const key=`${day.getFullYear()}-${pad(day.getMonth()+1)}-${pad(day.getDate())}`;
-    const cell=document.createElement("div");
-    cell.className="month-cell"+(day.getMonth()!==base.getMonth()?" out":"")+(day.getTime()===today.getTime()?" today":"");
-    cell.innerHTML=`<div class="mc-num">${day.getDate()}</div>`;
-    (byDay[key]||[]).forEach(({a,e,st,span})=>{
-      if(st){
-        const col=calColor(st);
-        const chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
-        // widen across the days it covers: each extra column adds its own width
-        // plus the grid gap and the two cell paddings that fall between them
-        chip.style.cssText=`background:${col}22;border-left:3px solid ${col};color:${col};`
-          +(span>1?`width:calc(${span*100}% + ${(span-1)*11}px);`:"");
+  weeks.forEach((items,w)=>{
+    const trackCount=Math.max(items._trackCount||0,1);
+    const weekRow=document.createElement("div"); weekRow.className="month-week"; body.appendChild(weekRow);
+    for(let c=0;c<7;c++){
+      const day=new Date(gridStart); day.setDate(gridStart.getDate()+w*7+c);
+      const bg=document.createElement("div");
+      bg.className="month-cell"+(day.getMonth()!==base.getMonth()?" out":"")+(day.getTime()===today.getTime()?" today":"");
+      bg.style.gridColumn=`${c+1} / ${c+2}`; bg.style.gridRow=`1 / ${trackCount+1}`;
+      bg.innerHTML=`<div class="mc-num">${day.getDate()}</div>`;
+      weekRow.appendChild(bg);
+    }
+    items.forEach(it=>{
+      let chip;
+      if(it.kind==="step"){
+        const st=it.st, col=calColor(st);
+        chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
+        chip.style.cssText=`background:${col}22;border-left:3px solid ${col};color:${col}`;
         chip.innerHTML=`<div class="et">${esc(st.title||"(unnamed task)")}</div>`;
         chip.title=`${(projById(st.projectId)||{}).name||""} — ${st.title||""}`;
         chip.onclick=()=>openCalItem(st);
-        cell.appendChild(chip); return;
+      } else {
+        const {a,e}=it, def=diaryTypeDef(e.type), dc=diaryColors(a,def);
+        chip=document.createElement("div"); chip.className="cal-evt";
+        chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
+        chip.innerHTML=`<div class="et">${def.icon} ${esc(a.name)}${e.date>today0?" (planned)":""}</div>`;
+        chip.title=`${def.label} — ${a.name} — ${e.date}`;
+        chip.onclick=()=>{ animalSearch=a.name; DB.config.animalFilters.search=a.name; persist(); switchTo("animals"); };
       }
-      const def=diaryTypeDef(e.type);
-      const chip=document.createElement("div"); chip.className="cal-evt";
-      const dc=diaryColors(a,def);
-      chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
-      chip.innerHTML=`<div class="et">${def.icon} ${esc(a.name)}${e.date>today0?" (planned)":""}</div>`;
-      chip.title=`${def.label} — ${a.name} — ${e.date}`;
-      chip.onclick=()=>{ animalSearch=a.name; DB.config.animalFilters.search=a.name; persist(); switchTo("animals"); };
-      cell.appendChild(chip);
+      chip.style.gridColumn=`${it.colStart+1} / ${it.colStart+1+it.span}`;
+      chip.style.gridRow=`${it.track+1} / ${it.track+2}`;
+      weekRow.appendChild(chip);
     });
-    grid.appendChild(cell);
-  }
+  });
 }
 function renderTimeline(){
   const host=document.getElementById("timeline");
@@ -3933,7 +3974,8 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
   function onMove(e){
     const dx=e.clientX-startX, dy=e.clientY-startY;
     if(!moved){
-      if(Math.abs(dx)<=3&&Math.abs(dy)<=3) return;
+      // same widened tolerance as the all-day strip, for the same reason
+      if(Math.abs(dx)<=9&&Math.abs(dy)<=9) return;
       moved=true; lift();
     }
     if(mode==="move"){
