@@ -451,7 +451,11 @@
   .cal-evt .es{font-family:var(--mono);font-size:9px;opacity:.8}
   .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:none}
   .cal-evt-timed:hover{filter:brightness(1.18)}
-  .cal-evt-timed.dragging{opacity:.85;box-shadow:0 6px 18px rgba(0,0,0,.45);cursor:grabbing;z-index:50}
+  /* full colour, not faded — Google Calendar's own dragged block stays fully
+     vivid the whole time; a translucent copy is what's left behind at the
+     original slot, not the block actually being moved */
+  .cal-evt-timed.dragging{box-shadow:0 6px 18px rgba(0,0,0,.45);cursor:grabbing;z-index:50}
+  .cal-evt-ghost{opacity:.32;pointer-events:none}
   /* the moment a touch-and-hold is recognized, before any movement — visible
      confirmation that the hold registered and it is now safe to drag */
   /* the moment a hold is recognized, before any movement — a real lift off
@@ -1661,7 +1665,7 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
       if(!moved)return;
       chip.style.transition="none";     // don't animate the pop away right as real dragging starts moving it
       chip.classList.remove("holding");
-      chip.style.opacity=".65"; chip.style.cursor="grabbing";
+      chip.style.opacity=".92"; chip.style.cursor="grabbing";
       const c=colAt(e.clientX); if(c>=0)targetCol=c;
     };
     const onUp=()=>{
@@ -4196,15 +4200,22 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
   // touch waits out DRAG_HOLD_MS held roughly still before anything is
   // allowed to move; a mouse is armed from the first instant, same as before
   const isTouch=downEvent.pointerType!=="mouse";
-  let armed=!isTouch, moved=false, cancelled=false, rect=null, dropTarget=null;
+  let armed=!isTouch, moved=false, cancelled=false, rect=null, dropTarget=null, ghostEl=null;
   const holdTimer=isTouch?setTimeout(()=>{ armed=true; evtEl.classList.add("holding"); },DRAG_HOLD_MS):null;
   function snap(m){ return Math.round(m/SNAP_MIN)*SNAP_MIN; }
   function lift(){
-    // measured while still popped, so the fixed-position ghost starts at
-    // exactly the size that was already on screen — measuring after removing
-    // "holding" was capturing the un-popped size an instant before the ghost
-    // appeared, which snapped it visibly smaller right as the drag began
+    // measured while still popped, so the lifted block starts at exactly the
+    // size that was already on screen — measuring after removing "holding"
+    // was capturing the un-popped size an instant before the block became
+    // fixed-position, which snapped it visibly smaller right as the drag began
     rect=evtEl.getBoundingClientRect();
+    // a translucent copy left sitting in the original slot — Google
+    // Calendar's own anchor for "this is where it came from", and without it
+    // the origin cell just went blank the instant a drag started
+    ghostEl=evtEl.cloneNode(true);
+    ghostEl.classList.add("cal-evt-ghost");
+    ghostEl.classList.remove("holding");
+    evtEl.parentNode.insertBefore(ghostEl,evtEl);
     evtEl.style.transition="none";    // the explicit size below replaces the pop instantly; animating "holding" away at the same time only fights it
     evtEl.classList.remove("holding");
     evtEl.classList.add("dragging");
@@ -4254,6 +4265,7 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
   function cleanup(){
     clearTimeout(holdTimer);
     evtEl.classList.remove("holding");
+    if(ghostEl){ ghostEl.remove(); ghostEl=null; }
     document.removeEventListener("pointermove",onMove);
     document.removeEventListener("pointerup",onUp);
     document.removeEventListener("pointercancel",onCancel);
