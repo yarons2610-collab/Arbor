@@ -4262,7 +4262,17 @@ function wireHourCellCreate(cell,day,h0){
       return `${dayISO}T${p2(Math.floor(totalMin/60))}:${p2(totalMin%60)}`;
     };
     const startWhen=wholeAt(startY);
-    const holdTimer=isTouch?setTimeout(()=>{ armed=true; cell.classList.add("create-armed"); },DRAG_HOLD_MS):null;
+    // touch-action stays the default (auto) up to this point specifically so a
+    // plain swipe scrolls the Timeline unimpeded. The instant the hold fires —
+    // before the finger has actually moved — flip it to none: with no scroll
+    // gesture underway yet to interrupt, this is the one moment a touch-action
+    // change is guaranteed to land before the browser's own gesture recognizer
+    // has to decide. Without this, preventDefault() alone in onMove is racing
+    // that recognizer and reliably loses on real touch hardware, unlike the
+    // pointer-simulated drags this was verified with — cal-evt-timed (moving an
+    // existing event) sidesteps the race entirely with a static touch-action:
+    // none, which an empty cell can't use since it must stay scrollable pre-hold.
+    const holdTimer=isTouch?setTimeout(()=>{ armed=true; cell.classList.add("create-armed"); cell.style.touchAction="none"; },DRAG_HOLD_MS):null;
     function paintPreview(curWhen){
       const a=startWhen<curWhen?startWhen:curWhen, b=startWhen<curWhen?curWhen:startWhen;
       if(a===b){ if(previewEl){ previewEl.remove(); previewEl=null; } return; }
@@ -4274,6 +4284,7 @@ function wireHourCellCreate(cell,day,h0){
     function cleanup(){
       clearTimeout(holdTimer);
       cell.classList.remove("create-armed");
+      cell.style.touchAction="";
       document.removeEventListener("pointermove",onMove);
       document.removeEventListener("pointerup",onUp);
       document.removeEventListener("pointercancel",onCancel);
