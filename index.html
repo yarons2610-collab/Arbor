@@ -1661,7 +1661,9 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
         if(Math.abs(dx)>DRAG_WIGGLE_PX||Math.abs(dy)>DRAG_WIGGLE_PX){ cancelled=true; clearTimeout(holdTimer); }
         return;
       }
-      if(Math.abs(dx)>DRAG_WIGGLE_PX)moved=true;
+      // same as the hourly grid: touch already proved intent through the
+      // hold, so it shouldn't also need to clear the mouse's wiggle gate
+      if(isTouch||Math.abs(dx)>DRAG_WIGGLE_PX)moved=true;
       if(!moved)return;
       chip.style.transition="none";     // don't animate the pop away right as real dragging starts moving it
       chip.classList.remove("holding");
@@ -4234,32 +4236,50 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
       return;
     }
     if(!moved){
-      if(Math.abs(dx)<=DRAG_WIGGLE_PX&&Math.abs(dy)<=DRAG_WIGGLE_PX) return;
+      // the wiggle tolerance is what tells a mouse click apart from a mouse
+      // drag — its only signal, since a mouse has no hold. Touch already
+      // proved intent through the hold that got it here; making it clear a
+      // second, redundant wiggle on top of that was a dead zone right at the
+      // start of every drag — the block sat still, then jumped straight to
+      // wherever the finger already was the moment the 9px finally cleared,
+      // rather than moving with it from the first pixel.
+      if(!isTouch&&Math.abs(dx)<=DRAG_WIGGLE_PX&&Math.abs(dy)<=DRAG_WIGGLE_PX) return;
       moved=true; lift();
     }
     if(mode==="move"){
-      // rigid/snapped: the block jumps to occupy the exact cell under the cursor,
-      // and simply stays put (no free-floating) when the cursor leaves the grid.
+      // The block follows the finger continuously — every pixel of movement
+      // shows — and only the value that actually gets *committed* snaps to
+      // the 15-minute grid. Snapping the visual itself, as this used to do,
+      // meant the block only actually moved once every ~9-13px of real
+      // movement had accumulated: motion in discrete little jumps instead of
+      // a smooth drag, regardless of how good the pop-in or the colour looked.
       const under=document.elementFromPoint(e.clientX,e.clientY);
       const cell=under&&under.closest&&under.closest(".cal-hour-cell");
       if(cell){
         const cr=cell.getBoundingClientRect();
-        const minuteInHour=Math.min(Math.max(snap(((e.clientY-cr.top)/cr.height)*60),0),60-SNAP_MIN);
+        const rawMinuteInHour=Math.min(Math.max(((e.clientY-cr.top)/cr.height)*60,0),59.999);
+        const snappedMinuteInHour=Math.min(Math.max(snap(rawMinuteInHour),0),60-SNAP_MIN);
         evtEl.style.left=cr.left+"px"; evtEl.style.width=cr.width+"px";
-        evtEl.style.top=(cr.top+(minuteInHour/60)*cr.height)+"px";
+        evtEl.style.top=(cr.top+(rawMinuteInHour/60)*cr.height)+"px";
         evtEl.classList.remove("drag-invalid");
-        dropTarget={date:cell.dataset.date,hour:+cell.dataset.hour,minute:minuteInHour};
+        dropTarget={date:cell.dataset.date,hour:+cell.dataset.hour,minute:snappedMinuteInHour};
       } else {
         evtEl.classList.add("drag-invalid");
       }
     } else if(mode==="resize-bottom"){
-      const newDur=Math.max(origDuration+snap(dy/pxPerMin),MIN_DUR);
-      evtEl.style.height=Math.max((newDur/60)*52,14)+"px";
+      // same idea: the edge tracks the finger continuously, onUp snaps the
+      // duration that's actually saved. (newDur/60)*52 below was also a
+      // second, separate bug — hardcoded to the desktop row height, so a
+      // live resize on mobile's 38px rows drew the wrong height the whole
+      // time it was being dragged, even though the final committed value
+      // in onUp was always correct.
+      const rawDur=Math.max(origDuration+dy/pxPerMin,MIN_DUR);
+      evtEl.style.height=Math.max(rawDur*pxPerMin,14)+"px";
     } else if(mode==="resize-top"){
-      const newDur=Math.max(origDuration-snap(dy/pxPerMin),MIN_DUR);
-      const actualDelta=origDuration-newDur;
+      const rawDur=Math.max(origDuration-dy/pxPerMin,MIN_DUR);
+      const actualDelta=origDuration-rawDur;
       evtEl.style.top=(rect.top+actualDelta*pxPerMin)+"px";
-      evtEl.style.height=Math.max((newDur/60)*52,14)+"px";
+      evtEl.style.height=Math.max(rawDur*pxPerMin,14)+"px";
     }
   }
   function cleanup(){
