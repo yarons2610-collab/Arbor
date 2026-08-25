@@ -1220,6 +1220,10 @@ function setSaveState(s,detail){
 // real pause in typing, and never fires more often than SYNC_MIN_GAP.
 const SYNC_IDLE=6000, SYNC_MIN_GAP=20000;
 let syncTimer=null, lastSyncAt=0, syncInFlight=false, syncPending=false, syncBackoffUntil=0;
+// true from the moment any local edit is queued until it's actually landed on
+// the Gist — autoPull() below must never overwrite DB while this is true, or
+// an edit that hasn't been pushed yet gets silently discarded under it.
+let localDirty=false;
 
 async function doWrite(){
   setSaveState("saving");
@@ -1242,7 +1246,7 @@ async function runSync(){
   setSaveState("saving");
   try{
     await gistSave(JSON.stringify(DB));
-    lastSyncAt=Date.now(); syncBackoffUntil=0; setSaveState("synced");
+    lastSyncAt=Date.now(); syncBackoffUntil=0; localDirty=false; setSaveState("synced");
   }catch(e){
     lastSyncAt=Date.now();
     // 403/429 from GitHub means "slow down", not "you are broken" — back off and
@@ -1262,8 +1266,57 @@ async function runSync(){
     if(syncPending)scheduleSync();
   }
 }
-function persist(){ clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160); }
+function persist(){
+  DB.updatedAt=Date.now(); localDirty=true;
+  clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160);
+}
 async function flushSave(){ clearTimeout(saveTimer); try{ window.arbor.saveSync(DB); }catch(e){} }
+
+/* ── PASSIVE PULL: catches up with another device's edits while this tab
+   just sits open, no reload needed. Push (above) already happens on every
+   local edit; this is the missing other half — without it, two devices open
+   at once only ever converge the next time one of them is reloaded. Polls on
+   a timer, plus once immediately whenever the tab regains focus (the common
+   case — you edited on your phone, then looked back at your laptop).
+
+   Safety is the entire design here, since this runs with no user action to
+   confirm it: DB.updatedAt (bumped by persist(), above) says how fresh this
+   device's own copy is, and a pulled copy only replaces DB if its own
+   updatedAt is strictly newer — never on a tie, never on a fetch that raced
+   ahead of gistLoad() somehow returning something older. localDirty being
+   true means an edit is queued but not yet actually on the Gist; pulling
+   over it would silently discard that edit the instant it landed, so this
+   is skipped entirely until a push has actually gone through. And it never
+   swaps DB out from under someone mid-type — a modal open, or focus sitting
+   in any input/textarea/select/contenteditable, defers the pull to the next
+   tick rather than yanking the DOM out from under them. */
+const PULL_INTERVAL=15000;
+let pullTimer=null;
+function editingInProgress(){
+  const scrim=document.getElementById("scrim");
+  if(scrim&&scrim.classList.contains("open"))return true;
+  const ae=document.activeElement;
+  return !!ae&&(["INPUT","TEXTAREA","SELECT"].includes(ae.tagName)||ae.isContentEditable);
+}
+async function autoPull(){
+  if(!gistToken()||localDirty||syncInFlight||syncPending||editingInProgress())return;
+  try{
+    const remote=await gistLoad();
+    if(!remote||!remote.domains)return;
+    if((remote.updatedAt||0)<=(DB.updatedAt||0))return;   // nothing newer than what we already have
+    DB=remote; migrate();
+    try{ await window.arbor.save(DB); }catch(e){}          // keep the local disk copy in step too
+    render(); syncTopCollapsed();
+    setSaveState("synced");
+  }catch(e){ console.warn("Auto-pull failed",e); }          // background nicety — never surface this as an error
+}
+function scheduleAutoPull(){
+  clearInterval(pullTimer);
+  if(!gistToken())return;
+  pullTimer=setInterval(autoPull,PULL_INTERVAL);
+}
+function stopAutoPull(){ clearInterval(pullTimer); pullTimer=null; }
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) autoPull(); });
 function migrate(){                       // backfill fields added in later versions
   if(!DB.readings)DB.readings=[];
   // Protocols are literature's twin: a titled pointer to where the method lives.
@@ -7514,6 +7567,7 @@ function showGistSetup(){
           await gistSave(JSON.stringify(DB));}
       }catch(e){await gistSave(JSON.stringify(DB));}
       setSaveState("synced");
+      scheduleAutoPull();
       setTimeout(()=>closeModal(),1400);
     }catch(e){msg("Error: "+e.message,"var(--overdue)");}
   };
@@ -7524,6 +7578,7 @@ function showGistSetup(){
   if(disc)disc.onclick=()=>{
     if(confirm("Disconnect GitHub sync? Your data stays saved locally.")){
       localStorage.removeItem(GIST_TOKEN_KEY);localStorage.removeItem(GIST_ID_KEY);
+      stopAutoPull();
       closeModal();
       const el=document.getElementById("saveState");
       if(el){el.textContent="local only";el.style.color="var(--amber)";}
@@ -8111,6 +8166,7 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
     } else {
       setSaveState(storageOK2?"saved":"failed");
     }
+    scheduleAutoPull();
   }catch(e){ console.error("Arbor failed to start:",e); }
 })();
 </script>
