@@ -256,7 +256,6 @@
   .plan-head{display:flex;align-items:center;gap:10px;margin-bottom:18px}
   .plan-head .plan-name{flex:1;min-width:0;width:auto;font-family:var(--disp);font-size:19px;font-weight:600;background:transparent;border:1px solid transparent;border-radius:8px;padding:4px 8px;color:var(--ink)}
   .plan-head .plan-name:focus{border-color:var(--line2);background:var(--panel2);outline:none}
-  .plan-pal{flex:0 0 auto;display:flex;gap:4px}
   .pc-steps{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);padding:2px 0 6px}
   .step-row{display:flex;align-items:center;gap:6px;padding:3px 0}
   .step-caret,.step-edit,.step-add,.step-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:1px 6px;font-size:11px;cursor:pointer;flex:0 0 auto}
@@ -437,7 +436,13 @@
   .cal-evt-span{position:relative;z-index:2}
   /* hour rows */
   .cal-hour-gutter{border-right:1px solid var(--line);padding:0 6px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);text-align:right;height:var(--cal-hour-h);display:flex;align-items:flex-start;padding-top:3px;box-sizing:border-box}
-  .cal-hour-cell{border-right:1px solid var(--line);border-top:1px solid var(--line);height:var(--cal-hour-h);position:relative;box-sizing:border-box;cursor:cell}
+  /* touch-action:none, same as cal-evt-timed and for the same reason: WebKit
+     only honors the touch-action value that was already in place at
+     touchstart, not one set later once a hold confirms intent — so this has
+     to be static, not toggled from JS. That means native touch scrolling is
+     off on every hour cell permanently; wireHourCellCreate() drives
+     .cal-grid-wrap's scrollTop itself for a plain swipe to make up for it. */
+  .cal-hour-cell{border-right:1px solid var(--line);border-top:1px solid var(--line);height:var(--cal-hour-h);position:relative;box-sizing:border-box;cursor:cell;touch-action:none}
   .cal-hour-cell.today{background:rgba(84,224,138,.025)}
   .cal-hour-cell:last-child{border-right:0}
   /* event chips */
@@ -721,6 +726,14 @@
     .cal-day-hdr .dow{font-size:8.5px}
     .cal-day-hdr .dom{font-size:15px}
     .cal-day-hdr.today .dom{width:24px;height:24px}
+    /* a phone's timed chips are narrow enough that the time line was costing
+       a whole row of the block's height for something the block's own
+       position against the hour grid already conveys approximately — dropping
+       it and letting the title wrap into that space (rather than clamping at
+       2 lines) shows more of the actual title on a short block. Desktop has
+       room for both, so this is mobile-only. */
+    .cal-evt-timed .es{display:none}
+    .cal-evt-timed .et{display:block;-webkit-line-clamp:unset}
     /* animals pipeline chips: smaller, and never wrap mid-chip (the whole chip
        wraps onto its own line via the flex-wrap row instead) */
     .pipe-chip{padding:2px 6px;font-size:9.5px}
@@ -2631,9 +2644,9 @@ function taskEditor(t,after){
       <div class="dow-every"><span>repeat every</span>
         <input id="tk_ivl" type="number" min="1" max="12" value="1"><span>week(s)</span></div></div>
     <div class="fld"><label>Colour</label>
-      <div class="taglist" id="tk_colors">
-        <span class="tag" data-c="" style="cursor:pointer;${!t.color?"box-shadow:0 0 0 2px var(--ink-dim)":""}">Automatic</span>
-        ${GCAL_COLORS.map(([hex,name])=>`<span class="tag" data-c="${hex}" title="${esc(name)}" style="cursor:pointer;border-color:${hex};${t.color===hex?`box-shadow:0 0 0 2px ${hex}`:""}"><span style="width:12px;height:12px;border-radius:3px;background:${hex};display:inline-block"></span></span>`).join("")}
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="tag" id="tk_color_auto" data-c="" style="cursor:pointer;${!t.color?"box-shadow:0 0 0 2px var(--ink-dim)":""}">Automatic</span>
+        <input type="color" id="tk_color_pick" value="${t.color||GCAL_COLORS[0][0]}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer">
       </div></div>
     ${t.isEvent?"":`<div class="fld"><label>Part of</label>
       <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>`}
@@ -2664,12 +2677,13 @@ function taskEditor(t,after){
   // an event has no "Part of" field at all — nothing to attach to a project
   const tkExp=document.getElementById("tk_exp");
   if(tkExp) tkExp.addEventListener("change",e=>setTaskTarget(t,e.target.value));
-  document.getElementById("tk_colors").addEventListener("click",e=>{
-    const tag=e.target.closest(".tag"); if(!tag)return;
-    t.color=tag.dataset.c||null; persist();
-    document.querySelectorAll("#tk_colors .tag").forEach(x=>{
-      x.style.boxShadow=(x===tag)?(tag.dataset.c?`0 0 0 2px ${tag.dataset.c}`:"0 0 0 2px var(--ink-dim)"):"";
-    });
+  document.getElementById("tk_color_auto").addEventListener("click",()=>{
+    t.color=null; persist();
+    document.getElementById("tk_color_auto").style.boxShadow="0 0 0 2px var(--ink-dim)";
+  });
+  document.getElementById("tk_color_pick").addEventListener("input",e=>{
+    t.color=e.target.value; persist();
+    document.getElementById("tk_color_auto").style.boxShadow="";
   });
   const wrap=document.getElementById("tk_customwrap"), dowBox=document.getElementById("tk_dow"),
         ivl=document.getElementById("tk_ivl");
@@ -3093,12 +3107,12 @@ function renderProjectPlan(id){
   const head=document.createElement("div"); head.className="plan-head";
   head.innerHTML=`<button class="btn ghost" id="pl_back">‹ Projects</button>
     <input id="pl_name" class="plan-name" value="${escAttr(pr.name)}">
-    <div class="taglist plan-pal" id="pl_pal">${paletteHTML(pr.color)}</div>`;
+    <input type="color" id="pl_pal" value="${pr.color}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">`;
   host.appendChild(head);
   head.querySelector("#pl_back").onclick=()=>{ projOpenId=null; renderProjects(); };
   head.querySelector("#pl_name").addEventListener("input",e=>{ pr.name=e.target.value; persist(); });
-  head.querySelector("#pl_pal").addEventListener("click",e=>{ const t=e.target.closest(".tag"); if(!t)return;
-    pr.color=t.dataset.c; persist(); renderProjectPlan(id); });
+  head.querySelector("#pl_pal").addEventListener("change",e=>{
+    pr.color=e.target.value; persist(); renderProjectPlan(id); });
 
   const q=document.createElement("div"); q.className="fld"; host.appendChild(q);
   q.innerHTML=`<label>Research question</label><textarea id="pl_q" rows="2">${esc(pr.question||"")}</textarea>`;
@@ -4159,7 +4173,7 @@ function renderTimeline(){
       // had no effect at all on the phone (the whole feature was mouse-only).
       evt.addEventListener("pointerdown",e=>{
         e.stopPropagation();
-        const mode=e.target.classList.contains("cal-evt-resize")?(e.target.classList.contains("cal-evt-resize-top")?"resize-top":"resize-bottom"):"move";
+        const mode=resizeModeFor(e);
         beginTimedEventDrag(mode,t,evt,e);
       });
       if(t.kind==="task"){
@@ -4200,14 +4214,13 @@ function renderTimeline(){
       evt.insertAdjacentHTML("beforeend",`<div class="cal-evt-resize cal-evt-resize-bottom"></div>`);
       evt.addEventListener("pointerdown",ev=>{
         ev.stopPropagation();
-        const mode=ev.target.classList.contains("cal-evt-resize")
-          ?(ev.target.classList.contains("cal-evt-resize-top")?"resize-top":"resize-bottom"):"move";
+        const mode=resizeModeFor(ev);
         beginTimedEventDrag(mode,item,evt,ev);
       });
       hourCells[dayIdx].cell.appendChild(evt);
     });
     // click-to-create on hour cells; drag-to-create sets a duration first
-    hourCells.forEach(({cell,day})=>wireHourCellCreate(cell,day,h));
+    hourCells.forEach(({cell,day})=>wireHourCellCreate(cell,day,h,wrap));
     // now-line on current hour
     if(calWeekOffset===0){
       const now=new Date(); const nowDay=now.getDay();
@@ -4245,7 +4258,7 @@ function isoAddMinutes(iso,mins){
 // exactly as if this listener didn't exist. Mouse has no scroll-by-drag to
 // protect, so it keeps behaving the way it always has: no hold, just movement
 // past a small threshold.
-function wireHourCellCreate(cell,day,h0){
+function wireHourCellCreate(cell,day,h0,gridWrap){
   const p2=n=>String(n).padStart(2,"0");
   const dayISO=`${day.getFullYear()}-${p2(day.getMonth()+1)}-${p2(day.getDate())}`;
   const minOf=w=>{ const hh=+w.slice(11,13),mm=+w.slice(14,16); return hh*60+mm; };
@@ -4255,24 +4268,23 @@ function wireHourCellCreate(cell,day,h0){
     const startX=downEvent.clientX, startY=downEvent.clientY;
     const isTouch=downEvent.pointerType!=="mouse";
     const cr=cell.getBoundingClientRect(), rowH=cr.height;
-    let armed=!isTouch, moved=false, cancelled=false, previewEl=null;
+    let armed=!isTouch, moved=false, cancelled=false, scrolling=false, previewEl=null;
+    // cal-hour-cell carries touch-action:none in CSS (see there for why): a
+    // dynamic toggle timed to the hold was tried first and reliably lost the
+    // race against Safari's own scroll-gesture recognizer on a real phone —
+    // WebKit does not honor a touch-action change made mid-gesture, only the
+    // value that was already in place at touchstart. With native scrolling
+    // permanently off on this element, a plain swipe has nothing to fall back
+    // on unless this handler drives .cal-grid-wrap's scrollTop itself, which
+    // is what the "scrolling" branch below does.
+    const startScrollTop=isTouch&&gridWrap?gridWrap.scrollTop:0;
     const wholeAt=clientY=>{
       const minsFromCellTop=((clientY-cr.top)/rowH)*60;
       const totalMin=Math.min(Math.max(Math.round((h0*60+minsFromCellTop)/15)*15,0),24*60-15);
       return `${dayISO}T${p2(Math.floor(totalMin/60))}:${p2(totalMin%60)}`;
     };
     const startWhen=wholeAt(startY);
-    // touch-action stays the default (auto) up to this point specifically so a
-    // plain swipe scrolls the Timeline unimpeded. The instant the hold fires —
-    // before the finger has actually moved — flip it to none: with no scroll
-    // gesture underway yet to interrupt, this is the one moment a touch-action
-    // change is guaranteed to land before the browser's own gesture recognizer
-    // has to decide. Without this, preventDefault() alone in onMove is racing
-    // that recognizer and reliably loses on real touch hardware, unlike the
-    // pointer-simulated drags this was verified with — cal-evt-timed (moving an
-    // existing event) sidesteps the race entirely with a static touch-action:
-    // none, which an empty cell can't use since it must stay scrollable pre-hold.
-    const holdTimer=isTouch?setTimeout(()=>{ armed=true; cell.classList.add("create-armed"); cell.style.touchAction="none"; },DRAG_HOLD_MS):null;
+    const holdTimer=isTouch?setTimeout(()=>{ armed=true; cell.classList.add("create-armed"); },DRAG_HOLD_MS):null;
     function paintPreview(curWhen){
       const a=startWhen<curWhen?startWhen:curWhen, b=startWhen<curWhen?curWhen:startWhen;
       if(a===b){ if(previewEl){ previewEl.remove(); previewEl=null; } return; }
@@ -4284,7 +4296,6 @@ function wireHourCellCreate(cell,day,h0){
     function cleanup(){
       clearTimeout(holdTimer);
       cell.classList.remove("create-armed");
-      cell.style.touchAction="";
       document.removeEventListener("pointermove",onMove);
       document.removeEventListener("pointerup",onUp);
       document.removeEventListener("pointercancel",onCancel);
@@ -4293,11 +4304,22 @@ function wireHourCellCreate(cell,day,h0){
     function onMove(e){
       const dx=e.clientX-startX, dy=e.clientY-startY;
       if(!armed){
-        // moved before the hold fired: never claimed, so there is nothing to
-        // undo — the touch has been scrolling normally this whole time. Marked
-        // cancelled, not just cleaned up, so a release afterward doesn't read
-        // as a tap-to-create the way a hold that simply never moved would.
-        if(Math.abs(dx)>DRAG_WIGGLE_PX||Math.abs(dy)>DRAG_WIGGLE_PX){ cancelled=true; cleanup(); }
+        if(scrolling){
+          // already proven to be a swipe, not a hold — keep hand-driving the
+          // scroll for the rest of this gesture the same distance the
+          // browser would have moved it on its own.
+          if(gridWrap) gridWrap.scrollTop=startScrollTop-dy;
+          return;
+        }
+        if(Math.abs(dx)>DRAG_WIGGLE_PX||Math.abs(dy)>DRAG_WIGGLE_PX){
+          // moved before the hold fired: this was never claimed as a create-
+          // drag, so it reads as an ordinary scroll from here on — cancelled,
+          // not just cleaned up, so a release afterward doesn't read as a
+          // tap-to-create the way a hold that simply never moved would.
+          cancelled=true; clearTimeout(holdTimer);
+          if(gridWrap){ scrolling=true; gridWrap.scrollTop=startScrollTop-dy; }
+          else cleanup();
+        }
         return;
       }
       e.preventDefault();   // only now: a hold (or a mouse) confirmed this is ours
@@ -4323,6 +4345,15 @@ function wireHourCellCreate(cell,day,h0){
     document.addEventListener("pointerup",onUp);
     document.addEventListener("pointercancel",onCancel);
   });
+}
+// Resizing by the edge handles needs a precise hit on a ~6px strip — fine
+// with a mouse cursor, not with a fingertip on a chip that's often barely
+// taller than that. Touch always drags the whole block instead; only a
+// mouse, which can actually aim at the strip, gets resize-top/resize-bottom.
+function resizeModeFor(e){
+  if(e.pointerType==="mouse"&&e.target.classList.contains("cal-evt-resize"))
+    return e.target.classList.contains("cal-evt-resize-top")?"resize-top":"resize-bottom";
+  return "move";
 }
 // drag a timed timeline event: mode "move" drags the whole block to a new day/time slot,
 // "resize-top"/"resize-bottom" drags an edge to change start time / duration.
