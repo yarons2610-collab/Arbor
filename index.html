@@ -420,6 +420,8 @@
   .cal-colour{flex:0 0 auto;align-items:center}
   .cal-colour button{text-transform:none;font-size:11.5px;padding:3px 10px}
   .cal-colour .cc-lab{font-size:10px;color:var(--ink-faint);letter-spacing:.04em;margin-right:1px}
+  .cal-filter{flex:0 0 auto;align-items:center}
+  .cal-filter button{text-transform:none;font-size:11.5px;padding:3px 10px}
   .month-body{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line)}
   .month-hdr-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line)}
   .month-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:min-content;gap:2px 1px;background:var(--line)}
@@ -711,8 +713,8 @@
     .cal-nav-bar{padding:7px 10px;gap:6px;row-gap:6px;flex-wrap:wrap}
     .cal-nav-bar h2{font-size:13px;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .cal-nav-btn{padding:4px 9px;font-size:12px}
-    .cal-mode,.cal-colour{flex:0 0 auto}
-    .cal-mode button,.cal-colour button{padding:2px 7px;font-size:10.5px}
+    .cal-mode,.cal-colour,.cal-filter{flex:0 0 auto}
+    .cal-mode button,.cal-colour button,.cal-filter button{padding:2px 7px;font-size:10.5px}
     .cal-colour .cc-lab{display:none}
     /* calendar popover: centered, like modal-center's short utility dialogs —
        anchoring it to the date/time button (the desktop behaviour, set inline
@@ -3755,6 +3757,28 @@ function wireCalColourSeg(root){
     if(b.dataset.c===(DB.config.calColorBy||"type"))return;
     DB.config.calColorBy=b.dataset.c; persist(); renderTimeline(); });
 }
+// Which of the three kinds of thing the Timeline draws are currently shown.
+// Missing/unset reads as "on" so existing saves (with no calFilters at all)
+// keep showing everything, same as before this filter existed.
+function calFilterOn(k){ const f=DB.config.calFilters; return !f||f[k]!==false; }
+function calFilterSegHTML(){
+  return `<div class="seg cal-filter" id="cal_filter" title="Show/hide categories">`
+    +[["tasks","Tasks"],["events","Events"],["diary","Diary"]].map(([k,l])=>
+      `<button type="button" data-f="${k}" class="${calFilterOn(k)?"on":""}">${l}</button>`).join("")
+    +`</div>`;
+}
+// Each button toggles independently — this is a set of on/off switches, not
+// an exclusive-choice seg like cal_mode/cal_colour, so a click only ever
+// flips its own key rather than clearing the others.
+function wireCalFilterSeg(root){
+  const seg=root.querySelector("#cal_filter"); if(!seg)return;
+  seg.addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
+    const k=b.dataset.f;
+    const f=DB.config.calFilters=DB.config.calFilters||{tasks:true,events:true,diary:true};
+    f[k]=!calFilterOn(k);
+    persist(); renderTimeline();
+  });
+}
 function wireCalModeSeg(root){
   const seg=root.querySelector("#cal_mode"); if(!seg)return;
   seg.addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
@@ -3773,11 +3797,11 @@ function renderMonthView(host){
     <button class="cal-nav-btn today" id="cal_today">Today</button>
     <button class="cal-nav-btn" id="cal_next">›</button>
     <h2>${base.toLocaleDateString(undefined,{month:"long",year:"numeric"})}</h2>
-    ${calModeSegHTML()}${calColourSegHTML()}`;
+    ${calModeSegHTML()}${calColourSegHTML()}${calFilterSegHTML()}`;
   nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
   nav.querySelector("#cal_next").onclick=()=>{calWeekOffset++;renderTimeline();};
   nav.querySelector("#cal_today").onclick=()=>{calWeekOffset=0;renderTimeline();};
-  wireCalModeSeg(nav); wireCalColourSeg(nav);
+  wireCalModeSeg(nav); wireCalColourSeg(nav); wireCalFilterSeg(nav);
 
   const gridStart=new Date(base); gridStart.setDate(1-base.getDay());
   const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -3806,7 +3830,7 @@ function renderMonthView(host){
     const colStart=diffDays-weekIdx*7;
     weeks[weekIdx].push({...item,colStart,span:Math.min(span,7-colStart)});
   };
-  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
+  if(calFilterOn("diary")) DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
     if(!keys.has(e.type))return;
     const d=whenDate(e.date); d.setHours(0,0,0,0);
     place(Math.round((d-gridStart)/864e5),1,{kind:"diary",a,e});
@@ -3816,7 +3840,10 @@ function renderMonthView(host){
       .map(x=>({kind:"exp",title:x.title,deadline:x.deadline,endDate:x.endDate,src:x})),
     ...taskList().flatMap(t=>taskOccurrences(t,dkey(gridStart),dkey(gEnd))
       .map(o=>({kind:"task",title:t.title,deadline:o.when,endDate:o.endDate,src:t})))
-  ];
+  // a "task" item is really either a task or an event depending on its
+  // source record's isEvent flag — filtered here, in one place, rather than
+  // wherever monthItems ends up read
+  ].filter(x=>x.kind!=="task"||calFilterOn(x.src.isEvent?"events":"tasks"));
   monthItems.forEach(st=>{
     const d0=whenDate(st.deadline); d0.setHours(0,0,0,0);
     const d1=st.endDate?new Date(whenDate(st.endDate).setHours(0,0,0,0)):new Date(d0);
@@ -3912,8 +3939,8 @@ function renderTimeline(){
     <button class="cal-nav-btn" id="cal_next">›</button>
     <h2>${NCOL===1?ws.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric",year:"numeric"})
                   :`${fmt(ws)} – ${fmt(we)}, ${fmtY(we)}`}</h2>
-    ${calModeSegHTML()}${calColourSegHTML()}`;
-  wireCalModeSeg(nav); wireCalColourSeg(nav);
+    ${calModeSegHTML()}${calColourSegHTML()}${calFilterSegHTML()}`;
+  wireCalModeSeg(nav); wireCalColourSeg(nav); wireCalFilterSeg(nav);
   nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
   nav.querySelector("#cal_next").onclick=()=>{calWeekOffset++;renderTimeline();};
   nav.querySelector("#cal_today").onclick=()=>{calWeekOffset=0;renderTimeline();};
@@ -3936,7 +3963,12 @@ function renderTimeline(){
     const end=t.endDate?new Date(whenDate(t.endDate).setHours(0,0,0,0)):start;
     return end>=ws && start<=we;
   }
-  const weekTasks=allTasks.filter(touchesWeek);
+  // a "task"-kind item is really either a task or an event depending on its
+  // source record's isEvent flag — filtered here, in one place, so both the
+  // all-day banner and the hourly grid below (which both read weekTasks)
+  // stay in sync automatically
+  const weekTasks=allTasks.filter(touchesWeek)
+    .filter(t=>t.kind!=="task"||calFilterOn(t.src.isEvent?"events":"tasks"));
 
   // ── Grid ──────────────────────────────────────────────────────────────────
   // all-day section: sticky, does not scroll with hours
@@ -4050,7 +4082,7 @@ function renderTimeline(){
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
   const today0=todayDateStr();
   const diaryTimedEvents=[]; // {an,e,def,isFuture} - rendered into the hourly grid further down
-  DB.animals.forEach(an=>{
+  if(calFilterOn("diary")) DB.animals.forEach(an=>{
     (an.diary||[]).forEach(e=>{
       if(!timelineTypeKeys.has(e.type))return;
       const day=new Date(e.date+"T00:00:00");
