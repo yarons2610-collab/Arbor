@@ -5643,13 +5643,28 @@ const frontierQueue=()=>DB.readings.filter(r=>r.track==="frontier"&&r.status!=="
    one thing they've always structurally been. */
 const LIBS={
   reading:{ list:()=>DB.readings,  set:v=>{DB.readings=v;},  prefix:"r_",
-            Noun:"Paper",    noun:"paper" },
+            Noun:"Paper",    noun:"paper",
+            fields:[{key:"authors",label:"Authors",type:"text"},
+                    {key:"year",label:"Year",type:"number"},
+                    {key:"journal",label:"Journal",type:"text"}] },
   protocol:{list:()=>DB.protocols, set:v=>{DB.protocols=v;}, prefix:"pt_",
-            Noun:"Protocol", noun:"protocol" }
+            Noun:"Protocol", noun:"protocol",
+            fields:[{key:"writtenBy",label:"Written by",type:"text"},
+                    {key:"date",label:"Date",type:"date"}] }
+};
+// Title always sorts first (and is the only option while viewing "All",
+// since a paper's Year and a protocol's Date aren't the same axis) — each
+// kind's own fields come after it. "chrono" fields sort newest-first, since
+// that's the useful order for a year or a date; everything else is A–Z.
+const LIB_SORTS={
+  reading:[{key:"title",label:"Title"},{key:"authors",label:"Authors"},
+           {key:"year",label:"Year",chrono:true},{key:"journal",label:"Journal"}],
+  protocol:[{key:"title",label:"Title"},{key:"writtenBy",label:"Written by"},
+            {key:"date",label:"Date",chrono:true}]
 };
 const LIB_ICON={reading:"📖",protocol:"📋"};
 // session-only, like matSubTab — not worth persisting a filter choice across reloads
-let libKindFilter="all", libGroupFilter="all";
+let libKindFilter="all", libGroupFilter="all", libSortBy="title";
 function libGroupName(gid){ const g=(DB.config.libraryGroups||[]).find(x=>x.id===gid); return g?g.name:""; }
 function renderLibrary(){
   const host=document.getElementById("library"); if(!host)return;
@@ -5667,6 +5682,11 @@ function renderLibrary(){
       <option value="none" ${libGroupFilter==="none"?"selected":""}>Ungrouped</option>
       ${groups.map(g=>`<option value="${g.id}" ${libGroupFilter===g.id?"selected":""}>${esc(g.name||"(unnamed)")}</option>`).join("")}
     </select>
+    <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">sort</span>
+    <select id="lib_sort" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:6px 8px;font-size:12px">
+      ${(libKindFilter==="all"?[{key:"title",label:"Title"}]:LIB_SORTS[libKindFilter])
+        .map(f=>`<option value="${f.key}" ${libSortBy===f.key?"selected":""}>${esc(f.label)}</option>`).join("")}
+    </select>
     <button class="btn ghost" id="lib_groups_btn" style="font-size:12px">⚙ Groups</button>
     <div style="margin-left:auto;display:flex;gap:8px">
       <button class="btn ghost" id="addPaper" style="font-size:12px">＋ 📖 Paper</button>
@@ -5675,10 +5695,15 @@ function renderLibrary(){
   host.appendChild(top);
   top.querySelector("#lib_kind").addEventListener("click",e=>{
     const b=e.target.closest("button"); if(!b||b.dataset.k===libKindFilter)return;
-    libKindFilter=b.dataset.k; renderLibrary();
+    // last kind's sort key may not exist on the other kind (or on "All") —
+    // back to Title rather than carrying over a now-meaningless choice
+    libKindFilter=b.dataset.k; libSortBy="title"; renderLibrary();
   });
   top.querySelector("#lib_group_filter").addEventListener("change",e=>{
     libGroupFilter=e.target.value; renderLibrary();
+  });
+  top.querySelector("#lib_sort").addEventListener("change",e=>{
+    libSortBy=e.target.value; renderLibrary();
   });
   top.querySelector("#lib_groups_btn").onclick=()=>libraryGroupsModal();
   top.querySelector("#addPaper").onclick=()=>libModal("reading");
@@ -5699,15 +5724,27 @@ function renderLibrary(){
         : "Nothing here yet. Add a paper or a protocol — a link, a file on this computer, or both."}));
     return;
   }
+  const byTitle=(a,b)=>(a.rec.title||"").localeCompare(b.rec.title||"");
+  const sortField=libKindFilter!=="all"&&LIB_SORTS[libKindFilter].find(f=>f.key===libSortBy);
   const list=document.createElement("div"); list.className="lit-list"; host.appendChild(list);
-  items.sort((a,b)=>(a.rec.title||"").localeCompare(b.rec.title||"")).forEach(({kind,rec:r})=>{
+  items.sort((a,b)=>{
+    if(!sortField||sortField.key==="title")return byTitle(a,b);
+    const av=a.rec[sortField.key], bv=b.rec[sortField.key];
+    const aEmpty=av==null||av==="", bEmpty=bv==null||bv==="";
+    if(aEmpty&&bEmpty)return byTitle(a,b);
+    if(aEmpty)return 1; if(bEmpty)return -1;                 // missing values sort last regardless of direction
+    if(sortField.chrono)return typeof av==="number"&&typeof bv==="number"?bv-av:String(bv).localeCompare(String(av)); // newest first
+    return String(av).localeCompare(String(bv));
+  }).forEach(({kind,rec:r})=>{
     const cfg=LIBS[kind];
     const row=document.createElement("div"); row.className="lit-row";
     const sub=r.link||r.fileName||"";
+    const meta=(cfg.fields||[]).map(f=>r[f.key]).filter(v=>v!=null&&v!=="").join(" · ");
     const groupName=r.groupId?libGroupName(r.groupId):"";
     row.innerHTML=`<span title="${esc(cfg.Noun)}" style="flex:0 0 auto">${LIB_ICON[kind]}</span>
       <div class="lit-main">
         <div class="lit-title">${esc(r.title||"(untitled)")}</div>
+        ${meta?`<div class="lit-link">${esc(meta)}</div>`:""}
         ${sub?`<div class="lit-link">${esc(sub)}</div>`:""}
       </div>
       ${groupName?`<span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);border:1px solid var(--line2);border-radius:5px;padding:1px 6px;flex:0 0 auto">${esc(groupName)}</span>`:""}
@@ -5742,6 +5779,8 @@ function libModal(kind,id){
   modal(`<h3>${r?esc(cfg.Noun):"New "+esc(cfg.noun)}</h3>
     <div class="fld"><label>Title</label><input id="r_title" value="${escAttr(rec.title||"")}" autofocus></div>
     <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(rec.link||"")}"></div>
+    ${(cfg.fields||[]).map(f=>`<div class="fld"><label>${esc(f.label)}</label>
+      <input id="r_f_${f.key}" type="${f.type==="number"?"number":f.type==="date"?"date":"text"}" value="${escAttr(rec[f.key]??"")}"></div>`).join("")}
     <div class="fld"><label>Group</label>
       <select id="r_group">
         <option value="">— no group —</option>
@@ -5759,6 +5798,10 @@ function libModal(kind,id){
     if(!title){ toast("Title can't be empty"); return; }
     rec.title=title;
     rec.link=document.getElementById("r_link").value.trim();
+    (cfg.fields||[]).forEach(f=>{
+      const v=document.getElementById("r_f_"+f.key).value.trim();
+      rec[f.key]=v?(f.type==="number"?+v:v):null;
+    });
     rec.groupId=document.getElementById("r_group").value||null;
     if(!r){ cfg.list().push(rec); applyPendingLinks({kind,id:rec.id},pending); }
     persist(); closeModal();
@@ -5825,6 +5868,9 @@ function noteBodyPreview(n){
   const tmp=document.createElement("div"); tmp.innerHTML=noteBodyHTML(n);
   return (tmp.textContent||"").replace(/\s+/g," ").trim();
 }
+// Which notes are currently expanded to their read-only inline preview —
+// session-only, reset on reload same as every other list's transient UI state.
+let notesExpanded=new Set();
 function renderNotes(){
   const host=document.getElementById("notes"); host.innerHTML="";
   const top=document.createElement("div");
@@ -5839,23 +5885,39 @@ function renderNotes(){
   }
   const list=document.createElement("div"); list.className="lit-list"; host.appendChild(list);
   [...DB.notes].sort((a,b)=>(b.updated||0)-(a.updated||0)).forEach(n=>{
+    const open=notesExpanded.has(n.id);
     const row=document.createElement("div"); row.className="lit-row";
     const preview=noteBodyPreview(n);
-    row.innerHTML=`<div class="lit-main" style="cursor:pointer;display:flex;align-items:center;gap:8px">
+    row.innerHTML=`<button class="note-expand" title="${open?"Collapse":"View"}" style="border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:11px;flex:0 0 auto;padding:2px 4px">${open?"▾":"▸"}</button>
+      <div class="lit-main" style="cursor:pointer;display:flex;align-items:center;gap:8px">
         ${n.drawing?`<img src="${n.drawing}" style="width:28px;height:28px;object-fit:cover;border-radius:5px;border:1px solid var(--line2);flex:0 0 auto;background:#fff">`:""}
-        <div style="min-width:0" dir="${n.dir==="rtl"?"rtl":"ltr"}">
+        <div style="min-width:0" dir="auto">
           <div class="lit-title">${esc(n.title||"(untitled)")}</div>
           ${preview?`<div class="lit-link">${esc(preview.slice(0,140))}</div>`:""}
         </div>
       </div>
       <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto;white-space:nowrap">${n.updated?new Date(n.updated).toLocaleDateString():""}</span>
       <button class="lit-del" title="Delete">✕</button>`;
+    row.querySelector(".note-expand").onclick=e=>{
+      e.stopPropagation();
+      if(open)notesExpanded.delete(n.id); else notesExpanded.add(n.id);
+      renderNotes();
+    };
     row.querySelector(".lit-main").onclick=()=>noteModal(n.id);
     row.querySelector(".lit-del").onclick=()=>{
       if(!confirm(`Delete "${n.title||"this note"}"?`))return;
       DB.notes=DB.notes.filter(x=>x.id!==n.id); persist(); renderNotes(); toast("Note deleted");
     };
     list.appendChild(row);
+    if(open){
+      // read-only — editing still only ever happens through the note's own
+      // modal, this is purely a look-without-opening-it view
+      const view=document.createElement("div");
+      view.className="lit-row"; view.style.cssText="flex-direction:column;align-items:stretch;gap:8px;cursor:default";
+      view.innerHTML=`${n.drawing?`<img src="${n.drawing}" style="max-width:200px;border-radius:8px;border:1px solid var(--line2);background:#fff">`:""}
+        <div class="note-body" dir="auto" style="border:0;background:transparent;padding:0;max-height:none">${noteBodyHTML(n)||`<span style="color:var(--ink-faint)">(empty)</span>`}</div>`;
+      list.appendChild(view);
+    }
   });
 }
 // A small pad, not a full drawing app: pointer down/move/up onto a canvas,
@@ -5899,14 +5961,33 @@ function noteDrawModal(existing,onSave,onCancel){
 // drawing pad replaced #modal's content and took those fields with it. A
 // plain noteModal(id) (over omitted) always seeds from the saved record,
 // which is what opening a note normally means.
+// Wraps the current selection in the body in an explicit dir span — a
+// per-phrase override, not a whole-note setting, since a note mixing (say)
+// English and Hebrew shouldn't have to pick one direction for everything in
+// it. The body itself is left at dir="auto" so plain typing already reads
+// correctly most of the time; this is for the cases auto-detection alone
+// can't get right (a sentence mixing both, a lone RTL clause, etc).
+function applyDirToSelection(dir){
+  const sel=window.getSelection();
+  if(!sel||!sel.rangeCount){ toast("Select some text first"); return; }
+  const range=sel.getRangeAt(0);
+  if(range.collapsed){ toast("Select some text first"); return; }
+  const span=document.createElement("span");
+  span.dir=dir;
+  span.appendChild(range.extractContents());
+  range.insertNode(span);
+  const after=document.createRange();
+  after.selectNodeContents(span);
+  sel.removeAllRanges(); sel.addRange(after);
+}
 function noteModal(id,over){
   const n=id?DB.notes.find(x=>x.id===id):null;
   const titleSeed=over?over.title:(n?n.title:"");
   const bodySeed=over?over.bodyHTML:noteBodyHTML(n);
   let pendingDrawing=over?over.drawing:(n?n.drawing||null:null);
-  let noteDir=(over?over.dir:(n?n.dir:null))||"ltr";
+  const pending=over&&over.links?over.links:[];
   modal(`<h3>${n?"Note":"New note"}</h3>
-    <div class="fld"><label>Title</label><input id="n_title" dir="${noteDir}" value="${escAttr(titleSeed||"")}" autofocus></div>
+    <div class="fld"><label>Title</label><input id="n_title" dir="auto" value="${escAttr(titleSeed||"")}" autofocus></div>
     <div class="fld"><label>Note</label>
       <div class="note-toolbar">
         <button type="button" id="n_ul" title="Bullet list">• List</button>
@@ -5915,16 +5996,19 @@ function noteModal(id,over){
         <button type="button" id="n_outdent" title="Un-nest this item (Shift+Tab)">◂ Outdent</button>
         <button type="button" id="n_indent" title="Nest this item under the one above (Tab)">▸ Indent</button>
         <span class="note-toolbar-sep"></span>
-        <button type="button" id="n_ltr" title="Left to right" class="${noteDir==="ltr"?"on":""}">LTR</button>
-        <button type="button" id="n_rtl" title="Right to left" class="${noteDir==="rtl"?"on":""}">RTL</button>
+        <button type="button" id="n_ltr" title="Set the selected text left-to-right">LTR</button>
+        <button type="button" id="n_rtl" title="Set the selected text right-to-left">RTL</button>
       </div>
-      <div id="n_body" class="note-body" contenteditable="true" dir="${noteDir}" data-ph="Write here…">${bodySeed||""}</div>
+      <div id="n_body" class="note-body" contenteditable="true" dir="auto" data-ph="Write here…">${bodySeed||""}</div>
     </div>
     <div class="fld"><label>Drawing</label><div id="n_drawwrap"></div></div>
+    <div class="fld"><label>Project &amp; experiment</label><div id="n_attach"></div></div>
     ${n?`<div class="drow" style="margin-top:14px"><button class="btn danger" id="n_del">Delete note</button></div>`:""}
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="n_save">Save</button></div>`,{wide:true});
-  const bodyEl=document.getElementById("n_body"), titleEl=document.getElementById("n_title");
+  const bodyEl=document.getElementById("n_body");
+  if(n) mountAttachments(document.getElementById("n_attach"),{kind:"note",id:n.id});
+  else  mountPendingLinks(document.getElementById("n_attach"),pending);
   // mousedown, not click: click fires after focus has already left the
   // contenteditable, taking its selection with it, and execCommand needs
   // that selection to know where to insert the list
@@ -5943,14 +6027,11 @@ function noteModal(id,over){
     e.preventDefault();
     document.execCommand(e.shiftKey?"outdent":"indent");
   });
-  const setDir=d=>{
-    noteDir=d;
-    bodyEl.dir=d; titleEl.dir=d;
-    document.getElementById("n_ltr").classList.toggle("on",d==="ltr");
-    document.getElementById("n_rtl").classList.toggle("on",d==="rtl");
-  };
-  document.getElementById("n_ltr").addEventListener("mousedown",e=>{ e.preventDefault(); setDir("ltr"); });
-  document.getElementById("n_rtl").addEventListener("mousedown",e=>{ e.preventDefault(); setDir("rtl"); });
+  // preventDefault here for the same reason as the list buttons above — a
+  // mousedown on the button would otherwise blur the body and collapse the
+  // selection before this handler ever saw it
+  document.getElementById("n_ltr").addEventListener("mousedown",e=>{ e.preventDefault(); applyDirToSelection("ltr"); bodyEl.focus(); });
+  document.getElementById("n_rtl").addEventListener("mousedown",e=>{ e.preventDefault(); applyDirToSelection("rtl"); bodyEl.focus(); });
   const drawWrap=document.getElementById("n_drawwrap");
   const drawDraw=()=>{
     drawWrap.innerHTML=pendingDrawing
@@ -5963,7 +6044,7 @@ function noteModal(id,over){
     // very inputs these read — reading them lazily from inside the callback
     // would find nothing left to read
     const openPad=existingDrawing=>{
-      const keep={title:document.getElementById("n_title").value, bodyHTML:document.getElementById("n_body").innerHTML, drawing:pendingDrawing, dir:noteDir};
+      const keep={title:document.getElementById("n_title").value, bodyHTML:document.getElementById("n_body").innerHTML, drawing:pendingDrawing, links:pending};
       noteDrawModal(existingDrawing,
         d=>noteModal(id,{...keep,drawing:d}),
         ()=>noteModal(id,keep));
@@ -5978,8 +6059,12 @@ function noteModal(id,over){
     const body=document.getElementById("n_body").innerHTML;
     const bodyEmpty=!document.getElementById("n_body").textContent.trim();
     if(!title&&bodyEmpty&&!pendingDrawing){ toast("Nothing to save"); return; }
-    if(n){ n.title=title; n.body=body; n.rich=true; n.drawing=pendingDrawing; n.dir=noteDir; n.updated=Date.now(); }
-    else DB.notes.push({id:uid("note_"),title,body,rich:true,drawing:pendingDrawing,dir:noteDir,updated:Date.now(),created:Date.now()});
+    if(n){ n.title=title; n.body=body; n.rich=true; n.drawing=pendingDrawing; n.updated=Date.now(); }
+    else{
+      const nid=uid("note_");
+      DB.notes.push({id:nid,title,body,rich:true,drawing:pendingDrawing,updated:Date.now(),created:Date.now()});
+      applyPendingLinks({kind:"note",id:nid},pending);
+    }
     persist(); closeModal(); renderNotes();
     toast(n?"Note updated":"Note added");
   };
