@@ -63,7 +63,15 @@
   .event-nudge .cnt{background:var(--cyan);color:#04262a}
   .event-nudge:not(.due) .cnt{background:var(--line2);color:var(--ink-dim)}
   @keyframes pulse-cyan{0%,100%{box-shadow:0 0 0 0 rgba(63,208,214,0)}50%{box-shadow:0 0 0 4px rgba(63,208,214,.14)}}
-  #topCollapseBtn,#topReveal{display:none}
+  #topReveal{display:none}
+  /* the whole top bar, tabs included, can fold away to a thin strip — the
+     strip itself is never hidden, so navigation is always one tap back.
+     Not mobile-specific: a collapsed top bar buys back the same rows of
+     screen height on a laptop as it does on a phone. */
+  .app.top-collapsed #topBar{display:none}
+  .app.top-collapsed #topReveal{display:flex;width:100%;justify-content:center;align-items:center;
+    background:var(--bg2);border:0;border-bottom:1px solid var(--line);color:var(--ink-faint);
+    font-size:11px;cursor:pointer;padding:3px 0;padding-top:max(env(safe-area-inset-top),4px)}
 
   .main{flex:1;position:relative;overflow:hidden}
   .view{position:absolute;inset:0;overflow:auto}
@@ -667,13 +675,6 @@
     .tabs{order:-1;width:100%;justify-content:stretch}
     .tab{flex:1;padding:5px 2px;font-size:11px;white-space:nowrap}
     #expCal,#readNudge{display:none}
-    /* the whole top bar, tabs included, can fold away to a thin strip — the
-       strip itself is never hidden, so navigation is always one tap back */
-    #topCollapseBtn{display:inline-flex}
-    .app.top-collapsed #topBar{display:none}
-    .app.top-collapsed #topReveal{display:flex;width:100%;justify-content:center;align-items:center;
-      background:var(--bg2);border:0;border-bottom:1px solid var(--line);color:var(--ink-faint);
-      font-size:11px;cursor:pointer;padding:3px 0;padding-top:max(env(safe-area-inset-top),4px)}
     .top .btn,.top .readbtn{padding:3px 8px;font-size:10.5px}
     #saveState{font-size:9px;padding:0 3px}
     /* detail: full-width slide-up sheet */
