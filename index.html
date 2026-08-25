@@ -2566,12 +2566,16 @@ function occurrenceScopeModal(onChoice){
 // `patch` — whatever differs for this instance — and excludes occWhen from
 // the base series so the rule never regenerates that slot again. Any done-
 // state this occurrence already had moves onto the new record with it.
+// detachedFrom keeps a trail back to the series it came from — genuinely a
+// separate task now (that's the whole point: real events, not copies), but
+// its own editor uses this to say so rather than just "Does not repeat",
+// which reads as if the split broke something rather than being the point.
 function detachOccurrence(base,occWhen,patch){
   base.excludedDates=[...(base.excludedDates||[]),occWhen];
   const wasDone=occDone(base,occWhen);
   base.doneOccurrences=(base.doneOccurrences||[]).filter(w=>w!==occWhen);
   const {id,repeat,excludedDates,doneOccurrences,created,...rest}=JSON.parse(JSON.stringify(base));
-  const nt=addTask({...rest,...patch});
+  const nt=addTask({...rest,...patch,detachedFrom:base.id});
   if(wasDone)setOccDone(nt,nt.when,true);
   persist();
   return nt;
@@ -2767,6 +2771,13 @@ function stepModal(pr,st,after){ return experimentModal(pr,st,after); }
 // as before occurrence scoping existed.
 function taskEditor(t,after,occWhen,occEndDate){
   const wasRecurring=!!(t.repeat&&t.repeat.every);
+  // detachedFrom is set once by detachOccurrence() and never cleared — still
+  // true after this task later grows its own repeat rule, but the note below
+  // only shows while !wasRecurring anyway, so a re-recurring task just stops
+  // showing it. taskOf() can come back empty if the series it split from was
+  // since deleted entirely; the note still shows, just without naming it.
+  const wasDetached=!wasRecurring&&!!t.detachedFrom;
+  const splitOrigin=wasDetached?taskOf(t.detachedFrom):null;
   // the true, un-edited series state — needed to revert t if the chosen scope
   // turns out to be "this"/"following" (nothing before the split should carry
   // whatever got typed during this session), and to shift the real anchor by
@@ -2791,6 +2802,8 @@ function taskEditor(t,after,occWhen,occEndDate){
   }).join("");
   modal(`<h3>${t.isEvent?"Event":"Task"}</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
+    ${wasDetached?`<p style="color:var(--ink-dim);font-size:12px;line-height:1.5;margin:-6px 0 14px;background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:8px 10px">
+      ↳ Split off as its own event${splitOrigin?` from the repeating "${esc(splitOrigin.title||"(unnamed)")}"`:" from a repeating series"} — editing it only ever affected this one occurrence, which is why "Repeats" below reads "Does not repeat": it genuinely doesn't have a rule of its own anymore. Give it one here to start a new pattern from this event.</p>`:""}
     <div class="drow">
       <div class="fld" style="flex:1"><label>When</label>
         <button type="button" id="tk_start" class="datebtn ${t.when?"":"datebtn-empty"}">${t.when?fmtWhenFull(t.when):"📅 start"}</button></div>
