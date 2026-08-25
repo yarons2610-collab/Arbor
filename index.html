@@ -6076,6 +6076,11 @@ function noteModal(id,over){
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
 let animalCohort="all", animalExperiment="all", animalGroup="all", animalStatus="all", animalSearch="", animalSort="name";
+// Which animal cards have their detail panel open — tracked here rather than
+// as pure per-card DOM state, so a full renderAnimals() (needed whenever a
+// quick-edit might change which animals a status filter or a dob/sacrificed
+// sort should even show) doesn't collapse every card that was open.
+let animalExpanded=new Set();
 const WEEK=6048e5;
 function ageWeeks(a){ if(!a.dob)return null; const end=a.sacrificed?new Date(a.sacrificed):new Date(); return Math.round((end-new Date(a.dob))/WEEK); }
 // surgery date now comes from the diary (earliest surgery-type entry dated
@@ -6388,6 +6393,7 @@ function animalCard(a){
   const card=document.createElement("div");
   card.style.cssText=`background:var(--panel);border:1px solid var(--line);border-left:3px solid ${{alive:"var(--line)",sacrificed:"#3a4252",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"var(--line)"};border-radius:11px;padding:12px 15px;margin-bottom:8px;${a.termination!=="alive"?"opacity:.68":""}`;
   const dS=daysSurg(a), aw=ageWeeks(a), lw=latestWeight(a);
+  const expanded=animalExpanded.has(a.id);
   card.innerHTML=`
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="width:9px;height:9px;border-radius:50%;background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};flex:0 0 auto" title="${{alive:"Alive",sacrificed:"Sacrificed",early_death:"Early death",excluded:"Excluded"}[a.termination]||""}"></span>
@@ -6396,7 +6402,7 @@ function animalCard(a){
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:100%;justify-content:flex-end">
         <button class="a-log" data-id="${a.id}" title="Chronological event log" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">📋</button>
         <button class="a-edit" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px">✎</button>
-        <button class="a-exp" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">▾</button>
+        <button class="a-exp" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">${expanded?"▴":"▾"}</button>
       </span>
     </div>
     <div style="display:flex;gap:8px;margin-top:8px;font-family:var(--mono);font-size:10.5px;flex-wrap:wrap;align-items:center">
@@ -6405,8 +6411,8 @@ function animalCard(a){
       ${dS!=null?`<span style="color:var(--ink-faint)">${dS}d post-surg</span>`:""}
       ${a.surgeryDetail?`<span style="color:var(--cyan)">${esc(surgerySummary(a))}</span>`:(a.targets?`<span style="color:var(--ink-dim)">→ ${esc(a.targets)}</span>`:"")}
     </div>
-    <div class="a-detail" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px;line-height:1.6;color:var(--ink-dim)">
-      ${arow("Born",a.dob)}${arow("Sacrificed",a.sacrificed)}${arow("Cage",`${a.cage||"—"} · ${a.cageStatus||""} (${a.cageOpen||"?"}→${a.cageClose||"open"})`)}
+    <div class="a-detail" style="display:${expanded?"block":"none"};margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px;line-height:1.6;color:var(--ink-dim)">
+      ${arow("Born",a.dob)}${arow("Sacrificed",a.sacrificed)}${arow("Cage",a.cage||"—")}
       ${arow("Virus",a.virus)}${arow("Targets",a.targets)}${arow("Coords",a.coords)}${arow("Volume",a.volume)}
       ${a.comments?arow("Notes",a.comments):""}
       ${(a.tasks&&a.tasks.length)?arow("Tasks",a.tasks.map(tid=>{const t=taskById(tid);return t?t.title:null;}).filter(Boolean).join("  ·  ")):""}
@@ -6419,6 +6425,7 @@ function animalCard(a){
       </div>
     </div>`;
   card.querySelector(".a-exp").onclick=()=>{const d=card.querySelector(".a-detail");const open=d.style.display!=="none";d.style.display=open?"none":"block";card.querySelector(".a-exp").textContent=open?"▾":"▴";
+    if(open)animalExpanded.delete(a.id); else animalExpanded.add(a.id);
     // the 3D canvas can end up with a broken/zero-size WebGL viewport if it was created
     // while this panel was still hidden (display:none) — refresh it once visible so it
     // doesn't require opening "Enlarge" once before the inline view works
@@ -6432,9 +6439,16 @@ function animalCard(a){
       a[field]=v||null;
       if(field==="sacrificed"&&v&&a.termination==="alive"){ a.termination="sacrificed"; a.alive=false; }
       persist();
-      const labels={dob:"🐭 ",surgery:"🔧 ",sacrificed:"✝ "};
-      btn.textContent = v ? (labels[field]||"")+v : (labels[field]||"")+field+"?";
-      btn.style.color = v ? "" : "var(--ink-faint)";
+      // dob/sacrificed feed a lot more than this one button's own label: the
+      // header's age-in-weeks and day-post-surg text, the status dot/border/
+      // opacity, the aggregate "N alive" count above the list, and — if the
+      // page is sorted or filtered by either date — which animals even show
+      // up here at all. All of that was baked in once when the list was
+      // built; patching just the button left every one of those stuck
+      // showing what they were before the date was set. A real re-render is
+      // the only way to keep all of it in step, so animalExpanded (not
+      // per-card DOM state) is what keeps an open detail panel open through it.
+      renderAnimals();
       if(currentView==="timeline") renderTimeline();
       if(currentView==="outline")  renderOutline();
     }, undefined, field==="dob");
