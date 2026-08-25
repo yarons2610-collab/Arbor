@@ -773,6 +773,7 @@
       <button class="tab" data-v="projects">Projects</button>
       <button class="tab" data-v="timeline">Timeline</button>
       <button class="tab" data-v="materials">Materials</button>
+      <button class="tab" data-v="library">Library</button>
       <button class="tab on" data-v="animals">Animals</button>
       <button class="tab" data-v="notes">Notes</button>
     </div>
@@ -807,20 +808,16 @@
         <button class="mat-stab on" data-ms="diarytypes">Entry Types</button>
         <button class="mat-stab" data-ms="sites">Injection Sites</button>
         <button class="mat-stab" data-ms="inventory">Inventory</button>
-        <button class="mat-stab" data-ms="literature">Literature</button>
-        <button class="mat-stab" data-ms="protocols">Protocols</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
         <button class="mat-stab" data-ms="viruses">Viruses</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
-      <div class="wrap mat-subview hidden" id="ms-literature"></div>
-      <div class="wrap mat-subview hidden" id="ms-protocols"></div>
       <div class="wrap mat-subview hidden" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-procedures"></div>
       <div class="wrap mat-subview" id="ms-diarytypes"></div>
     </div>
-    <div class="view hidden wrap" id="reading"></div>
+    <div class="view hidden wrap" id="library"></div>
     <div class="view wrap" id="animals"></div>
 
     <aside class="detail" id="detail">
@@ -927,6 +924,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   calAlldayCollapsed:false, topCollapsed:false,
   animalFilters:{cohort:"all",experiment:"all",group:"all",status:"all",search:"",sort:"name"},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
+  libraryGroups:[], // user-defined filing groups for the Library (papers + protocols) — {id,name}
   // seeded diary entry types - fully user-editable afterward (label/icon/color/
   // fields/timeline flag), not a locked-in schema. "timeline:true" means entries
   // of that type surface on the global Timeline (procedures - the "big things
@@ -1333,6 +1331,7 @@ function migrate(){                       // backfill fields added in later vers
     if(!DB.config.procedureLib) DB.config.procedureLib=[...DEFAULT_CONFIG.procedureLib];
     if(!DB.config.animalFilters) DB.config.animalFilters={...DEFAULT_CONFIG.animalFilters};
     if(!DB.config.taskLib)  DB.config.taskLib=[...DEFAULT_CONFIG.taskLib];
+    if(!DB.config.libraryGroups) DB.config.libraryGroups=[...DEFAULT_CONFIG.libraryGroups];
     // taskLib upgraded from plain task-name strings (autocomplete-only) to
     // objects with a flexible per-task parameter list (different behavioral
     // tasks log different metrics — a 2AFC session and an open-field session
@@ -2128,7 +2127,7 @@ function render(){
   else if(currentView==="outline")renderOutline();
   else if(currentView==="timeline")renderTimeline();
   else if(currentView==="materials")renderMaterials();
-  else if(currentView==="reading")renderReading();
+  else if(currentView==="library")renderLibrary();
   else if(currentView==="animals")renderAnimals();
   else if(currentView==="notes")renderNotes();
 }
@@ -4643,8 +4642,6 @@ function renderMatSubTab(){
   else if(matSubTab === "viruses")  renderVirusLib();
   else if(matSubTab === "sites")    renderSiteLib();
   else if(matSubTab === "procedures") renderProcedureLib();
-  else if(matSubTab === "literature") renderReading("ms-literature");
-  else if(matSubTab === "protocols")  renderProtocols("ms-protocols");
   else if(matSubTab === "diarytypes") renderDiaryTypesLib();
 }
 
@@ -5500,41 +5497,80 @@ const frontierQueue=()=>DB.readings.filter(r=>r.track==="frontier"&&r.status!=="
 // are simply no longer read or shown.
 /* Literature and protocols are the same record wearing a different name: a
    title, a link, and optionally a file on this computer. One renderer and one
-   editor serve both, so the two can never drift apart the way two copies of the
-   same widget did before. */
+   editor serve both — merged into a single Library tab (filterable by kind
+   and by a user-defined group) rather than two lookalike lists living under
+   separate tabs, which is what made them feel like two things instead of the
+   one thing they've always structurally been. */
 const LIBS={
   reading:{ list:()=>DB.readings,  set:v=>{DB.readings=v;},  prefix:"r_",
-            Noun:"Paper",    noun:"paper",
-            empty:"Nothing here yet. Add a paper with a link to wherever it lives." },
+            Noun:"Paper",    noun:"paper" },
   protocol:{list:()=>DB.protocols, set:v=>{DB.protocols=v;}, prefix:"pt_",
-            Noun:"Protocol", noun:"protocol",
-            empty:"Nothing here yet. Add a protocol — a link, a file on this computer, or both." }
+            Noun:"Protocol", noun:"protocol" }
 };
-function renderLib(kind,hostId){
-  const cfg=LIBS[kind];
-  const host=document.getElementById(hostId); if(!host)return;
+const LIB_ICON={reading:"📖",protocol:"📋"};
+// session-only, like matSubTab — not worth persisting a filter choice across reloads
+let libKindFilter="all", libGroupFilter="all";
+function libGroupName(gid){ const g=(DB.config.libraryGroups||[]).find(x=>x.id===gid); return g?g.name:""; }
+function renderLibrary(){
+  const host=document.getElementById("library"); if(!host)return;
   releaseFileURLs();                     // the previous draw's blob URLs are dead
   host.innerHTML="";
-  const top=document.createElement("div");
-  top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px";
-  top.innerHTML=`<button class="btn accent" id="addLib" style="margin-left:auto;font-size:12px">＋ ${esc(cfg.Noun)}</button>`;
-  host.appendChild(top);
-  top.querySelector("#addLib").onclick=()=>libModal(kind);
 
-  const all=cfg.list();
-  if(!all.length){
-    host.appendChild(Object.assign(document.createElement("div"),
-      {className:"empty",textContent:cfg.empty}));
+  const top=document.createElement("div");
+  top.style.cssText="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap";
+  const groups=DB.config.libraryGroups||[];
+  top.innerHTML=`
+    <div class="seg" id="lib_kind" style="flex:0 0 auto">${[["all","All"],["reading","Papers"],["protocol","Protocols"]]
+      .map(([v,l])=>`<button type="button" data-k="${v}" class="${libKindFilter===v?"on":""}">${l}</button>`).join("")}</div>
+    <select id="lib_group_filter" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:6px 8px;font-size:12px">
+      <option value="all" ${libGroupFilter==="all"?"selected":""}>All groups</option>
+      <option value="none" ${libGroupFilter==="none"?"selected":""}>Ungrouped</option>
+      ${groups.map(g=>`<option value="${g.id}" ${libGroupFilter===g.id?"selected":""}>${esc(g.name||"(unnamed)")}</option>`).join("")}
+    </select>
+    <button class="btn ghost" id="lib_groups_btn" style="font-size:12px">⚙ Groups</button>
+    <div style="margin-left:auto;display:flex;gap:8px">
+      <button class="btn ghost" id="addPaper" style="font-size:12px">＋ 📖 Paper</button>
+      <button class="btn accent" id="addProtocol" style="font-size:12px">＋ 📋 Protocol</button>
+    </div>`;
+  host.appendChild(top);
+  top.querySelector("#lib_kind").addEventListener("click",e=>{
+    const b=e.target.closest("button"); if(!b||b.dataset.k===libKindFilter)return;
+    libKindFilter=b.dataset.k; renderLibrary();
+  });
+  top.querySelector("#lib_group_filter").addEventListener("change",e=>{
+    libGroupFilter=e.target.value; renderLibrary();
+  });
+  top.querySelector("#lib_groups_btn").onclick=()=>libraryGroupsModal();
+  top.querySelector("#addPaper").onclick=()=>libModal("reading");
+  top.querySelector("#addProtocol").onclick=()=>libModal("protocol");
+
+  let items=[
+    ...DB.readings.map(rec=>({kind:"reading",rec})),
+    ...DB.protocols.map(rec=>({kind:"protocol",rec}))
+  ];
+  if(libKindFilter!=="all") items=items.filter(it=>it.kind===libKindFilter);
+  if(libGroupFilter==="none") items=items.filter(it=>!it.rec.groupId);
+  else if(libGroupFilter!=="all") items=items.filter(it=>it.rec.groupId===libGroupFilter);
+
+  if(!items.length){
+    host.appendChild(Object.assign(document.createElement("div"),{className:"empty",
+      textContent:(DB.readings.length||DB.protocols.length)
+        ? "Nothing matches this filter."
+        : "Nothing here yet. Add a paper or a protocol — a link, a file on this computer, or both."}));
     return;
   }
   const list=document.createElement("div"); list.className="lit-list"; host.appendChild(list);
-  [...all].sort((a,b)=>(a.title||"").localeCompare(b.title||"")).forEach(r=>{
+  items.sort((a,b)=>(a.rec.title||"").localeCompare(b.rec.title||"")).forEach(({kind,rec:r})=>{
+    const cfg=LIBS[kind];
     const row=document.createElement("div"); row.className="lit-row";
     const sub=r.link||r.fileName||"";
-    row.innerHTML=`<div class="lit-main">
+    const groupName=r.groupId?libGroupName(r.groupId):"";
+    row.innerHTML=`<span title="${esc(cfg.Noun)}" style="flex:0 0 auto">${LIB_ICON[kind]}</span>
+      <div class="lit-main">
         <div class="lit-title">${esc(r.title||"(untitled)")}</div>
         ${sub?`<div class="lit-link">${esc(sub)}</div>`:""}
       </div>
+      ${groupName?`<span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);border:1px solid var(--line2);border-radius:5px;padding:1px 6px;flex:0 0 auto">${esc(groupName)}</span>`:""}
       ${r.fileName?`<a class="lit-file" role="button" title="Open the file on this computer">📄</a>`:""}
       ${r.link?`<button class="lit-open" title="Open the link">↗</button>`:""}
       <button class="lit-edit" title="Edit">✎</button>
@@ -5548,7 +5584,7 @@ function renderLib(kind,hostId){
       if(!confirm(`Delete "${r.title||"this "+cfg.noun}"?`))return;
       cfg.set(cfg.list().filter(x=>x.id!==r.id));
       fileHandleDel(r.id);                 // the handle goes with the record
-      persist(); renderLib(kind,hostId); toast(`${cfg.Noun} deleted`);
+      persist(); renderLibrary(); toast(`${cfg.Noun} deleted`);
     };
     list.appendChild(row);
   });
@@ -5560,11 +5596,17 @@ function libModal(kind,id){
   // to file the handle under and the experiment list has something to name. It
   // does not join the library until Save, and a handle left behind by a cancelled
   // add is swept by pruneOrphanFiles() at the next start.
-  const rec=r||{id:uid(cfg.prefix),title:"",link:"",fileName:"",added:Date.now()};
+  const rec=r||{id:uid(cfg.prefix),title:"",link:"",fileName:"",groupId:null,added:Date.now()};
   const pending=[];
+  const groups=DB.config.libraryGroups||[];
   modal(`<h3>${r?esc(cfg.Noun):"New "+esc(cfg.noun)}</h3>
     <div class="fld"><label>Title</label><input id="r_title" value="${escAttr(rec.title||"")}" autofocus></div>
     <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(rec.link||"")}"></div>
+    <div class="fld"><label>Group</label>
+      <select id="r_group">
+        <option value="">— no group —</option>
+        ${groups.map(g=>`<option value="${g.id}" ${rec.groupId===g.id?"selected":""}>${esc(g.name||"(unnamed)")}</option>`).join("")}
+      </select></div>
     <div class="fld"><label>File on this computer</label><div id="r_file"></div></div>
     <div class="fld"><label>Projects &amp; experiments</label><div id="r_attach"></div></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
@@ -5577,18 +5619,54 @@ function libModal(kind,id){
     if(!title){ toast("Title can't be empty"); return; }
     rec.title=title;
     rec.link=document.getElementById("r_link").value.trim();
+    rec.groupId=document.getElementById("r_group").value||null;
     if(!r){ cfg.list().push(rec); applyPendingLinks({kind,id:rec.id},pending); }
     persist(); closeModal();
-    if(currentView==="materials")renderMaterials();
-    else if(kind==="reading")renderReading();
+    if(currentView==="library")renderLibrary();
     toast(r?`${cfg.Noun} updated`:`${cfg.Noun} added`);
   };
 }
-// kept as the names the rest of the app already calls
-function renderReading(hostId){ renderLib("reading",hostId||"reading"); }
-function readingModal(id){ libModal("reading",id); }
-function renderProtocols(hostId){ renderLib("protocol",hostId||"ms-protocols"); }
-function protocolModal(id){ libModal("protocol",id); }
+// Custom filing groups for the Library — plain named folders, deliberately no
+// icon/color/fields the way diary types have; deleting one only clears the
+// groupId off whatever was filed there, never the papers/protocols themselves.
+function libraryGroupsModal(){
+  const draw=()=>{
+    const groups=DB.config.libraryGroups||[];
+    const rows=groups.map((g,i)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+      <input class="lg_name" data-i="${i}" value="${escAttr(g.name)}" placeholder="Group name"
+        style="flex:1;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:6px 8px;font-size:12.5px">
+      <button class="lg_del" data-i="${i}"
+        style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕</button>
+    </div>`).join("") || `<div style="font-size:11.5px;color:var(--ink-faint);margin-bottom:8px">No groups yet.</div>`;
+    modal(`<h3>Library groups</h3>
+      <p style="color:var(--ink-dim);font-size:12.5px;margin:0 0 12px;line-height:1.5">
+        Custom folders for filing papers and protocols. Deleting a group leaves its items in place, just ungrouped.</p>
+      <div id="lg_rows">${rows}</div>
+      <button class="btn ghost" id="lg_add" style="font-size:12px;margin-bottom:14px">＋ New group</button>
+      <div class="actions"><button class="btn accent" id="lg_done">Done</button></div>`,{center:true});
+    document.getElementById("lg_rows").addEventListener("input",e=>{
+      if(!e.target.classList.contains("lg_name"))return;
+      const g=groups[+e.target.dataset.i]; if(g){ g.name=e.target.value; persist(); }
+    });
+    document.getElementById("lg_rows").addEventListener("click",e=>{
+      const del=e.target.closest(".lg_del"); if(!del)return;
+      const g=groups[+del.dataset.i]; if(!g)return;
+      if(!confirm(`Delete group "${g.name||"(unnamed)"}"? Papers/protocols filed under it become ungrouped.`))return;
+      DB.readings.forEach(x=>{ if(x.groupId===g.id)x.groupId=null; });
+      DB.protocols.forEach(x=>{ if(x.groupId===g.id)x.groupId=null; });
+      DB.config.libraryGroups=groups.filter(x=>x.id!==g.id);
+      persist(); draw();
+    });
+    document.getElementById("lg_add").onclick=()=>{
+      groups.push({id:uid("lg_"),name:""});
+      persist(); draw();
+      const inputs=document.querySelectorAll("#lg_rows .lg_name");
+      if(inputs.length) inputs[inputs.length-1].focus();
+    };
+    document.getElementById("lg_done").onclick=()=>{ closeModal(); if(currentView==="library")renderLibrary(); };
+  };
+  draw();
+}
 
 /* ---------- NOTES ----------
    Deliberately unstructured: no project, no experiment, no animal — the one
@@ -7406,7 +7484,7 @@ function openLinked(l){
   if(l.kind==="animal"){ closeDetail(); switchTo("animals"); animalModal(l.id); return; }
   if(l.kind==="template"){ closeDetail(); goMaterials("procedures"); return; }
   if(l.kind==="task"){ closeDetail(); goMaterials("diarytypes"); return; }
-  if(l.kind==="reading"){ closeDetail(); goMaterials("literature"); return; }
+  if(l.kind==="reading"||l.kind==="protocol"){ closeDetail(); switchTo("library"); return; }
   if(l.kind==="material"){ closeDetail();
     // land on the library the material actually lives in
     goMaterials({virus:"viruses",site:"sites"}[l.cat]||"inventory"); return; }
