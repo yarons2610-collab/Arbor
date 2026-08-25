@@ -1719,21 +1719,38 @@ function commitCalMove(x,newWhen,newEnd,newDur){
     persist(); return true;
   }
   const rep=src.repeat&&src.repeat.every;
-  if(newWhen!=null){
-    if(rep){
-      // shift the anchor by however far this occurrence moved
-      const d=calDayDelta(x.deadline,newWhen);
-      const t0=newWhen.length>10?newWhen.slice(11):null;
-      src.when=(d?addDaysISO(src.when,d):src.when).slice(0,10)+(t0?"T"+t0:"");
-      if(src.endDate&&d)src.endDate=addDaysISO(src.endDate,d);
-    } else {
-      src.when=newWhen;
-      if(newEnd!==undefined)src.endDate=newEnd;
-    }
-  } else if(newEnd!==undefined&&!rep){ src.endDate=newEnd; }
+  // Dragging one occurrence of a repeating task is still an edit to a shared
+  // record — same "this / this and following / all" question a typed edit
+  // asks in taskEditor, just triggered by a drop instead of a Save click.
+  if(rep&&(newWhen!=null||newDur!=null)){
+    occurrenceScopeModal(scope=>{
+      if(scope==="all"){
+        // shift the anchor by however far this occurrence moved — today's
+        // pre-scoping behaviour, kept exactly for the "all events" choice
+        if(newWhen!=null){
+          const d=calDayDelta(x.deadline,newWhen);
+          const t0=newWhen.length>10?newWhen.slice(11):null;
+          src.when=(d?addDaysISO(src.when,d):src.when).slice(0,10)+(t0?"T"+t0:"");
+          if(src.endDate&&d)src.endDate=addDaysISO(src.endDate,d);
+        }
+        if(newDur!=null)src.duration=newDur;
+        persist(); toast("Moved the whole repeating series");
+      } else {
+        const patch={when:newWhen!=null?newWhen:x.deadline,
+          endDate:newEnd!==undefined?newEnd:x.endDate,
+          duration:newDur!=null?newDur:x.duration};
+        if(scope==="this")detachOccurrence(src,x.deadline,patch);
+        else splitSeriesFrom(src,x.deadline,patch);
+        toast(scope==="this"?"Moved just this occurrence":"Moved this and every occurrence after it");
+      }
+      renderTimeline();
+    });
+    return true;
+  }
+  if(newWhen!=null){ src.when=newWhen; if(newEnd!==undefined)src.endDate=newEnd; }
+  else if(newEnd!==undefined){ src.endDate=newEnd; }
   if(newDur!=null)src.duration=newDur;
   persist();
-  if(rep)toast("Moved the whole repeating series");
   return true;
 }
 // Drag an all-day bar sideways to move it, keeping its length. Pointer events so
@@ -1808,7 +1825,7 @@ function openCalItem(x){
     const a=x.src.a; animalSearch=a.name; DB.config.animalFilters.search=a.name; persist();
     switchTo("animals"); return;
   }
-  if(x.kind==="task"){ taskEditor(x.src,()=>{ renderTimeline(); }); return; }
+  if(x.kind==="task"){ taskEditor(x.src,()=>{ renderTimeline(); },x.deadline,x.endDate); return; }
   openStepInPlan(x.src.id);
 }
 function openStepInPlan(id){
@@ -2219,7 +2236,7 @@ function openNotificationsModal(wantEvents){
                      :`<span style="width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:${overdue?"var(--overdue)":"var(--amber)"}"></span>`}
       <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title||"(unnamed step)")}${wantEvents?"":` <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)">${esc((projById(t.projectId)||{}).name||"")}</span>`}</span>
       <span style="font-family:var(--mono);font-size:10.5px;color:${overdue?"var(--overdue)":"var(--ink-faint)"};flex:0 0 auto">${overdue?"overdue · ":""}${fmtWhenFull(t.deadline)}</span>
-      <button class="ntf-opentask" data-id="${t.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
+      <button class="ntf-opentask" data-id="${t.id}" data-when="${escAttr(t.deadline)}" data-end="${escAttr(t.endDate||"")}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
     </div>`).join("");
     const diaryRows=diaryItems.map(({a,e})=>{ const def=diaryTypeDef(e.type);
       return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
@@ -2247,7 +2264,7 @@ function openNotificationsModal(wantEvents){
       return;
     }
     const ot=e.target.closest(".ntf-opentask"), oa=e.target.closest(".ntf-openanimal");
-    if(ot){ closeModal(); const tk=taskOf(ot.dataset.id); if(tk)taskEditor(tk,()=>render()); else openStepInPlan(ot.dataset.id); }
+    if(ot){ closeModal(); const tk=taskOf(ot.dataset.id); if(tk)taskEditor(tk,()=>render(),ot.dataset.when||null,ot.dataset.end||null); else openStepInPlan(ot.dataset.id); }
     else if(oa){ closeModal(); animalSearch=oa.dataset.name; DB.config.animalFilters.search=animalSearch; persist(); switchTo("animals"); }
   });
 }
@@ -2472,6 +2489,10 @@ function taskOccurrences(t,fromISO,toISO){
     return (end.slice(0,10)>=fromISO&&t.when.slice(0,10)<=toISO)?[{t,when:t.when,endDate:t.endDate}]:[];
   }
   const out=[]; const until=t.repeat.until||null;
+  // A slot listed here was pulled out of the series to become its own
+  // standalone task (see detachOccurrence/splitSeriesFrom) — these are
+  // separate events now, so the rule must never regenerate them.
+  const excluded=new Set(t.excludedDates||[]);
   if(t.repeat.every==="custom"){
     const days=(t.repeat.days||[]).slice().sort((a,b)=>a-b);
     if(!days.length)return [];
@@ -2492,6 +2513,7 @@ function taskOccurrences(t,fromISO,toISO){
         if(until&&iso>until)continue;
         if(iso>toISO)continue;
         const when=iso+(time?"T"+time:"");
+        if(excluded.has(when))continue;
         const e=span?addDaysISO(when,span):null;
         if((e||when).slice(0,10)>=fromISO) out.push({t,when,endDate:e});
       }
@@ -2502,8 +2524,9 @@ function taskOccurrences(t,fromISO,toISO){
   for(let i=0;i<400;i++){
     const w=stepRepeat(t.when,t.repeat,i);
     if(until&&w.slice(0,10)>until)break;
-    const e=span?addDaysISO(w,span):null;
     if(w.slice(0,10)>toISO)break;
+    if(excluded.has(w))continue;
+    const e=span?addDaysISO(w,span):null;
     if((e||w).slice(0,10)>=fromISO) out.push({t,when:w,endDate:e});
   }
   return out;
@@ -2521,6 +2544,56 @@ function addTask(init){
   taskList().push(t); persist(); return t;
 }
 function deleteTask(id){ DB.schedule=taskList().filter(x=>x.id!==id); persist(); }
+// Occurrences of a repeating task all read from the one shared record — real,
+// separate events sharing a rule, not copies of each other. Any edit that
+// needs to apply to fewer than "every occurrence forever" has to ask which
+// occurrences it actually means, the same three-way choice every calendar
+// app offers once a series is involved.
+function occurrenceScopeModal(onChoice){
+  modal(`<h3>Repeating task</h3>
+    <p style="color:var(--ink-dim);font-size:13px;margin:0 0 16px;line-height:1.5">This change — apply it to:</p>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button type="button" class="btn ghost" id="occ_this" style="text-align:left;justify-content:flex-start">Only this event</button>
+      <button type="button" class="btn ghost" id="occ_following" style="text-align:left;justify-content:flex-start">This and all following events</button>
+      <button type="button" class="btn ghost" id="occ_all" style="text-align:left;justify-content:flex-start">All events</button>
+    </div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`,{center:true});
+  document.getElementById("occ_this").onclick=()=>{ closeModal(); onChoice("this"); };
+  document.getElementById("occ_following").onclick=()=>{ closeModal(); onChoice("following"); };
+  document.getElementById("occ_all").onclick=()=>{ closeModal(); onChoice("all"); };
+}
+// Pulls one occurrence out of the series into its own standalone task carrying
+// `patch` — whatever differs for this instance — and excludes occWhen from
+// the base series so the rule never regenerates that slot again. Any done-
+// state this occurrence already had moves onto the new record with it.
+function detachOccurrence(base,occWhen,patch){
+  base.excludedDates=[...(base.excludedDates||[]),occWhen];
+  const wasDone=occDone(base,occWhen);
+  base.doneOccurrences=(base.doneOccurrences||[]).filter(w=>w!==occWhen);
+  const {id,repeat,excludedDates,doneOccurrences,created,...rest}=JSON.parse(JSON.stringify(base));
+  const nt=addTask({...rest,...patch});
+  if(wasDone)setOccDone(nt,nt.when,true);
+  persist();
+  return nt;
+}
+// Caps the base series so it stops generating at splitWhen and spins up a new
+// recurring task — same pattern, same original end date — picking up from
+// splitWhen with `patch` applied. Everything already recorded at or after the
+// split (done marks, earlier detached exceptions) moves onto the new record,
+// since that's whichever one actually generates those dates from here on.
+function splitSeriesFrom(base,splitWhen,patch){
+  const splitDate=splitWhen.slice(0,10);
+  const {id,created,...rest}=JSON.parse(JSON.stringify(base));
+  const keepFrom=w=>w.slice(0,10)>=splitDate;
+  const doneAfter=(base.doneOccurrences||[]).filter(keepFrom);
+  const exclAfter=(base.excludedDates||[]).filter(keepFrom);
+  base.doneOccurrences=(base.doneOccurrences||[]).filter(w=>!keepFrom(w));
+  base.excludedDates=(base.excludedDates||[]).filter(w=>!keepFrom(w));
+  base.repeat={...base.repeat,until:addDays(splitDate,-1)};
+  const nt=addTask({...rest,when:splitWhen,doneOccurrences:doneAfter,excludedDates:exclAfter,...patch});
+  persist();
+  return nt;
+}
 // Where a task belongs. It can name an experiment, or a project on its own —
 // some work is the project's without being any single experiment's. The picker
 // encodes which with an "e:"/"p:" prefix so the two id spaces cannot collide,
@@ -2687,7 +2760,25 @@ function mountLinkEditor(host,owner,onChange,opts){
 function stepModal(pr,st,after){ return experimentModal(pr,st,after); }
 // Name, when, and which of the experiment's data this step uses.
 // A task: what it is, when, and which experiment it belongs to (if any).
-function taskEditor(t,after){
+// occWhen/occEndDate identify the specific occurrence this editor was opened
+// from (the Timeline click, or the notifications "open" button) — omitted
+// when there's no such context (e.g. editing straight from a project's task
+// list), in which case this always edits the shared record directly, exactly
+// as before occurrence scoping existed.
+function taskEditor(t,after,occWhen,occEndDate){
+  const wasRecurring=!!(t.repeat&&t.repeat.every);
+  // the true, un-edited series state — needed to revert t if the chosen scope
+  // turns out to be "this"/"following" (nothing before the split should carry
+  // whatever got typed during this session), and to shift the real anchor by
+  // the right amount if it's "all"
+  const before=JSON.parse(JSON.stringify(t));
+  if(occWhen!=null){
+    // show/edit *this* occurrence's own date, not the series' anchor — "all
+    // events" below re-derives the anchor's own shift from how far this one
+    // moved, so the whole series doesn't jump onto one occurrence's date
+    t.when=occWhen; t.endDate=occEndDate;
+  }
+  const seeded=JSON.parse(JSON.stringify(t));   // what the form actually opened showing
   // Each project offers itself first, then its experiments, so "this belongs to
   // the project but to no one experiment" is a thing you can actually say.
   const opts=DB.projects.map(pr=>{
@@ -2791,11 +2882,55 @@ function taskEditor(t,after){
   drawRepeat();
   bindDateButton(document.getElementById("tk_until"), ()=>((t.repeat&&t.repeat.until)||""),
     v=>{ if(!t.repeat)t.repeat={every:"week",until:null}; t.repeat.until=v?v.slice(0,10):null; persist(); });
+  // "this"/"following" must never leak this session's in-progress edit onto
+  // occurrences the chosen scope doesn't cover — puts the shared record back
+  // exactly how it stood before any of these handlers touched it, so the
+  // detach/split/exclude below starts from a clean, untouched base.
+  const revert=()=>{ for(const k of Object.keys(t))delete t[k]; Object.assign(t,before); };
   document.getElementById("tk_save").onclick=()=>{
-    t.title=document.getElementById("tk_name").value; persist(); closeModal(); if(after)after(); };
+    t.title=document.getElementById("tk_name").value; persist();
+    const finish=()=>{ closeModal(); if(after)after(); };
+    const fieldsOf=x=>JSON.stringify({title:x.title,when:x.when,endDate:x.endDate,color:x.color,projectId:x.projectId,experimentId:x.experimentId,repeat:x.repeat});
+    if(fieldsOf(t)===fieldsOf(seeded)||!wasRecurring||occWhen==null){ finish(); return; }
+    occurrenceScopeModal(scope=>{
+      if(scope==="all"){
+        // t.when/t.endDate currently hold *this* occurrence's edited date,
+        // seeded from occWhen rather than the series' own anchor — shift the
+        // real anchor by the same amount instead of overwriting it outright,
+        // so the whole pattern moves together rather than collapsing onto
+        // one occurrence's date
+        const deltaMin=(whenDate(t.when)-whenDate(occWhen))/60000;
+        t.when=deltaMin?isoAddMinutes(before.when,deltaMin):before.when;
+        t.endDate=before.endDate?(deltaMin?isoAddMinutes(before.endDate,deltaMin):before.endDate):before.endDate;
+        persist(); finish(); return;
+      }
+      const patch={title:t.title,when:t.when,endDate:t.endDate,color:t.color,
+        projectId:t.projectId,experimentId:t.experimentId,isEvent:t.isEvent};
+      if(scope==="following")patch.repeat=t.repeat;
+      revert();
+      if(scope==="this")detachOccurrence(t,occWhen,patch);
+      else splitSeriesFrom(t,occWhen,patch);
+      finish();
+    });
+  };
   document.getElementById("tk_del").onclick=()=>{
     if(!confirm(`Delete the task "${t.title||"(unnamed)"}"?`))return;
-    deleteTask(t.id); closeModal(); if(after)after(); };
+    if(!wasRecurring||occWhen==null){ deleteTask(t.id); closeModal(); if(after)after(); return; }
+    occurrenceScopeModal(scope=>{
+      if(scope==="all"){ deleteTask(t.id); closeModal(); if(after)after(); return; }
+      revert();
+      if(scope==="this"){
+        t.excludedDates=[...(t.excludedDates||[]),occWhen];
+        t.doneOccurrences=(t.doneOccurrences||[]).filter(w=>w!==occWhen);
+      } else {
+        const splitDate=occWhen.slice(0,10);
+        t.doneOccurrences=(t.doneOccurrences||[]).filter(w=>w.slice(0,10)<splitDate);
+        t.excludedDates=(t.excludedDates||[]).filter(w=>w.slice(0,10)<splitDate);
+        t.repeat.until=addDays(splitDate,-1);
+      }
+      persist(); closeModal(); if(after)after();
+    });
+  };
 }
 // Which animals this experiment uses, and which group each is in. Its own
 // window because the assignment list grows with the cohort and was making the
