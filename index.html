@@ -650,6 +650,13 @@
        padding alone was costing the grid 52px of width and 116px of height
        before it drew a single hour. */
     #timeline.wrap{padding:0}
+    /* iOS Safari zooms the whole page in on focus of any text input whose
+       computed font-size is under 16px — 13px on desktop is fine, but on a
+       phone that meant tapping the Name field (or any other .fld input) to
+       type a task/event title zoomed the viewport in every time. 16px is the
+       documented threshold; the field just needs to clear it, not match it
+       exactly, so a hair over is enough headroom. */
+    .fld input,.fld select,.fld textarea{font-size:16px}
     /* The Timeline is what this whole pass is about, and the app's own
        chrome — a repeated title, full-size buttons — was costing it more
        height than the actual hour grid was left with. The phone's own home
@@ -706,9 +713,15 @@
     .cal-mode,.cal-colour{flex:0 0 auto}
     .cal-mode button,.cal-colour button{padding:2px 7px;font-size:10.5px}
     .cal-colour .cc-lab{display:none}
-    /* calendar popover: full-width */
-    .cal-pop{position:fixed!important;left:8px!important;right:8px!important;
-      width:auto!important;top:auto!important;bottom:8px!important}
+    /* calendar popover: centered, like modal-center's short utility dialogs —
+       anchoring it to the date/time button (the desktop behaviour, set inline
+       by openCalendar/openTimePicker) leaves it hugging whichever edge of a
+       narrow phone screen the button happens to be near, which reads as
+       stranded rather than a deliberate dialog */
+    .cal-pop{position:fixed!important;left:50%!important;right:auto!important;
+      top:50%!important;bottom:auto!important;transform:translate(-50%,-50%);
+      width:88vw!important;max-width:320px!important;
+      max-height:80vh;max-height:80dvh;overflow:auto}
     /* timeline: shrink to fit the screen width instead of scrolling sideways —
        a narrower gutter plus minmax(0,1fr) day columns let all 7 days compress
        to fit any phone width; vertical scroll through the hours is unaffected */

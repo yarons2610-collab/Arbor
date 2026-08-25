@@ -3,7 +3,7 @@
 // itself (HTML/JS/fonts) still loading when you're offline.
 // IMPORTANT: bump this version string on every deploy — cache-first means an
 // installed phone keeps serving the old app shell forever otherwise.
-const CACHE_NAME = "arbor-v111";
+const CACHE_NAME = "arbor-v112";
 const APP_SHELL = [
   "./",
   "index.html",
