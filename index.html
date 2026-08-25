@@ -240,13 +240,18 @@
   .pc-iname{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pc-idet{font-family:var(--mono);font-size:9.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .lit-list{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
-  .note-toolbar{display:flex;gap:6px;margin-bottom:6px}
+  .note-toolbar{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}
   .note-toolbar button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer}
   .note-toolbar button:hover{color:var(--ink)}
+  .note-toolbar button.on{color:#fff;border-color:currentColor}
+  .note-toolbar .note-toolbar-sep{width:1px;background:var(--line2);margin:2px 2px}
   .note-body{min-height:180px;max-height:360px;overflow:auto;background:var(--bg2);border:1px solid var(--line2);
     border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.5;color:var(--ink)}
   .note-body:focus{outline:none;border-color:var(--gcamp)}
-  .note-body ul,.note-body ol{margin:4px 0;padding-left:22px}
+  /* padding-inline-start, not padding-left — a plain physical property would
+     keep indenting toward the left even for an RTL note, pushing every list
+     one direction further from its own text instead of toward it */
+  .note-body ul,.note-body ol{margin:4px 0;padding-inline-start:22px}
   .note-body:empty:before{content:attr(data-ph);color:var(--ink-faint)}
   .lit-row{display:flex;align-items:center;gap:8px;background:var(--panel);padding:9px 12px}
   .lit-main{flex:1;min-width:0}
@@ -5703,7 +5708,7 @@ function renderNotes(){
     const preview=noteBodyPreview(n);
     row.innerHTML=`<div class="lit-main" style="cursor:pointer;display:flex;align-items:center;gap:8px">
         ${n.drawing?`<img src="${n.drawing}" style="width:28px;height:28px;object-fit:cover;border-radius:5px;border:1px solid var(--line2);flex:0 0 auto;background:#fff">`:""}
-        <div style="min-width:0">
+        <div style="min-width:0" dir="${n.dir==="rtl"?"rtl":"ltr"}">
           <div class="lit-title">${esc(n.title||"(untitled)")}</div>
           ${preview?`<div class="lit-link">${esc(preview.slice(0,140))}</div>`:""}
         </div>
@@ -5764,25 +5769,53 @@ function noteModal(id,over){
   const titleSeed=over?over.title:(n?n.title:"");
   const bodySeed=over?over.bodyHTML:noteBodyHTML(n);
   let pendingDrawing=over?over.drawing:(n?n.drawing||null:null);
+  let noteDir=(over?over.dir:(n?n.dir:null))||"ltr";
   modal(`<h3>${n?"Note":"New note"}</h3>
-    <div class="fld"><label>Title</label><input id="n_title" value="${escAttr(titleSeed||"")}" autofocus></div>
+    <div class="fld"><label>Title</label><input id="n_title" dir="${noteDir}" value="${escAttr(titleSeed||"")}" autofocus></div>
     <div class="fld"><label>Note</label>
       <div class="note-toolbar">
         <button type="button" id="n_ul" title="Bullet list">• List</button>
         <button type="button" id="n_ol" title="Numbered list">1. List</button>
+        <span class="note-toolbar-sep"></span>
+        <button type="button" id="n_outdent" title="Un-nest this item (Shift+Tab)">◂ Outdent</button>
+        <button type="button" id="n_indent" title="Nest this item under the one above (Tab)">▸ Indent</button>
+        <span class="note-toolbar-sep"></span>
+        <button type="button" id="n_ltr" title="Left to right" class="${noteDir==="ltr"?"on":""}">LTR</button>
+        <button type="button" id="n_rtl" title="Right to left" class="${noteDir==="rtl"?"on":""}">RTL</button>
       </div>
-      <div id="n_body" class="note-body" contenteditable="true" data-ph="Write here…">${bodySeed||""}</div>
+      <div id="n_body" class="note-body" contenteditable="true" dir="${noteDir}" data-ph="Write here…">${bodySeed||""}</div>
     </div>
     <div class="fld"><label>Drawing</label><div id="n_drawwrap"></div></div>
     ${n?`<div class="drow" style="margin-top:14px"><button class="btn danger" id="n_del">Delete note</button></div>`:""}
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="n_save">Save</button></div>`,{wide:true});
-  const bodyEl=document.getElementById("n_body");
+  const bodyEl=document.getElementById("n_body"), titleEl=document.getElementById("n_title");
   // mousedown, not click: click fires after focus has already left the
   // contenteditable, taking its selection with it, and execCommand needs
   // that selection to know where to insert the list
   document.getElementById("n_ul").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("insertUnorderedList"); });
   document.getElementById("n_ol").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("insertOrderedList"); });
+  document.getElementById("n_indent").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("indent"); });
+  document.getElementById("n_outdent").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("outdent"); });
+  // Tab/Shift+Tab nest/un-nest a list item, matching every other editor —
+  // but only inside a list, so Tab still moves focus off the field the rest
+  // of the time instead of getting trapped in the note body.
+  bodyEl.addEventListener("keydown",e=>{
+    if(e.key!=="Tab")return;
+    const node=window.getSelection().anchorNode;
+    const li=node&&(node.nodeType===1?node:node.parentElement)?.closest("li");
+    if(!li)return;
+    e.preventDefault();
+    document.execCommand(e.shiftKey?"outdent":"indent");
+  });
+  const setDir=d=>{
+    noteDir=d;
+    bodyEl.dir=d; titleEl.dir=d;
+    document.getElementById("n_ltr").classList.toggle("on",d==="ltr");
+    document.getElementById("n_rtl").classList.toggle("on",d==="rtl");
+  };
+  document.getElementById("n_ltr").addEventListener("mousedown",e=>{ e.preventDefault(); setDir("ltr"); });
+  document.getElementById("n_rtl").addEventListener("mousedown",e=>{ e.preventDefault(); setDir("rtl"); });
   const drawWrap=document.getElementById("n_drawwrap");
   const drawDraw=()=>{
     drawWrap.innerHTML=pendingDrawing
@@ -5795,7 +5828,7 @@ function noteModal(id,over){
     // very inputs these read — reading them lazily from inside the callback
     // would find nothing left to read
     const openPad=existingDrawing=>{
-      const keep={title:document.getElementById("n_title").value, bodyHTML:document.getElementById("n_body").innerHTML, drawing:pendingDrawing};
+      const keep={title:document.getElementById("n_title").value, bodyHTML:document.getElementById("n_body").innerHTML, drawing:pendingDrawing, dir:noteDir};
       noteDrawModal(existingDrawing,
         d=>noteModal(id,{...keep,drawing:d}),
         ()=>noteModal(id,keep));
@@ -5810,8 +5843,8 @@ function noteModal(id,over){
     const body=document.getElementById("n_body").innerHTML;
     const bodyEmpty=!document.getElementById("n_body").textContent.trim();
     if(!title&&bodyEmpty&&!pendingDrawing){ toast("Nothing to save"); return; }
-    if(n){ n.title=title; n.body=body; n.rich=true; n.drawing=pendingDrawing; n.updated=Date.now(); }
-    else DB.notes.push({id:uid("note_"),title,body,rich:true,drawing:pendingDrawing,updated:Date.now(),created:Date.now()});
+    if(n){ n.title=title; n.body=body; n.rich=true; n.drawing=pendingDrawing; n.dir=noteDir; n.updated=Date.now(); }
+    else DB.notes.push({id:uid("note_"),title,body,rich:true,drawing:pendingDrawing,dir:noteDir,updated:Date.now(),created:Date.now()});
     persist(); closeModal(); renderNotes();
     toast(n?"Note updated":"Note added");
   };
