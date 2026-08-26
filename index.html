@@ -5985,17 +5985,34 @@ function noteDrawModal(existing,onSave,onCancel){
 // drawing pad replaced #modal's content and took those fields with it. A
 // plain noteModal(id) (over omitted) always seeds from the saved record,
 // which is what opening a note normally means.
-// Wraps the current selection in the body in an explicit dir span — a
-// per-phrase override, not a whole-note setting, since a note mixing (say)
-// English and Hebrew shouldn't have to pick one direction for everything in
-// it. The body itself is left at dir="auto" so plain typing already reads
-// correctly most of the time; this is for the cases auto-detection alone
-// can't get right (a sentence mixing both, a lone RTL clause, etc).
+// A per-phrase override when the selection is *part* of a line (a note
+// mixing English and Hebrew shouldn't have to pick one direction for
+// everything in it) — but when the selection covers a whole line/paragraph,
+// wrapping the raw text in an inline dir="rtl" span visibly does nothing:
+// an inline element can't be right-aligned, and RTL-script text already
+// reorders correctly via the browser's own bidi algorithm regardless of an
+// explicit dir, so "select all my Hebrew and click RTL" looked like it had
+// no effect at all. That case instead flips dir *and* text-align on the
+// enclosing block itself — the same thing "Right to left" does in every
+// other rich text editor. The body itself is left at dir="auto" otherwise,
+// so plain typing already reads correctly most of the time without either.
 function applyDirToSelection(dir){
   const sel=window.getSelection();
   if(!sel||!sel.rangeCount){ toast("Select some text first"); return; }
   const range=sel.getRangeAt(0);
   if(range.collapsed){ toast("Select some text first"); return; }
+  const selected=range.toString().trim();
+  let node=range.commonAncestorContainer;
+  if(node.nodeType!==1) node=node.parentElement;
+  // the nearest actual line — a <div>/<li> a line break made, or the
+  // contenteditable body itself when there's no block structure yet,
+  // meaning the whole thing genuinely is one paragraph
+  const block=node&&node.closest(".rte-body, div, li");
+  if(block&&selected&&selected===block.textContent.trim()){
+    block.dir=dir;
+    block.style.textAlign=dir==="rtl"?"right":"left";
+    return;
+  }
   const span=document.createElement("span");
   span.dir=dir;
   span.appendChild(range.extractContents());
