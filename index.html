@@ -1376,7 +1376,12 @@ function migrate(){                       // backfill fields added in later vers
   animalStatus=DB.config.animalFilters.status||"all";
   animalExperiment=DB.config.animalFilters.experiment||"all";
   animalGroup=DB.config.animalFilters.group||"all";
-  animalSort=DB.config.animalFilters.sort||"name";
+  // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
+  // may still carry — each meant ascending (earliest/oldest first) already,
+  // so map them onto their explicit _asc equivalent rather than losing the
+  // saved choice to the "Name" fallback below.
+  const legacySort={dob:"dob_asc",added:"added_asc",sac:"sac_asc"};
+  animalSort=legacySort[DB.config.animalFilters.sort]||DB.config.animalFilters.sort||"name";
   animalSearch=DB.config.animalFilters.search||"";
   // backfill new virus fields
   (DB.config.virusLib||[]).forEach((v,i)=>{ if(!v.color)v.color=INJ_COLORS[i%INJ_COLORS.length];
@@ -5869,18 +5874,24 @@ function libraryGroupsModal(){
    place in Arbor that does not ask what something belongs to. */
 // Body is stored as HTML now, so a bulleted or numbered list can actually be
 // a list rather than a typed dash. A note saved before this existed has a
-// plain-text body and no `rich` flag; noteBodyHTML() escapes that safely into
-// equivalent-looking HTML on the way in, and every note is `rich` from its
-// next save onward, so this conversion only ever happens once per old note.
-function noteBodyHTML(n){
-  if(!n) return "";
-  if(n.rich) return n.body||"";
-  return esc(n.body||"").replace(/\n/g,"<br>");
+// plain-text body and no `rich` flag; every note is `rich` from its next
+// save onward, so richBodyHTML() below only ever has to convert an old one once.
+// Shared by any rich-text field (notes, an animal's surgical comments, …):
+// `raw` is either already-saved HTML (isRich) or plain text from before that
+// field had rich formatting at all, in which case a literal newline has to
+// be turned into a real <br> — plain HTML collapses it to nothing, which is
+// exactly the "my line breaks vanished" bug this exists to avoid.
+function richBodyHTML(raw,isRich){
+  if(!raw) return "";
+  if(isRich) return raw;
+  return esc(raw).replace(/\n/g,"<br>");
 }
-function noteBodyPreview(n){
-  const tmp=document.createElement("div"); tmp.innerHTML=noteBodyHTML(n);
+function richTextPlain(html){
+  const tmp=document.createElement("div"); tmp.innerHTML=html||"";
   return (tmp.textContent||"").replace(/\s+/g," ").trim();
 }
+function noteBodyHTML(n){ return n?richBodyHTML(n.body,n.rich):""; }
+function noteBodyPreview(n){ return richTextPlain(noteBodyHTML(n)); }
 // Which notes are currently expanded to their read-only inline preview —
 // session-only, reset on reload same as every other list's transient UI state.
 let notesExpanded=new Set();
@@ -5993,45 +6004,35 @@ function applyDirToSelection(dir){
   after.selectNodeContents(span);
   sel.removeAllRanges(); sel.addRange(after);
 }
-function noteModal(id,over){
-  const n=id?DB.notes.find(x=>x.id===id):null;
-  const titleSeed=over?over.title:(n?n.title:"");
-  const bodySeed=over?over.bodyHTML:noteBodyHTML(n);
-  let pendingDrawing=over?over.drawing:(n?n.drawing||null:null);
-  const pending=over&&over.links?over.links:[];
-  modal(`<h3>${n?"Note":"New note"}</h3>
-    <div class="fld"><label>Title</label><input id="n_title" dir="auto" value="${escAttr(titleSeed||"")}" autofocus></div>
-    <div class="fld"><label>Note</label>
-      <div class="note-toolbar">
-        <button type="button" id="n_ul" title="Bullet list">• List</button>
-        <button type="button" id="n_ol" title="Numbered list">1. List</button>
-        <span class="note-toolbar-sep"></span>
-        <button type="button" id="n_outdent" title="Un-nest this item (Shift+Tab)">◂ Outdent</button>
-        <button type="button" id="n_indent" title="Nest this item under the one above (Tab)">▸ Indent</button>
-        <span class="note-toolbar-sep"></span>
-        <button type="button" id="n_ltr" title="Set the selected text left-to-right">LTR</button>
-        <button type="button" id="n_rtl" title="Set the selected text right-to-left">RTL</button>
-      </div>
-      <div id="n_body" class="note-body" contenteditable="true" dir="auto" data-ph="Write here…">${bodySeed||""}</div>
+// The lists/indent/direction toolbar + contenteditable body Notes uses,
+// factored out so any other rich-text field (an animal's surgical comments,
+// etc.) gets the same editing primitives instead of a second hand-wired copy.
+// Returns the contenteditable body element — read its .innerHTML on save.
+function mountRichTextEditor(host,seedHTML,opts){
+  const placeholder=escAttr((opts&&opts.placeholder)||"Write here…");
+  host.innerHTML=`
+    <div class="note-toolbar">
+      <button type="button" class="rte-ul" title="Bullet list">• List</button>
+      <button type="button" class="rte-ol" title="Numbered list">1. List</button>
+      <span class="note-toolbar-sep"></span>
+      <button type="button" class="rte-outdent" title="Un-nest this item (Shift+Tab)">◂ Outdent</button>
+      <button type="button" class="rte-indent" title="Nest this item under the one above (Tab)">▸ Indent</button>
+      <span class="note-toolbar-sep"></span>
+      <button type="button" class="rte-ltr" title="Set the selected text left-to-right">LTR</button>
+      <button type="button" class="rte-rtl" title="Set the selected text right-to-left">RTL</button>
     </div>
-    <div class="fld"><label>Drawing</label><div id="n_drawwrap"></div></div>
-    <div class="fld"><label>Project &amp; experiment</label><div id="n_attach"></div></div>
-    ${n?`<div class="drow" style="margin-top:14px"><button class="btn danger" id="n_del">Delete note</button></div>`:""}
-    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn accent" id="n_save">Save</button></div>`,{wide:true});
-  const bodyEl=document.getElementById("n_body");
-  if(n) mountAttachments(document.getElementById("n_attach"),{kind:"note",id:n.id});
-  else  mountPendingLinks(document.getElementById("n_attach"),pending);
+    <div class="note-body rte-body" contenteditable="true" dir="auto" data-ph="${placeholder}">${seedHTML||""}</div>`;
+  const bodyEl=host.querySelector(".rte-body");
   // mousedown, not click: click fires after focus has already left the
   // contenteditable, taking its selection with it, and execCommand needs
   // that selection to know where to insert the list
-  document.getElementById("n_ul").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("insertUnorderedList"); });
-  document.getElementById("n_ol").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("insertOrderedList"); });
-  document.getElementById("n_indent").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("indent"); });
-  document.getElementById("n_outdent").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("outdent"); });
+  host.querySelector(".rte-ul").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("insertUnorderedList"); });
+  host.querySelector(".rte-ol").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("insertOrderedList"); });
+  host.querySelector(".rte-indent").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("indent"); });
+  host.querySelector(".rte-outdent").addEventListener("mousedown",e=>{ e.preventDefault(); bodyEl.focus(); document.execCommand("outdent"); });
   // Tab/Shift+Tab nest/un-nest a list item, matching every other editor —
   // but only inside a list, so Tab still moves focus off the field the rest
-  // of the time instead of getting trapped in the note body.
+  // of the time instead of getting trapped in the body.
   bodyEl.addEventListener("keydown",e=>{
     if(e.key!=="Tab")return;
     const node=window.getSelection().anchorNode;
@@ -6042,9 +6043,28 @@ function noteModal(id,over){
   });
   // preventDefault here for the same reason as the list buttons above — a
   // mousedown on the button would otherwise blur the body and collapse the
-  // selection before this handler ever saw it
-  document.getElementById("n_ltr").addEventListener("mousedown",e=>{ e.preventDefault(); applyDirToSelection("ltr"); bodyEl.focus(); });
-  document.getElementById("n_rtl").addEventListener("mousedown",e=>{ e.preventDefault(); applyDirToSelection("rtl"); bodyEl.focus(); });
+  // selection before applyDirToSelection ever saw it
+  host.querySelector(".rte-ltr").addEventListener("mousedown",e=>{ e.preventDefault(); applyDirToSelection("ltr"); bodyEl.focus(); });
+  host.querySelector(".rte-rtl").addEventListener("mousedown",e=>{ e.preventDefault(); applyDirToSelection("rtl"); bodyEl.focus(); });
+  return bodyEl;
+}
+function noteModal(id,over){
+  const n=id?DB.notes.find(x=>x.id===id):null;
+  const titleSeed=over?over.title:(n?n.title:"");
+  const bodySeed=over?over.bodyHTML:noteBodyHTML(n);
+  let pendingDrawing=over?over.drawing:(n?n.drawing||null:null);
+  const pending=over&&over.links?over.links:[];
+  modal(`<h3>${n?"Note":"New note"}</h3>
+    <div class="fld"><label>Title</label><input id="n_title" dir="auto" value="${escAttr(titleSeed||"")}" autofocus></div>
+    <div class="fld"><label>Note</label><div id="n_bodywrap"></div></div>
+    <div class="fld"><label>Drawing</label><div id="n_drawwrap"></div></div>
+    <div class="fld"><label>Project &amp; experiment</label><div id="n_attach"></div></div>
+    ${n?`<div class="drow" style="margin-top:14px"><button class="btn danger" id="n_del">Delete note</button></div>`:""}
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn accent" id="n_save">Save</button></div>`,{wide:true});
+  const bodyEl=mountRichTextEditor(document.getElementById("n_bodywrap"),bodySeed);
+  if(n) mountAttachments(document.getElementById("n_attach"),{kind:"note",id:n.id});
+  else  mountPendingLinks(document.getElementById("n_attach"),pending);
   const drawWrap=document.getElementById("n_drawwrap");
   const drawDraw=()=>{
     drawWrap.innerHTML=pendingDrawing
@@ -6057,7 +6077,7 @@ function noteModal(id,over){
     // very inputs these read — reading them lazily from inside the callback
     // would find nothing left to read
     const openPad=existingDrawing=>{
-      const keep={title:document.getElementById("n_title").value, bodyHTML:document.getElementById("n_body").innerHTML, drawing:pendingDrawing, links:pending};
+      const keep={title:document.getElementById("n_title").value, bodyHTML:bodyEl.innerHTML, drawing:pendingDrawing, links:pending};
       noteDrawModal(existingDrawing,
         d=>noteModal(id,{...keep,drawing:d}),
         ()=>noteModal(id,keep));
@@ -6069,8 +6089,8 @@ function noteModal(id,over){
   drawDraw();
   document.getElementById("n_save").onclick=()=>{
     const title=document.getElementById("n_title").value.trim();
-    const body=document.getElementById("n_body").innerHTML;
-    const bodyEmpty=!document.getElementById("n_body").textContent.trim();
+    const body=bodyEl.innerHTML;
+    const bodyEmpty=!bodyEl.textContent.trim();
     if(!title&&bodyEmpty&&!pendingDrawing){ toast("Nothing to save"); return; }
     if(n){ n.title=title; n.body=body; n.rich=true; n.drawing=pendingDrawing; n.updated=Date.now(); }
     else{
@@ -6293,7 +6313,10 @@ function renderAnimals(){
       <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search name, cage, strain, notes, project or experiment…"
         style="flex:1 1 160px;max-width:340px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
       <div class="af-sortbar"><span class="af-label af-sort">↕ Sort by</span>
-        <select id="a_sort" class="af-sel af-sort">${[["name","Name"],["dob","Born"],["added","Added"],["sac","Sacrificed"]]
+        <select id="a_sort" class="af-sel af-sort">${[["name","Name"],
+          ["dob_asc","Born (earliest)"],["dob_desc","Born (latest)"],
+          ["added_asc","Added (earliest)"],["added_desc","Added (latest)"],
+          ["sac_asc","Sacrificed (earliest)"],["sac_desc","Sacrificed (latest)"]]
           .map(o=>`<option value="${o[0]}" ${animalSort===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select></div>
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         <button class="btn ghost" id="a_eventlog">📋 Event log</button>
@@ -6340,7 +6363,10 @@ function renderAnimals(){
     const where=[...animalProjects(a.id).map(pj=>pj.name),
                  ...animalSteps(a.id).map(x=>x.st.title),
                  ...animalGroups(a.id).map(g=>g.g.name)];
-    return [a.name,a.cage,a.strain,a.comments,...where].some(v=>v && String(v).toLowerCase().includes(q));
+    // a.comments can be rich HTML now — search the text it actually reads as,
+    // not the raw markup (a stray tag shouldn't matter, and shouldn't need
+    // to appear in the search term to find a match either)
+    return [a.name,a.cage,a.strain,richTextPlain(richBodyHTML(a.comments,a.commentsRich)),...where].some(v=>v && String(v).toLowerCase().includes(q));
   }
   const inProject=(a,pid)=>pid==="all"||(pid==="none"?!animalProjects(a.id).length
                                                      :animalProjects(a.id).some(p=>p.id===pid));
@@ -6361,13 +6387,17 @@ function renderAnimals(){
     searchMatch(a));
   // Missing dates sort last whichever way round, so a half-filled column never
   // buries the animals that do have one.
-  const byDate=k=>(x,y)=>{ const a=x[k]||"", b=y[k]||"";
+  const byDate=(k,desc)=>(x,y)=>{ const a=x[k]||"", b=y[k]||"";
     if(!a&&!b)return (x.name||"").localeCompare(y.name||"");
-    if(!a)return 1; if(!b)return -1; return a.localeCompare(b); };
-  list.sort(animalSort==="dob"?byDate("dob")
-          :animalSort==="sac"?byDate("sacrificed")
-          :animalSort==="added"?((x,y)=>(x.created||0)-(y.created||0)||(x.name||"").localeCompare(y.name||""))
-          :((x,y)=>(x.name||"").localeCompare(y.name||"")));
+    if(!a)return 1; if(!b)return -1; return desc?b.localeCompare(a):a.localeCompare(b); };
+  const byAdded=desc=>(x,y)=>(desc?(y.created||0)-(x.created||0):(x.created||0)-(y.created||0))||(x.name||"").localeCompare(y.name||"");
+  const byName=(x,y)=>(x.name||"").localeCompare(y.name||"");
+  const sorters={
+    dob_asc:byDate("dob",false), dob_desc:byDate("dob",true),
+    sac_asc:byDate("sacrificed",false), sac_desc:byDate("sacrificed",true),
+    added_asc:byAdded(false), added_desc:byAdded(true),
+  };
+  list.sort(sorters[animalSort]||byName);
   const cnt=(f)=>list.filter(f).length;
   const sum=document.createElement("div");
   sum.style.cssText="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:18px;font-family:var(--mono);font-size:11.5px;color:var(--ink-dim)";
@@ -6427,7 +6457,7 @@ function animalCard(a){
     <div class="a-detail" style="display:${expanded?"block":"none"};margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px;line-height:1.6;color:var(--ink-dim)">
       ${arow("Born",a.dob)}${arow("Sacrificed",a.sacrificed)}${arow("Cage",a.cage||"—")}
       ${arow("Virus",a.virus)}${arow("Targets",a.targets)}${arow("Coords",a.coords)}${arow("Volume",a.volume)}
-      ${a.comments?arow("Notes",a.comments):""}
+      ${a.comments?arowHTML("Notes",richBodyHTML(a.comments,a.commentsRich)):""}
       ${(a.tasks&&a.tasks.length)?arow("Tasks",a.tasks.map(tid=>{const t=taskById(tid);return t?t.title:null;}).filter(Boolean).join("  ·  ")):""}
       <div style="display:flex;gap:20px;align-items:flex-start;margin-top:12px;flex-wrap:wrap">
         ${a.surgeryDetail?`<div style="flex:0 0 auto;width:360px;max-width:100%">
@@ -6568,6 +6598,11 @@ function openEventLogModal(presetIds){
   };
 }
 function arow(label,val){ return val?`<div><span style="display:inline-block;width:78px;color:var(--ink-faint);font-family:var(--mono);font-size:10px">${label}</span>${esc(String(val))}</div>`:""; }
+// Same row shape as arow(), but for a rich-text field (bullets, a real line
+// break, a dir="rtl" span) that would otherwise get flattened by esc() —
+// the label sits above the body instead of beside it, since a multi-line
+// note reads awkwardly squeezed next to a fixed-width label.
+function arowHTML(label,html){ return html?`<div style="margin-bottom:4px"><span style="display:block;color:var(--ink-faint);font-family:var(--mono);font-size:10px;margin-bottom:2px">${label}</span><div>${html}</div></div>`:""; }
 // diary as a unified small month calendar — every entry type (weight, post-op,
 // training, comment, note) shows on the same calendar: weight gets its usual
 // numeric+trend display, other types show as small colored dots, and a type
@@ -7610,7 +7645,7 @@ function animalModal(id,draft){
       ${procedureSectionHTML("am")}
     </div>
 
-    <div class="fld"><label>Surgical comments / notes</label><textarea id="am_com">${esc(view.comments||"")}</textarea></div>
+    <div class="fld"><label>Surgical comments / notes</label><div id="am_comwrap"></div></div>
     <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
 
   // Which experiments this animal is in and which group of each. For an existing
@@ -7622,6 +7657,8 @@ function animalModal(id,draft){
     if(id) mountAttachments(document.getElementById("am_attach"),{kind:"animal",id},{groups:true});
     else   mountPendingExperiments(document.getElementById("am_attach"),pendingExp);
   }
+  const comBody=mountRichTextEditor(document.getElementById("am_comwrap"),
+    richBodyHTML(view.comments,view.commentsRich),{placeholder:"Anything worth recording about this animal's surgery…"});
 
   // dates — custom wiring instead of bindDateButton so the Born button can
   // also show age in weeks (which depends on both dates, so either one
@@ -7654,7 +7691,7 @@ function animalModal(id,draft){
       strain:document.getElementById("am_strain").value,
       dob:vDob, sacrificed:vSac, termination,
       surgeryDetail:procEditor.getSnapshot(),
-      comments:document.getElementById("am_com").value
+      comments:comBody.innerHTML, commentsRich:true
     };
     closeModal();
     renderLibraryModal(focus,()=>animalModal(id,d));
@@ -7674,7 +7711,7 @@ function animalModal(id,draft){
       strain:document.getElementById("am_strain").value,
       dob:vDob, sacrificed:vSac, termination,
       surgeryDetail:{headpost:tpl.headpost,window:tpl.window,winAp:tpl.winAp,winMl:tpl.winMl,winDiam:tpl.winDiam,injections:tpl.injections.map(x=>({...x}))},
-      comments:document.getElementById("am_com").value
+      comments:comBody.innerHTML, commentsRich:true
     };
     closeModal();
     animalModal(id,d);
@@ -7699,7 +7736,7 @@ function animalModal(id,draft){
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
       dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
       termination, alive:termination==="alive",
-      comments:document.getElementById("am_com").value.trim()};
+      comments:comBody.textContent.trim()?comBody.innerHTML:"", commentsRich:true};
     if(id){
       Object.assign(a,rec);
     } else {
@@ -8450,7 +8487,7 @@ function downloadExcel(filename,sheets){ download(filename,buildExcelXML(sheets)
 function exportFullDatabaseExcel(){
   const animalsRows=[["ID","Name","Cohort","Cage","Sex","Strain","Born","Sacrificed","Status","Head-post","Cranial window","Comments"]];
   DB.animals.forEach(a=>animalsRows.push([a.id,a.name,a.cohort||"",a.cage||"",a.sex||"",a.strain||"",a.dob||"",a.sacrificed||"",
-    a.termination||"",a.surgeryDetail&&a.surgeryDetail.headpost?"Yes":"No",a.surgeryDetail&&a.surgeryDetail.window?"Yes":"No",a.comments||""]));
+    a.termination||"",a.surgeryDetail&&a.surgeryDetail.headpost?"Yes":"No",a.surgeryDetail&&a.surgeryDetail.window?"Yes":"No",richTextPlain(richBodyHTML(a.comments,a.commentsRich))]));
 
   const diaryRows=[["Animal","Cohort","Date","Time","End time","Type","Summary","Logged"]];
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
