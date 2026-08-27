@@ -450,7 +450,12 @@
   .cal-allday-toggle:hover{color:var(--ink)}
   .cal-evt-span{position:relative;z-index:2}
   /* hour rows */
-  .cal-hour-gutter{border-right:1px solid var(--line);padding:0 6px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);text-align:right;height:var(--cal-hour-h);display:flex;align-items:flex-start;padding-top:3px;box-sizing:border-box}
+  /* touch-action:none for the same reason as cal-hour-cell just below (static,
+     not toggled — WebKit only honors the value present at touchstart): without
+     it this column kept real native momentum scroll while every hour cell next
+     to it didn't, so scroll feel changed depending on which pixel column a
+     thumb landed on. wireGutterScroll() drives it manually to match. */
+  .cal-hour-gutter{border-right:1px solid var(--line);padding:0 6px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);text-align:right;height:var(--cal-hour-h);display:flex;align-items:flex-start;padding-top:3px;box-sizing:border-box;touch-action:none}
   /* touch-action:none, same as cal-evt-timed and for the same reason: WebKit
      only honors the touch-action value that was already in place at
      touchstart, not one set later once a hold confirms intent — so this has
@@ -1772,7 +1777,110 @@ function commitCalMove(x,newWhen,newEnd,newDur){
 // long-press gesture, which is the reference point that actually matters
 // here — a hold long enough to be clearly deliberate, not long enough to
 // feel like the app is ignoring you.
-const DRAG_HOLD_MS=450, DRAG_WIGGLE_PX=9;
+const DRAG_HOLD_MS=450, DRAG_WIGGLE_PX=9, SWIPE_DISTANCE_PX=60;
+// touch-action:none (required on .cal-hour-cell so the create/drag gestures below
+// can win the race against Safari's own scroll recognizer — see the cell's own
+// comment for why) kills native momentum scrolling across almost the whole grid.
+// wireHourCellCreate() and wireGutterScroll() compensate by manually driving
+// scrollTop while a finger moves, which by itself just stops dead on release —
+// nothing coasts. These three re-add that coast by hand: a shared per-element
+// rAF loop, a decay-based "keep nudging scrollTop" driver, and a helper that
+// turns a handful of recent {t,y} samples into an exit velocity.
+const MOMENTUM_FRICTION=0.0025, MOMENTUM_MIN_V=0.02;
+function attachScrollLoop(el){
+  if(el._scrollLoop) return el._scrollLoop;
+  let rafId=null;
+  function stop(){ if(rafId!=null){ cancelAnimationFrame(rafId); rafId=null; } }
+  function run(step){
+    stop();
+    let last=performance.now();
+    (function frame(now){
+      const dt=now-last; last=now;
+      rafId=step(dt)?requestAnimationFrame(frame):null;
+    })(last);
+  }
+  return el._scrollLoop={run,stop};
+}
+// v0 is px/ms that scrollTop itself was already changing by at release (not raw
+// pointer velocity — see the two call sites below for the sign flip that
+// converts one to the other). Decays exponentially until negligible or a
+// scroll bound is hit, same shape a native momentum scroll uses.
+function startMomentum(gridWrap,v0){
+  const loop=attachScrollLoop(gridWrap);
+  let v=v0;
+  loop.run(dt=>{
+    v*=Math.max(0,1-MOMENTUM_FRICTION*dt);
+    gridWrap.scrollTop+=v*dt;
+    const atTop=gridWrap.scrollTop<=0, atBottom=gridWrap.scrollTop>=gridWrap.scrollHeight-gridWrap.clientHeight;
+    return Math.abs(v)>MOMENTUM_MIN_V && !((v>0&&atBottom)||(v<0&&atTop));
+  });
+}
+// Exit velocity from only the last ~80ms of a gesture, not the whole drag's
+// average — a finger that already slowed down before lifting should coast
+// gently, not fling at whatever speed it was moving several swipes ago. This
+// is raw pointer-Y velocity (px/ms); callers flip its sign to get scrollTop
+// velocity, since scrollTop moves opposite to the finger.
+function velocityFromSamples(samples){
+  if(samples.length<2) return 0;
+  const last=samples[samples.length-1];
+  const cutoff=last.t-80;
+  let first=samples[0];
+  for(const s of samples){ if(s.t>=cutoff){ first=s; break; } }
+  const dt=last.t-first.t;
+  return dt>0?(last.y-first.y)/dt:0;
+}
+// The hour-label gutter is the one column of the grid that never got
+// touch-action:none, so it was the one place that kept real native momentum
+// scroll while every hour cell next to it went dead — an inconsistent feel
+// depending on which pixel column a thumb happens to land on. Given the same
+// static touch-action:none (see .cal-hour-gutter's own CSS comment) and the
+// same manual-scroll-plus-momentum treatment here.
+function wireGutterScroll(gutterEl,gridWrap){
+  gutterEl.addEventListener("pointerdown",downEvent=>{
+    if(downEvent.pointerType==="mouse")return;
+    gridWrap._scrollLoop?.stop();
+    const startY=downEvent.clientY, startScrollTop=gridWrap.scrollTop;
+    let samples=[{t:downEvent.timeStamp,y:startY}];
+    function onMove(e){
+      gridWrap.scrollTop=startScrollTop-(e.clientY-startY);
+      samples.push({t:e.timeStamp,y:e.clientY});
+    }
+    function finish(){
+      document.removeEventListener("pointermove",onMove);
+      document.removeEventListener("pointerup",finish);
+      document.removeEventListener("pointercancel",finish);
+      const vy=velocityFromSamples(samples);
+      if(vy)startMomentum(gridWrap,-vy);
+    }
+    document.addEventListener("pointermove",onMove);
+    document.addEventListener("pointerup",finish);
+    document.addEventListener("pointercancel",finish);
+  });
+}
+// Shared by every "pick up a chip and follow the pointer" drag — the hourly
+// grid's timed events (beginTimedEventDrag's own lift()), the all-day banner,
+// and month view: measure the chip's current on-screen box, leave a
+// translucent ghost in its place (Google Calendar's own anchor for "this is
+// where it came from" — without it the origin cell just goes blank the
+// instant a drag starts), and promote the real chip to position:fixed at
+// that exact box so it can be repositioned pixel-by-pixel without layout
+// reflowing under it.
+function liftChipForDrag(el){
+  const rect=el.getBoundingClientRect();
+  const ghostEl=el.cloneNode(true);
+  ghostEl.classList.add("cal-evt-ghost");
+  ghostEl.classList.remove("holding");
+  el.parentNode.insertBefore(ghostEl,el);
+  el.style.transition="none";   // the explicit size below replaces the pop instantly; animating "holding" away at the same time only fights it
+  el.classList.remove("holding");
+  el.classList.add("dragging");
+  el.style.position="fixed";
+  el.style.left=rect.left+"px"; el.style.top=rect.top+"px";
+  el.style.width=rect.width+"px"; el.style.height=rect.height+"px";
+  el.style.pointerEvents="none";
+  document.body.appendChild(el);
+  return {rect,ghostEl};
+}
 function makeAllDayDraggable(chip,item,cells,weekStart){
   chip.style.cursor="grab";
   chip.addEventListener("pointerdown",ev=>{
@@ -1780,15 +1888,26 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
     ev.preventDefault();
     const startX=ev.clientX, startY=ev.clientY, startCol=cells.findIndex(c=>c.contains(chip));
     const isTouch=ev.pointerType!=="mouse";
-    let armed=!isTouch, moved=false, cancelled=false, targetCol=startCol;
-    chip.setPointerCapture(ev.pointerId);
+    let armed=!isTouch, moved=false, cancelled=false, targetCol=startCol, rect=null, ghostEl=null;
     const colAt=x=>{ for(let i=0;i<cells.length;i++){ const r=cells[i].getBoundingClientRect();
       if(x>=r.left&&x<=r.right)return i; } return -1; };
     // moving more than the wiggle before the hold fires aborts the gesture
     // outright — not a drag (never armed) and not a click either (a real
     // move happened), the same as lifting your finger and trying again
     const holdTimer=isTouch?setTimeout(()=>{ armed=true; chip.classList.add("holding"); },DRAG_HOLD_MS):null;
-    const onMove=e=>{
+    // document-level, not chip-level: the chip gets reparented to document.body
+    // by liftChipForDrag mid-gesture, so pointer capture on the chip itself
+    // (the old approach) is the wrong tool once that happens — this is the
+    // same document-level pattern beginTimedEventDrag/wireHourCellCreate
+    // already use, for the same reason.
+    function cleanup(){
+      clearTimeout(holdTimer);
+      chip.classList.remove("holding");
+      document.removeEventListener("pointermove",onMove);
+      document.removeEventListener("pointerup",onUp);
+      document.removeEventListener("pointercancel",onCancel);
+    }
+    function onMove(e){
       const dx=e.clientX-startX, dy=e.clientY-startY;
       if(!armed){
         if(Math.abs(dx)>DRAG_WIGGLE_PX||Math.abs(dy)>DRAG_WIGGLE_PX){ cancelled=true; clearTimeout(holdTimer); }
@@ -1798,20 +1917,21 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
       // hold, so it shouldn't also need to clear the mouse's wiggle gate
       if(isTouch||Math.abs(dx)>DRAG_WIGGLE_PX)moved=true;
       if(!moved)return;
-      chip.style.transition="none";     // don't animate the pop away right as real dragging starts moving it
-      chip.classList.remove("holding");
-      chip.style.opacity=".92"; chip.style.cursor="grabbing";
+      // The chip now actually follows the finger horizontally (it used to
+      // just sit still with reduced opacity until drop, then teleport to the
+      // new day) — the same "every pixel shows" treatment the hourly grid's
+      // own drag already had.
+      if(!rect){ const lifted=liftChipForDrag(chip); rect=lifted.rect; ghostEl=lifted.ghostEl; chip.style.cursor="grabbing"; }
+      chip.style.left=(rect.left+dx)+"px";
       const c=colAt(e.clientX); if(c>=0)targetCol=c;
-    };
-    const onUp=()=>{
-      clearTimeout(holdTimer);
-      chip.classList.remove("holding");
-      chip.removeEventListener("pointermove",onMove);
-      chip.removeEventListener("pointerup",onUp);
-      chip.style.opacity=""; chip.style.cursor="grab";
+    }
+    function onUp(e){
+      cleanup();
       if(!moved){ if(!cancelled) openCalItem(item); return; }
+      if(ghostEl)ghostEl.remove();
+      chip.remove();   // reparented to document.body by liftChipForDrag — a re-render won't reach it on its own
       const delta=targetCol-startCol;
-      if(!delta) return;                 // dropped where it started: nothing changed
+      if(!delta){ renderTimeline(); return; }   // dropped where it started: nothing changed, but the lifted chip still needs putting back
       const nd=new Date(weekStart); nd.setDate(weekStart.getDate()+targetCol);
       const p4=n=>String(n).padStart(2,"0");
       const dayISO=`${nd.getFullYear()}-${p4(nd.getMonth()+1)}-${p4(nd.getDate())}`;
@@ -1820,9 +1940,18 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
       const newEnd=item.endDate?addDaysISO(item.endDate,calDayDelta(item.deadline,newWhen)):undefined;
       commitCalMove(item,newWhen,newEnd);
       renderTimeline();
-    };
-    chip.addEventListener("pointermove",onMove);
-    chip.addEventListener("pointerup",onUp);
+    }
+    // an interrupted gesture (iOS edge-swipe-back, an incoming call) — discard
+    // rather than leave the chip stuck lifted mid-drag; this listener didn't
+    // exist before, which was exactly that bug
+    function onCancel(){
+      cleanup();
+      if(ghostEl)ghostEl.remove();
+      if(rect){ chip.remove(); renderTimeline(); }
+    }
+    document.addEventListener("pointermove",onMove);
+    document.addEventListener("pointerup",onUp);
+    document.addEventListener("pointercancel",onCancel);
   });
 }
 function openCalItem(x){
@@ -4086,13 +4215,15 @@ function renderMonthView(host){
   weeks.forEach((items,w)=>{
     const trackCount=Math.max(items._trackCount||0,1);
     const weekRow=document.createElement("div"); weekRow.className="month-week"; body.appendChild(weekRow);
+    const weekBgCells=[];
+    const weekStart=new Date(gridStart); weekStart.setDate(gridStart.getDate()+w*7);
     for(let c=0;c<7;c++){
       const day=new Date(gridStart); day.setDate(gridStart.getDate()+w*7+c);
       const bg=document.createElement("div");
       bg.className="month-cell"+(day.getMonth()!==base.getMonth()?" out":"")+(day.getTime()===today.getTime()?" today":"");
       bg.style.gridColumn=`${c+1} / ${c+2}`; bg.style.gridRow=`1 / ${trackCount+1}`;
       bg.innerHTML=`<div class="mc-num">${day.getDate()}</div>`;
-      weekRow.appendChild(bg);
+      weekRow.appendChild(bg); weekBgCells.push(bg);
     }
     items.forEach(it=>{
       let chip;
@@ -4106,9 +4237,20 @@ function renderMonthView(host){
           ?`<button type="button" class="cal-evt-ck${calDone(st)?" on":""}" title="${calDone(st)?"Done — click to undo":"Mark done"}"></button>`:"";
         chip.innerHTML=`<div class="et">${ckHTML}${eventIconHTML(st.src)}${esc(st.title||"(unnamed task)")}</div>`;
         chip.title=`${(projById(st.projectId)||{}).name||""} — ${st.title||""}`;
-        if(st.kind==="task") chip.querySelector(".cal-evt-ck").onclick=e=>{
-          e.stopPropagation(); setOccDone(st.src,st.deadline,!calDone(st)); renderTimeline(); };
-        chip.onclick=()=>openCalItem(st);
+        if(st.kind==="task"){
+          const ck=chip.querySelector(".cal-evt-ck");
+          // stop the drag from ever engaging for a tap on the checkbox — its own
+          // pointerdown listener is on the whole chip, same guard the week/day
+          // view's own all-day banner needs for the same reason
+          ck.addEventListener("pointerdown",e=>e.stopPropagation());
+          ck.onclick=e=>{ e.stopPropagation(); setOccDone(st.src,st.deadline,!calDone(st)); renderTimeline(); };
+        }
+        // Same drag as the all-day banner (week/day view already has this for
+        // exactly the same kind of item) — scoped to this week's own 7 day
+        // cells, so a drag only ever moves within its own row. A step spanning
+        // multiple weeks is several chips (one per week, see place() above),
+        // each still reading/writing the one shared task/experiment record.
+        makeAllDayDraggable(chip,st,weekBgCells,weekStart);
       } else {
         const {a,e}=it, def=diaryTypeDef(e.type), dc=diaryColors(a,def);
         chip=document.createElement("div"); chip.className="cal-evt";
@@ -4132,6 +4274,7 @@ function renderTimeline(){
   // was not on screen a moment ago.
   const prevWrap=host.querySelector(".cal-grid-wrap");
   const keepScroll=prevWrap?prevWrap.scrollTop:null;
+  prevWrap?._scrollLoop?.stop();   // a redraw shouldn't leave momentum coasting against a detached node
   host.innerHTML="";
   if(calMode==="month") return renderMonthView(host);
   const span=calSpan(), NCOL=span.n;
@@ -4392,6 +4535,7 @@ function renderTimeline(){
     label.dataset.hour=h;
     label.textContent=h===0?"":h<12?`${h} am`:h===12?"12 pm":`${h-12} pm`;
     grid.appendChild(label);
+    wireGutterScroll(label,wrap);
     const hourCells=[];
     for(let d=0;d<NCOL;d++){
       const day=new Date(ws); day.setDate(ws.getDate()+d);
@@ -4430,7 +4574,7 @@ function renderTimeline(){
       evt.addEventListener("pointerdown",e=>{
         e.stopPropagation();
         const mode=resizeModeFor(e);
-        beginTimedEventDrag(mode,t,evt,e);
+        beginTimedEventDrag(mode,t,evt,e,wrap);
       });
       if(t.kind==="task"){
         const ck=evt.querySelector(".cal-evt-ck");
@@ -4471,7 +4615,7 @@ function renderTimeline(){
       evt.addEventListener("pointerdown",ev=>{
         ev.stopPropagation();
         const mode=resizeModeFor(ev);
-        beginTimedEventDrag(mode,item,evt,ev);
+        beginTimedEventDrag(mode,item,evt,ev,wrap);
       });
       hourCells[dayIdx].cell.appendChild(evt);
     });
@@ -4520,11 +4664,12 @@ function wireHourCellCreate(cell,day,h0,gridWrap){
   const minOf=w=>{ const hh=+w.slice(11,13),mm=+w.slice(14,16); return hh*60+mm; };
   cell.addEventListener("pointerdown",downEvent=>{
     if(downEvent.button||downEvent.target!==cell) return;
+    gridWrap?._scrollLoop?.stop();  // a new gesture always wins over whatever was still coasting
     // deliberately no preventDefault() here — see the note above
     const startX=downEvent.clientX, startY=downEvent.clientY;
     const isTouch=downEvent.pointerType!=="mouse";
     const cr=cell.getBoundingClientRect(), rowH=cr.height;
-    let armed=!isTouch, moved=false, cancelled=false, scrolling=false, previewEl=null;
+    let armed=!isTouch, moved=false, cancelled=false, scrolling=false, swiping=false, previewEl=null, scrollSamples=null;
     // cal-hour-cell carries touch-action:none in CSS (see there for why): a
     // dynamic toggle timed to the hold was tried first and reliably lost the
     // race against Safari's own scroll-gesture recognizer on a real phone —
@@ -4563,17 +4708,29 @@ function wireHourCellCreate(cell,day,h0,gridWrap){
         if(scrolling){
           // already proven to be a swipe, not a hold — keep hand-driving the
           // scroll for the rest of this gesture the same distance the
-          // browser would have moved it on its own.
-          if(gridWrap) gridWrap.scrollTop=startScrollTop-dy;
+          // browser would have moved it on its own. Samples kept so release
+          // can hand off to momentum instead of just stopping dead.
+          if(gridWrap){ gridWrap.scrollTop=startScrollTop-dy; scrollSamples.push({t:e.timeStamp,y:e.clientY}); }
           return;
         }
+        if(swiping) return;   // already claimed as a horizontal nav swipe — onUp reads the final dx itself
         if(Math.abs(dx)>DRAG_WIGGLE_PX||Math.abs(dy)>DRAG_WIGGLE_PX){
           // moved before the hold fired: this was never claimed as a create-
-          // drag, so it reads as an ordinary scroll from here on — cancelled,
-          // not just cleaned up, so a release afterward doesn't read as a
-          // tap-to-create the way a hold that simply never moved would.
+          // drag, so it reads as an ordinary scroll (or, if the movement is
+          // more horizontal than vertical, a swipe to the next/previous
+          // period) from here on — cancelled, not just cleaned up, so a
+          // release afterward doesn't read as a tap-to-create the way a hold
+          // that simply never moved would. Dominant-axis check at the exact
+          // instant the wiggle threshold clears, same axis-lock a native
+          // scroll view uses to tell "flick sideways" apart from "scroll."
           cancelled=true; clearTimeout(holdTimer);
-          if(gridWrap){ scrolling=true; gridWrap.scrollTop=startScrollTop-dy; }
+          if(Math.abs(dx)>Math.abs(dy)){
+            swiping=true;
+          } else if(gridWrap){
+            scrolling=true;
+            scrollSamples=[{t:downEvent.timeStamp,y:startY},{t:e.timeStamp,y:e.clientY}];
+            gridWrap.scrollTop=startScrollTop-dy;
+          }
           else cleanup();
         }
         return;
@@ -4587,6 +4744,24 @@ function wireHourCellCreate(cell,day,h0,gridWrap){
     }
     function onUp(e){
       cleanup();
+      if(scrolling){
+        // hand off to momentum instead of just stopping dead — see the
+        // MOMENTUM_* helpers' own comment for why scrollTop's sign is the
+        // negative of the raw pointer-Y velocity here.
+        const vy=velocityFromSamples(scrollSamples);
+        if(vy)startMomentum(gridWrap,-vy);
+      }
+      if(swiping){
+        // Google Calendar's own core mobile gesture: swipe to the next/
+        // previous day/week/month instead of tapping the tiny ‹/› buttons.
+        // calWeekOffset is the one variable both week/day mode (calSpan) and
+        // month mode (renderMonthView) already read as "how many periods from
+        // today" — reusing it here instead of a parallel variable keeps this
+        // consistent with what #cal_prev/#cal_next already do.
+        const dx=e.clientX-startX;
+        if(Math.abs(dx)>SWIPE_DISTANCE_PX){ calWeekOffset+=dx<0?1:-1; renderTimeline(); }
+        return;
+      }
       if(cancelled) return;    // real movement before the hold — a scroll, not a tap
       // a quick tap, or a hold that fired but was released without moving,
       // both mean the same thing a plain click always has: create right here
@@ -4614,7 +4789,7 @@ function resizeModeFor(e){
 // drag a timed timeline event: mode "move" drags the whole block to a new day/time slot,
 // "resize-top"/"resize-bottom" drags an edge to change start time / duration.
 // a plain click (no meaningful pointer movement) still opens the task detail panel.
-function beginTimedEventDrag(mode,t,evtEl,downEvent){
+function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
   downEvent.preventDefault();
   const startX=downEvent.clientX, startY=downEvent.clientY;
   // Read from the CSS variable rather than hardcoded, so a shrunk mobile row
@@ -4636,22 +4811,53 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
     // size that was already on screen — measuring after removing "holding"
     // was capturing the un-popped size an instant before the block became
     // fixed-position, which snapped it visibly smaller right as the drag began
-    rect=evtEl.getBoundingClientRect();
-    // a translucent copy left sitting in the original slot — Google
-    // Calendar's own anchor for "this is where it came from", and without it
-    // the origin cell just went blank the instant a drag started
-    ghostEl=evtEl.cloneNode(true);
-    ghostEl.classList.add("cal-evt-ghost");
-    ghostEl.classList.remove("holding");
-    evtEl.parentNode.insertBefore(ghostEl,evtEl);
-    evtEl.style.transition="none";    // the explicit size below replaces the pop instantly; animating "holding" away at the same time only fights it
-    evtEl.classList.remove("holding");
-    evtEl.classList.add("dragging");
-    evtEl.style.position="fixed";
-    evtEl.style.left=rect.left+"px"; evtEl.style.top=rect.top+"px";
-    evtEl.style.width=rect.width+"px"; evtEl.style.height=rect.height+"px";
-    evtEl.style.pointerEvents="none";
-    document.body.appendChild(evtEl);
+    const lifted=liftChipForDrag(evtEl);
+    rect=lifted.rect; ghostEl=lifted.ghostEl;
+  }
+  // Factored out of onMove so the edge-autoscroll loop below can re-run it on
+  // every tick it's active, not only on a real pointermove — a finger parked
+  // right at the edge produces scrolling content but no new pointermove, and
+  // without this the dragged block and dropTarget would silently go stale
+  // while the grid keeps moving underneath it.
+  function updateDragVisual(clientX,clientY){
+    // The block follows the finger continuously — every pixel of movement
+    // shows — and only the value that actually gets *committed* snaps to
+    // the 15-minute grid. Snapping the visual itself, as this used to do,
+    // meant the block only actually moved once every ~9-13px of real
+    // movement had accumulated: motion in discrete little jumps instead of
+    // a smooth drag, regardless of how good the pop-in or the colour looked.
+    const under=document.elementFromPoint(clientX,clientY);
+    const cell=under&&under.closest&&under.closest(".cal-hour-cell");
+    if(cell){
+      const cr=cell.getBoundingClientRect();
+      const rawMinuteInHour=Math.min(Math.max(((clientY-cr.top)/cr.height)*60,0),59.999);
+      const snappedMinuteInHour=Math.min(Math.max(snap(rawMinuteInHour),0),60-SNAP_MIN);
+      evtEl.style.left=cr.left+"px"; evtEl.style.width=cr.width+"px";
+      evtEl.style.top=(cr.top+(rawMinuteInHour/60)*cr.height)+"px";
+      evtEl.classList.remove("drag-invalid");
+      dropTarget={date:cell.dataset.date,hour:+cell.dataset.hour,minute:snappedMinuteInHour};
+    } else {
+      evtEl.classList.add("drag-invalid");
+    }
+  }
+  // Dragging toward the top/bottom edge of the visible grid scrolls it toward
+  // more room, same as Google Calendar — otherwise a task could only ever be
+  // dropped on whatever hour already happened to be on screen. Move-only:
+  // resizing an edge has no "somewhere else" to scroll toward.
+  const EDGE_ZONE_PX=48, EDGE_MAX_SPEED=0.6;   // px/ms at the very edge, tapering to 0 across the zone
+  let lastX=startX, lastY=startY;
+  function edgeAutoScrollStep(){
+    if(!gridWrap||mode!=="move") return;
+    const wrapRect=gridWrap.getBoundingClientRect();
+    let s=0;
+    if(lastY<wrapRect.top+EDGE_ZONE_PX) s=-EDGE_MAX_SPEED*(1-(lastY-wrapRect.top)/EDGE_ZONE_PX);
+    else if(lastY>wrapRect.bottom-EDGE_ZONE_PX) s=EDGE_MAX_SPEED*(1-(wrapRect.bottom-lastY)/EDGE_ZONE_PX);
+    if(!s){ gridWrap._scrollLoop?.stop(); return; }
+    attachScrollLoop(gridWrap).run(dt=>{
+      gridWrap.scrollTop+=s*dt;
+      updateDragVisual(lastX,lastY);
+      return true;
+    });
   }
   function onMove(e){
     const dx=e.clientX-startX, dy=e.clientY-startY;
@@ -4672,26 +4878,10 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
       if(!isTouch&&Math.abs(dx)<=DRAG_WIGGLE_PX&&Math.abs(dy)<=DRAG_WIGGLE_PX) return;
       moved=true; lift();
     }
+    lastX=e.clientX; lastY=e.clientY;
     if(mode==="move"){
-      // The block follows the finger continuously — every pixel of movement
-      // shows — and only the value that actually gets *committed* snaps to
-      // the 15-minute grid. Snapping the visual itself, as this used to do,
-      // meant the block only actually moved once every ~9-13px of real
-      // movement had accumulated: motion in discrete little jumps instead of
-      // a smooth drag, regardless of how good the pop-in or the colour looked.
-      const under=document.elementFromPoint(e.clientX,e.clientY);
-      const cell=under&&under.closest&&under.closest(".cal-hour-cell");
-      if(cell){
-        const cr=cell.getBoundingClientRect();
-        const rawMinuteInHour=Math.min(Math.max(((e.clientY-cr.top)/cr.height)*60,0),59.999);
-        const snappedMinuteInHour=Math.min(Math.max(snap(rawMinuteInHour),0),60-SNAP_MIN);
-        evtEl.style.left=cr.left+"px"; evtEl.style.width=cr.width+"px";
-        evtEl.style.top=(cr.top+(rawMinuteInHour/60)*cr.height)+"px";
-        evtEl.classList.remove("drag-invalid");
-        dropTarget={date:cell.dataset.date,hour:+cell.dataset.hour,minute:snappedMinuteInHour};
-      } else {
-        evtEl.classList.add("drag-invalid");
-      }
+      updateDragVisual(e.clientX,e.clientY);
+      edgeAutoScrollStep();
     } else if(mode==="resize-bottom"){
       // same idea: the edge tracks the finger continuously, onUp snaps the
       // duration that's actually saved. (newDur/60)*52 below was also a
@@ -4710,6 +4900,7 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent){
   }
   function cleanup(){
     clearTimeout(holdTimer);
+    gridWrap?._scrollLoop?.stop();
     evtEl.classList.remove("holding");
     if(ghostEl){ ghostEl.remove(); ghostEl=null; }
     document.removeEventListener("pointermove",onMove);
