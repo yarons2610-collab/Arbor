@@ -781,10 +781,10 @@
     <div class="brand"><h1>Arbor</h1><span class="sub">Segev · Schiller lab</span></div>
     <div class="tabs" id="tabs">
       <button class="tab" data-v="projects">Projects</button>
-      <button class="tab" data-v="timeline">Timeline</button>
+      <button class="tab on" data-v="timeline">Timeline</button>
       <button class="tab" data-v="materials">Materials</button>
       <button class="tab" data-v="library">Library</button>
-      <button class="tab on" data-v="animals">Animals</button>
+      <button class="tab" data-v="animals">Animals</button>
       <button class="tab" data-v="notes">Notes</button>
     </div>
     <div class="spacer"></div>
@@ -811,7 +811,7 @@
       <div class="hint">click a soma to open it · drag a dendrite onto another to re-branch</div>
     </div>
     <div class="view hidden wrap" id="outline"></div>
-    <div class="view hidden wrap" id="timeline"></div>
+    <div class="view wrap" id="timeline"></div>
     <div class="view hidden wrap" id="notes"></div>
     <div class="view hidden" id="materials">
       <div class="mat-subtabs" id="matSubTabs">
@@ -828,7 +828,7 @@
       <div class="wrap mat-subview" id="ms-diarytypes"></div>
     </div>
     <div class="view hidden wrap" id="library"></div>
-    <div class="view wrap" id="animals"></div>
+    <div class="view hidden wrap" id="animals"></div>
 
     <aside class="detail" id="detail">
       <div class="dhead"><button class="close" id="dClose">✕</button>
@@ -1956,7 +1956,12 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
 }
 function openCalItem(x){
   if(x.kind==="diary"){
-    const a=x.src.a; animalSearch=a.name; DB.config.animalFilters.search=a.name; persist();
+    // A one-off jump to this animal, not a saved search — writing it into
+    // DB.config.animalFilters.search (like the real search box does) meant
+    // clicking a diary chip here silently overwrote and then persisted the
+    // user's actual saved filter, so it kept reappearing on the Animals tab
+    // long after this click, on every device the workspace synced to.
+    const a=x.src.a; animalSearch=a.name;
     switchTo("animals"); return;
   }
   if(x.kind==="task"){ taskEditor(x.src,()=>{ renderTimeline(); },x.deadline,x.endDate); return; }
@@ -2266,7 +2271,7 @@ function escAttr(s){return String(s??"").replace(/"/g,"&quot;").replace(/</g,"&l
 function cssStat(s){return{todo:"#8a94a6",active:"#54e08a",blocked:"#ff5f6d",done:"#8a94a6"}[s];}
 
 /* ---------- view switching ---------- */
-let currentView="animals",selectedId=null;
+let currentView="timeline",selectedId=null;
 document.getElementById("tabs").addEventListener("click",e=>{ const b=e.target.closest(".tab"); if(!b)return; switchTo(b.dataset.v); });
 function switchTo(v){
   currentView=v;
@@ -2399,7 +2404,7 @@ function openNotificationsModal(wantEvents){
     }
     const ot=e.target.closest(".ntf-opentask"), oa=e.target.closest(".ntf-openanimal");
     if(ot){ closeModal(); const tk=taskOf(ot.dataset.id); if(tk)taskEditor(tk,()=>render(),ot.dataset.when||null,ot.dataset.end||null); else openStepInPlan(ot.dataset.id); }
-    else if(oa){ closeModal(); animalSearch=oa.dataset.name; DB.config.animalFilters.search=animalSearch; persist(); switchTo("animals"); }
+    else if(oa){ closeModal(); animalSearch=oa.dataset.name; switchTo("animals"); }   // one-off jump, not a saved search — see openCalItem's own note
   });
 }
 document.getElementById("notifyNudge").addEventListener("click",()=>openNotificationsModal(false));
@@ -3580,8 +3585,7 @@ function renderProjectPlan(id){
       // keeps "tk_" — enough to tell which editor a click should open
       if(el.dataset.id.startsWith("d_")){
         const found=diaryEntryById(el.dataset.id); if(!found)return;
-        el.onclick=()=>{ animalSearch=found.a.name; DB.config.animalFilters.search=found.a.name;
-          persist(); switchTo("animals"); };
+        el.onclick=()=>{ animalSearch=found.a.name; switchTo("animals"); };   // one-off jump, not a saved search — see openCalItem's own note
         return;
       }
       const t=taskOf(el.dataset.id); if(!t)return;
@@ -4257,7 +4261,7 @@ function renderMonthView(host){
         chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
         chip.innerHTML=`<div class="et">${def.icon} ${esc(a.name)}${e.date>today0?" (planned)":""}</div>`;
         chip.title=`${def.label} — ${a.name} — ${e.date}`;
-        chip.onclick=()=>{ animalSearch=a.name; DB.config.animalFilters.search=a.name; persist(); switchTo("animals"); };
+        chip.onclick=()=>{ animalSearch=a.name; switchTo("animals"); };   // one-off jump, not a saved search — see openCalItem's own note
       }
       chip.style.gridColumn=`${it.colStart+1} / ${it.colStart+1+it.span}`;
       chip.style.gridRow=`${it.track+1} / ${it.track+2}`;
@@ -7190,16 +7194,22 @@ function brainMap(surgery,plane){
       : `<rect x="128" y="38" width="44" height="8" rx="2" fill="none" stroke="#e0d454" stroke-width="1.6"/>`; g+=h; }
   injs.forEach((inj,i)=>{
     const col=inj.color||INJ_COLORS[i%INJ_COLORS.length];
-    const [sx,sy]=planeXY(plane, inj.ap, inj.ml, inj.dv);
     const pp=partnerPos(inj);
-    // injection needle location (ring)
-    g+=`<circle cx="${sx}" cy="${sy}" r="6" fill="none" stroke="${col}" stroke-width="1.6"/><circle cx="${sx}" cy="${sy}" r="1.6" fill="${col}"/>`;
-    if(pp){ const [px,py]=planeXY(plane, pp.ap, pp.ml, pp.dv);
-      if(inj.type==="retro"){ // somata at partner → project to injection site
-        g+=`<circle cx="${px}" cy="${py}" r="5" fill="${col}"/>`+_arrow(px,py,sx,sy,col); }
-      else if(inj.type==="antero"){ // somata at site → project to partner
-        g+=`<circle cx="${sx}" cy="${sy}" r="5" fill="${col}"/>`+_arrow(sx,sy,px,py,col); }
-    } else if(inj.type==="antero"){ g+=`<circle cx="${sx}" cy="${sy}" r="5" fill="${col}"/>`; }
+    // A "depth" beyond the primary dv (Row C2 in the editor) is another
+    // deposit along the same AP/ML track — drawn as its own ring, same as
+    // the 3D view.
+    const dvs=[inj.dv,...(inj.depths||[]).map(d=>d.dv)];
+    dvs.forEach(dv=>{
+      const [sx,sy]=planeXY(plane, inj.ap, inj.ml, dv);
+      // injection needle location (ring)
+      g+=`<circle cx="${sx}" cy="${sy}" r="6" fill="none" stroke="${col}" stroke-width="1.6"/><circle cx="${sx}" cy="${sy}" r="1.6" fill="${col}"/>`;
+      if(pp){ const [px,py]=planeXY(plane, pp.ap, pp.ml, pp.dv);
+        if(inj.type==="retro"){ // somata at partner → project to injection site
+          g+=`<circle cx="${px}" cy="${py}" r="5" fill="${col}"/>`+_arrow(px,py,sx,sy,col); }
+        else if(inj.type==="antero"){ // somata at site → project to partner
+          g+=`<circle cx="${sx}" cy="${sy}" r="5" fill="${col}"/>`+_arrow(sx,sy,px,py,col); }
+      } else if(inj.type==="antero"){ g+=`<circle cx="${sx}" cy="${sy}" r="5" fill="${col}"/>`; }
+    });
   });
   g+=`</svg>`; return g;
 }
@@ -7446,16 +7456,23 @@ function render3DBrain(container,surgery,height,viewState){
     // same spot (co-injected viruses at one site, or two tracers sharing a path) and blend their
     // colors into a single marker — colabeling is a deliberate, common part of these experiments,
     // not an error, so it's shown visually rather than flagged.
-    const resolvedInjs=(surgery&&surgery.injections?surgery.injections:[]).map((inj,i)=>{
+    // A "depth" beyond the primary dv (Row C2 in the editor) is another
+    // deposit along the same AP/ML track — resolved as its own site/soma/
+    // terminal marker below, same color and projection target as the rest
+    // of the injection, just at a different dv.
+    const resolvedInjs=(surgery&&surgery.injections?surgery.injections:[]).flatMap((inj,i)=>{
       const col=new THREE.Color(inj.color||INJ_COLORS[i%INJ_COLORS.length]);
-      const site=ccf2three(...resolveCCF(mesh,inj.ap,inj.ml,inj.dv));
       const pp=partnerPos(inj);
-      let somaAt=null,termAt=null;
-      if(pp&&(inj.type==="retro"||inj.type==="antero")){
-        const partner=ccf2three(...resolveCCF(mesh,pp.ap,pp.ml,pp.dv));
-        somaAt=inj.type==="retro"?partner:site; termAt=inj.type==="retro"?site:partner;
-      } else if(inj.type==="antero"){ somaAt=site; }
-      return {col,site,somaAt,termAt};
+      const dvs=[inj.dv,...(inj.depths||[]).map(d=>d.dv)];
+      return dvs.map(dv=>{
+        const site=ccf2three(...resolveCCF(mesh,inj.ap,inj.ml,dv));
+        let somaAt=null,termAt=null;
+        if(pp&&(inj.type==="retro"||inj.type==="antero")){
+          const partner=ccf2three(...resolveCCF(mesh,pp.ap,pp.ml,pp.dv));
+          somaAt=inj.type==="retro"?partner:site; termAt=inj.type==="retro"?site:partner;
+        } else if(inj.type==="antero"){ somaAt=site; }
+        return {col,site,somaAt,termAt};
+      });
     });
     const posKey=v=>`${v.x.toFixed(3)}|${v.y.toFixed(3)}|${v.z.toFixed(3)}`;
     const blend=cols=>{ const c=new THREE.Color(0,0,0); cols.forEach(x=>{c.r+=x.r;c.g+=x.g;c.b+=x.b;}); c.r/=cols.length;c.g/=cols.length;c.b/=cols.length; return c; };
@@ -7614,7 +7631,7 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   opts=opts||{};
   let hp=!!initial.headpost, win=!!initial.window;
   let winAp=initial.winAp!=null?initial.winAp:"", winMl=initial.winMl!=null?initial.winMl:"", winDiam=initial.winDiam!=null?initial.winDiam:"3";
-  const injs=(initial.injections||[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],...x}));
+  const injs=(initial.injections||[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],depths:[],...x}));
   const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px";
   function siteLibOpts(){ return (DB.config.siteLib||[]).map(s=>`<option value="__s:${escAttr(s.name)}">${esc(s.name)} (${s.ap>=0?"+":""}${s.ap}, ${s.ml>=0?"+":""}${s.ml}, ${s.dv})</option>`).join(""); }
   function virusLibOpts(){ return activeViruses().map(v=>`<option value="__v:${escAttr(v.name)}">${esc(v.name)}</option>`).join(""); }
@@ -7656,6 +7673,20 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
         <input data-i="${i}" data-f="ml"         value="${escAttr(inj.ml)}"         placeholder="ML"      style="flex:0 0 auto;width:48px;${IST}">
         <input data-i="${i}" data-f="dv"         value="${escAttr(inj.dv)}"         placeholder="DV"      style="flex:0 0 auto;width:48px;${IST}">
         <input data-i="${i}" data-f="volume"     value="${escAttr(inj.volume)}"     placeholder="vol (nl)" style="flex:0 0 auto;width:62px;${IST}">
+      </div>
+
+      <!-- Row C2: extra depths — same AP/ML track, a different DV (e.g. two
+           deposits along one needle pass on the way down). Off by default;
+           most injections have exactly the one depth in Row C above. -->
+      <div style="margin-top:4px">
+        ${(inj.depths||[]).map((d,di)=>`
+        <div style="display:flex;gap:4px;align-items:center;margin:4px 0 0 38px">
+          <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto">depth ${di+2}</span>
+          <input data-i="${i}" data-di="${di}" data-df="dv"     value="${escAttr(d.dv)}"     placeholder="DV"      style="flex:0 0 auto;width:48px;${IST}">
+          <input data-i="${i}" data-di="${di}" data-df="volume" value="${escAttr(d.volume)}" placeholder="vol (nl)" style="flex:0 0 auto;width:62px;${IST}">
+          <button class="inj-depth-del" data-i="${i}" data-di="${di}" title="remove this depth" style="${BS};color:var(--overdue)">✕</button>
+        </div>`).join("")}
+        <button class="inj-depth-add" data-i="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:3px 8px;font-size:11px;margin:4px 0 0 38px">＋ another depth</button>
       </div>
 
       <!-- Row D: projection target (→) -->
@@ -7723,14 +7754,24 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
     if(es&&el.dataset.ef){ es[el.dataset.ef]=el.value; updatePreview(); }
     return true;
   }
+  function depthField(el){
+    // same idea as esField, one level simpler: an extra depth is just dv+volume,
+    // carried on data-di/data-df instead of the top-level injection's data-f
+    if(el.dataset.di==null)return false;
+    const i=+el.dataset.i, di=+el.dataset.di;
+    const d=injs[i]&&injs[i].depths&&injs[i].depths[di];
+    if(d&&el.dataset.df){ d[el.dataset.df]=el.value; updatePreview(); }
+    return true;
+  }
   const injsHost=document.getElementById(`${p}_injs`);
   injsHost.addEventListener("input",e=>{
-    const el=e.target; if(esField(el))return;
+    const el=e.target; if(depthField(el))return; if(esField(el))return;
     if(el.dataset.i==null||!el.dataset.f)return;
     injs[+el.dataset.i][el.dataset.f]=el.value; updatePreview();
   });
   injsHost.addEventListener("change",e=>{
     const el=e.target;
+    if(depthField(el))return;
     if(el.classList.contains("inj-es-sitepick")){
       // carries data-ei like the other expression-site sub-fields, so this has
       // to run before esField(el) claims it (esField only knows single-field
@@ -7770,6 +7811,7 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
     const del=e.target.closest(".inj-del"), up=e.target.closest(".inj-up"), dn=e.target.closest(".inj-dn");
     const oslib=e.target.closest(".inj-open-slib"), ovlib=e.target.closest(".inj-open-vlib");
     const esAdd=e.target.closest(".inj-es-add"), esDel=e.target.closest(".inj-es-del");
+    const depthAdd=e.target.closest(".inj-depth-add"), depthDel=e.target.closest(".inj-depth-del");
     if(del){ readInjFields(); injs.splice(+del.dataset.i,1); paintInjs(); updatePreview(); }
     else if(up){ const i=+up.dataset.i; if(i>0){ readInjFields(); [injs[i-1],injs[i]]=[injs[i],injs[i-1]]; paintInjs(); updatePreview(); } }
     else if(dn){ const i=+dn.dataset.i; if(i<injs.length-1){ readInjFields(); [injs[i+1],injs[i]]=[injs[i],injs[i+1]]; paintInjs(); updatePreview(); } }
@@ -7777,8 +7819,10 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
     else if(ovlib){ readInjFields(); goToLibraryFn("virus"); }
     else if(esAdd){ const i=+esAdd.dataset.i; (injs[i].expressionSites=injs[i].expressionSites||[]).push({ap:"",ml:"",dv:"",level:"medium"}); paintInjs(); updatePreview(); }
     else if(esDel){ const i=+esDel.dataset.i, ei=+esDel.dataset.ei; injs[i].expressionSites.splice(ei,1); paintInjs(); updatePreview(); }
+    else if(depthAdd){ readInjFields(); const i=+depthAdd.dataset.i; (injs[i].depths=injs[i].depths||[]).push({dv:"",volume:""}); paintInjs(); updatePreview(); }
+    else if(depthDel){ readInjFields(); const i=+depthDel.dataset.i, di=+depthDel.dataset.di; injs[i].depths.splice(di,1); paintInjs(); updatePreview(); }
   });
-  document.getElementById(`${p}_addinj`).onclick=()=>{ injs.push({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[]}); paintInjs(); updatePreview(); };
+  document.getElementById(`${p}_addinj`).onclick=()=>{ injs.push({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],depths:[]}); paintInjs(); updatePreview(); };
 
   function bindSeg(fid,setter){ document.getElementById(fid).onclick=e=>{const b=e.target.closest("button");if(!b)return;
     setter(b.dataset.v==="1"); document.querySelectorAll(`#${fid} button`).forEach(x=>x.classList.toggle("on",x===b)); updatePreview();}; }
@@ -8702,9 +8746,15 @@ function exportFullDatabaseExcel(){
     diaryRows.push([a.name,a.cohort||"",e.date,e.time||"",e.endTime||"",diaryTypeDef(e.type).label,diaryEntrySummary(e,a),e.created?new Date(e.created).toLocaleString():""]);
   }));
 
-  const injRows=[["Animal","#","Virus","Type","Site region","AP","ML","DV","Volume (nl)","Target region","Target AP","Target ML","Target DV"]];
+  const injRows=[["Animal","#","Depth","Virus","Type","Site region","AP","ML","DV","Volume (nl)","Target region","Target AP","Target ML","Target DV"]];
   DB.animals.forEach(a=>(a.surgeryDetail&&a.surgeryDetail.injections||[]).forEach((inj,i)=>{
-    injRows.push([a.name,i+1,inj.virus||"",inj.type||"",inj.siteRegion||"",inj.ap,inj.ml,inj.dv,inj.volume,inj.partnerRegion||"",inj.pAp,inj.pMl,inj.pDv]);
+    // one row per depth — the primary dv/volume plus any extras added in the
+    // editor (Row C2), so a multi-depth injection doesn't silently lose data
+    // in the export the way a single dv/volume pair would
+    const deposits=[{dv:inj.dv,volume:inj.volume},...(inj.depths||[])];
+    deposits.forEach((d,di)=>{
+      injRows.push([a.name,i+1,di+1,inj.virus||"",inj.type||"",inj.siteRegion||"",inj.ap,inj.ml,d.dv,d.volume,inj.partnerRegion||"",inj.pAp,inj.pMl,inj.pDv]);
+    });
   }));
 
   const tasksRows=[["ID","Name","Soma","Status","Start","End","Notes"]];
