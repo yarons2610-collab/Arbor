@@ -1694,7 +1694,12 @@ function setOccDone(t,when,val){
   t.doneOccurrences=[...set];
   persist();
 }
-function calDone(x){ return x.kind==="task"?occDone(x.src,x.deadline):stepDone(x.src); }
+function calDone(x){ return x.kind==="task"?occDone(x.src,x.deadline):x.kind==="diary"?!!x.src.e.done:stepDone(x.src); }
+// A diary entry's own done flag — the same one the animal's own diary list
+// already reads/writes (see the dg-done button) — is a plain boolean on the
+// entry, not a set of occurrences like a repeating task: one diary entry is
+// one dated thing that happened (or is planned to), never a recurring series.
+function setDiaryDone(e,val){ if(!e)return; e.done=val; persist(); }
 // A calendar entry is a view of a record, not the record — an experiment, or one
 // occurrence of a task. Moving the chip has to write to what it stands for.
 function calDayDelta(fromISO,toISO){
@@ -4259,8 +4264,10 @@ function renderMonthView(host){
         const {a,e}=it, def=diaryTypeDef(e.type), dc=diaryColors(a,def);
         chip=document.createElement("div"); chip.className="cal-evt";
         chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
-        chip.innerHTML=`<div class="et">${def.icon} ${esc(a.name)}${e.date>today0?" (planned)":""}</div>`;
+        const ckHTML=`<button type="button" class="cal-evt-ck${e.done?" on":""}" title="${e.done?"Done — click to undo":"Mark done"}"></button>`;
+        chip.innerHTML=`<div class="et">${ckHTML}${def.icon} ${esc(a.name)}${e.date>today0?" (planned)":""}</div>`;
         chip.title=`${def.label} — ${a.name} — ${e.date}`;
+        chip.querySelector(".cal-evt-ck").addEventListener("click",ev=>{ ev.stopPropagation(); setDiaryDone(e,!e.done); renderTimeline(); });
         chip.onclick=()=>{ animalSearch=a.name; switchTo("animals"); };   // one-off jump, not a saved search — see openCalItem's own note
       }
       chip.style.gridColumn=`${it.colStart+1} / ${it.colStart+1+it.span}`;
@@ -4451,9 +4458,13 @@ function renderTimeline(){
       const chip=document.createElement("div"); chip.className="cal-evt";
       const dc=diaryColors(an,def);
       chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
-      chip.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
+      const ckHTML=`<button type="button" class="cal-evt-ck${e.done?" on":""}" title="${e.done?"Done — click to undo":"Mark done"}"></button>`;
+      chip.innerHTML=`<div class="et">${ckHTML}${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
       chip.title=`${def.label} — ${an.name} — ${e.date}${isFuture?" (scheduled)":""}`;
       alldayCells[d].appendChild(chip);
+      const ck=chip.querySelector(".cal-evt-ck");
+      ck.addEventListener("pointerdown",ev=>ev.stopPropagation());
+      ck.addEventListener("click",ev=>{ ev.stopPropagation(); setDiaryDone(e,!e.done); renderTimeline(); });
       makeAllDayDraggable(chip,{kind:"diary",id:e.id,title:`${an.name} — ${def.label}`,
         deadline:e.date,endDate:null,duration:null,src:{a:an,e}},alldayCells,ws);
     });
@@ -4609,13 +4620,22 @@ function renderTimeline(){
       const dc=diaryColors(an,def);
       evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${dc.fill}dd;color:#fff;border-left:3px solid ${dc.fill};${edgeCSS(dc.edge)}z-index:2`;
       const timeLabel=e.endTime?`${e.time}–${e.endTime}`:e.time;
-      evt.innerHTML=`<div class="et">${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div><div class="es">${timeLabel}</div>`;
+      // same fillable circle a task chip already has, and the exact e.done flag
+      // an animal's own diary list already reads/writes (dg-done) — it was
+      // simply never surfaced up here, which is why a diary entry looked
+      // permanently "undone" on the Timeline no matter what its own diary
+      // list already said.
+      const ckHTML=`<button type="button" class="cal-evt-ck${e.done?" on":""}" title="${e.done?"Done — click to undo":"Mark done"}"></button>`;
+      evt.innerHTML=`<div class="et">${ckHTML}${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div><div class="es">${timeLabel}</div>`;
       evt.title=`${def.label} — ${an.name} — ${e.date} ${timeLabel}${isFuture?" (scheduled)":""}`;
       const item={kind:"diary",id:e.id,title:`${an.name} — ${def.label}`,
         deadline:`${e.date}T${e.time}`,endDate:e.endTime?`${e.date}T${e.endTime}`:null,
         duration:durationMins,src:{a:an,e}};
       evt.insertAdjacentHTML("afterbegin",`<div class="cal-evt-resize cal-evt-resize-top"></div>`);
       evt.insertAdjacentHTML("beforeend",`<div class="cal-evt-resize cal-evt-resize-bottom"></div>`);
+      const ck=evt.querySelector(".cal-evt-ck");
+      ck.addEventListener("pointerdown",ev=>ev.stopPropagation());
+      ck.addEventListener("click",ev=>{ ev.stopPropagation(); setDiaryDone(e,!e.done); renderTimeline(); });
       evt.addEventListener("pointerdown",ev=>{
         ev.stopPropagation();
         const mode=resizeModeFor(ev);
