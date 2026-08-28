@@ -646,6 +646,20 @@
   .modal-back:hover{color:var(--ink)}
   .toast{position:absolute;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--panel2);border:1px solid var(--line2);color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;z-index:60;pointer-events:none}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  /* A new deploy used to force an unannounced window.location.reload() the
+     instant its service worker took control — "a few seconds after opening,
+     it resets the screen" was that reload landing mid-glance at the Timeline,
+     exactly the moment a phone user is least able to predict or want it.
+     This sits at the bottom (thumb-reachable, matches where a phone's own
+     update prompts usually live) and waits for an explicit tap instead. */
+  .sw-update-banner{position:fixed;left:50%;bottom:14px;transform:translateX(-50%) translateY(80px);
+    display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--gcamp);
+    color:var(--ink);padding:9px 10px 9px 14px;border-radius:11px;font-size:12.5px;
+    box-shadow:0 8px 24px rgba(0,0,0,.4);z-index:70;transition:.25s;opacity:0;pointer-events:none}
+  .sw-update-banner.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
+  .sw-update-banner button{font-family:var(--mono);font-size:11.5px;border-radius:7px;padding:5px 10px;cursor:pointer}
+  .sw-update-banner .swu-reload{background:var(--gcamp);color:#08240f;border:1px solid var(--gcamp);font-weight:600}
+  .sw-update-banner .swu-dismiss{background:transparent;color:var(--ink-faint);border:1px solid var(--line2)}
   /* small, dismissible, non-blocking — a nudge, not an alert. Never covers the
      modal's own action buttons (bottom-right, well clear of bottom-center). */
   .tube-nudge{position:absolute;bottom:20px;right:16px;max-width:260px;background:var(--panel2);border:1px solid var(--line2);border-radius:10px;padding:10px 12px;box-shadow:0 20px 50px -18px #000;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-dim);z-index:70;opacity:0;transform:translateY(10px);transition:.2s}
@@ -837,6 +851,11 @@
     </aside>
     <div class="scrim" id="scrim"><button type="button" class="modal-x" id="modalX" aria-label="Close">✕</button><div class="modal" id="modal"></div></div>
     <div class="toast" id="toast"></div>
+    <div class="sw-update-banner" id="swUpdateBanner">
+      <span>Update available</span>
+      <button type="button" class="swu-reload" id="swUpdateReload">Reload</button>
+      <button type="button" class="swu-dismiss" id="swUpdateDismiss">Later</button>
+    </div>
   </div>
 </div>
 
@@ -913,12 +932,19 @@ if("serviceWorker" in navigator){
   // version in the background, but the already-open tab keeps running the OLD
   // page's JS until something reloads it — that gap is why past deploys sat
   // invisible on already-installed devices even after the cache version was
-  // bumped. Reload once, automatically, when control switches to the new worker,
-  // so a fresh launch of the app always runs current code.
+  // bumped. This used to reload immediately and automatically, which was the
+  // unannounced "a few seconds after opening, the screen resets" — deploys
+  // happen often enough that it landed mid-use on a phone more often than
+  // not. Now it just offers a reload instead of forcing one; the tab is still
+  // running the old (but still working) code until the user taps it or
+  // naturally reopens the app later.
   let swControllerChanged=false;
   navigator.serviceWorker.addEventListener("controllerchange",()=>{
     if(swControllerChanged) return; swControllerChanged=true;
-    window.location.reload();
+    const banner=document.getElementById("swUpdateBanner");
+    banner.classList.add("show");
+    document.getElementById("swUpdateReload").onclick=()=>window.location.reload();
+    document.getElementById("swUpdateDismiss").onclick=()=>banner.classList.remove("show");
   });
 }
 const KEY="arbor_workspace_v3";   // v3: retire stale v2 storage that carried old example tasks; load embedded (uploaded) data fresh
@@ -1961,13 +1987,17 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
 }
 function openCalItem(x){
   if(x.kind==="diary"){
-    // A one-off jump to this animal, not a saved search — writing it into
-    // DB.config.animalFilters.search (like the real search box does) meant
-    // clicking a diary chip here silently overwrote and then persisted the
-    // user's actual saved filter, so it kept reappearing on the Animals tab
-    // long after this click, on every device the workspace synced to.
-    const a=x.src.a; animalSearch=a.name;
-    switchTo("animals"); return;
+    // Used to jump to the Animals tab just to edit one entry — leaving the
+    // Timeline behind entirely for a change that started right there. Same
+    // paintDiary() widget the animal's own detail panel uses, opened in a
+    // modal and seeded straight to this entry's edit form (editId) instead
+    // of landing on its month calendar; onChange re-renders the Timeline the
+    // moment anything is actually saved, so it's already current whenever
+    // this modal closes, however the user closes it.
+    const a=x.src.a, e=x.src.e;
+    modal(`<h3>${esc(a.name)} — Diary</h3><div id="calDiaryEditHost"></div>`,{wide:true});
+    paintDiary(document.getElementById("calDiaryEditHost"),a,{editId:e.id,onChange:renderTimeline});
+    return;
   }
   if(x.kind==="task"){ taskEditor(x.src,()=>{ renderTimeline(); },x.deadline,x.endDate); return; }
   openStepInPlan(x.src.id);
@@ -4644,7 +4674,7 @@ function renderTimeline(){
       hourCells[dayIdx].cell.appendChild(evt);
     });
     // click-to-create on hour cells; drag-to-create sets a duration first
-    hourCells.forEach(({cell,day})=>wireHourCellCreate(cell,day,h,wrap));
+    hourCells.forEach(({cell,day})=>wireHourCellCreate(cell,day,h,wrap,outer));
     // now-line on current hour
     if(calWeekOffset===0){
       const now=new Date(); const nowDay=now.getDay();
@@ -4682,13 +4712,38 @@ function isoAddMinutes(iso,mins){
 // exactly as if this listener didn't exist. Mouse has no scroll-by-drag to
 // protect, so it keeps behaving the way it always has: no hold, just movement
 // past a small threshold.
-function wireHourCellCreate(cell,day,h0,gridWrap){
+function wireHourCellCreate(cell,day,h0,gridWrap,slideEl){
   const p2=n=>String(n).padStart(2,"0");
   const dayISO=`${day.getFullYear()}-${p2(day.getMonth()+1)}-${p2(day.getDate())}`;
   const minOf=w=>{ const hh=+w.slice(11,13),mm=+w.slice(14,16); return hh*60+mm; };
   cell.addEventListener("pointerdown",downEvent=>{
     if(downEvent.button||downEvent.target!==cell) return;
     gridWrap?._scrollLoop?.stop();  // a new gesture always wins over whatever was still coasting
+    // Finishes a swipe gesture: past the distance threshold, continues the
+    // slide the rest of the way off in the same direction before actually
+    // turning the page (renderTimeline() builds a fresh, transform-free
+    // outer, so the old offscreen one is simply discarded, not reset); short
+    // of it, springs back to 0. A transitionend fallback timeout guards
+    // against a transition that, for whatever reason, never fires one.
+    function settleSwipe(committed,dx){
+      if(!slideEl){ if(committed){ calWeekOffset+=dx<0?1:-1; renderTimeline(); } return; }
+      const width=slideEl.getBoundingClientRect().width||window.innerWidth||document.documentElement.clientWidth||800;
+      const exitDir=dx<0?-1:1;   // animation only: which way the content visually exits (left swipe exits left)
+      let done=false;
+      function finish(){
+        if(done)return; done=true;
+        // NOT exitDir — a left swipe exits the screen leftward but means
+        // "next" (+1), the opposite sign. Keeping this the same formula the
+        // rest of the app's already-verified swipe-nav uses (below) rather
+        // than reusing the animation's own sign convention.
+        if(committed){ calWeekOffset+=dx<0?1:-1; renderTimeline(); }
+        else { slideEl.style.transition=""; slideEl.style.transform=""; }
+      }
+      slideEl.style.transition="transform .18s ease-out";
+      slideEl.style.transform=committed?`translateX(${exitDir*width}px)`:"translateX(0px)";
+      slideEl.addEventListener("transitionend",finish,{once:true});
+      setTimeout(finish,220);
+    }
     // deliberately no preventDefault() here — see the note above
     const startX=downEvent.clientX, startY=downEvent.clientY;
     const isTouch=downEvent.pointerType!=="mouse";
@@ -4737,7 +4792,15 @@ function wireHourCellCreate(cell,day,h0,gridWrap){
           if(gridWrap){ gridWrap.scrollTop=startScrollTop-dy; scrollSamples.push({t:e.timeStamp,y:e.clientY}); }
           return;
         }
-        if(swiping) return;   // already claimed as a horizontal nav swipe — onUp reads the final dx itself
+        if(swiping){
+          // The grid used to give no visual feedback at all until release —
+          // dead until the finger lifted, then a jump-cut to the new week.
+          // Following the finger here (Google Calendar's own swipe feel)
+          // means it now moves from the first pixel like every other drag in
+          // this file already does.
+          if(slideEl){ slideEl.style.transition="none"; slideEl.style.transform=`translateX(${dx}px)`; }
+          return;
+        }
         if(Math.abs(dx)>DRAG_WIGGLE_PX||Math.abs(dy)>DRAG_WIGGLE_PX){
           // moved before the hold fired: this was never claimed as a create-
           // drag, so it reads as an ordinary scroll (or, if the movement is
@@ -4750,6 +4813,7 @@ function wireHourCellCreate(cell,day,h0,gridWrap){
           cancelled=true; clearTimeout(holdTimer);
           if(Math.abs(dx)>Math.abs(dy)){
             swiping=true;
+            if(slideEl){ slideEl.style.transition="none"; slideEl.style.transform=`translateX(${dx}px)`; }
           } else if(gridWrap){
             scrolling=true;
             scrollSamples=[{t:downEvent.timeStamp,y:startY},{t:e.timeStamp,y:e.clientY}];
@@ -4783,7 +4847,7 @@ function wireHourCellCreate(cell,day,h0,gridWrap){
         // today" — reusing it here instead of a parallel variable keeps this
         // consistent with what #cal_prev/#cal_next already do.
         const dx=e.clientX-startX;
-        if(Math.abs(dx)>SWIPE_DISTANCE_PX){ calWeekOffset+=dx<0?1:-1; renderTimeline(); }
+        settleSwipe(Math.abs(dx)>SWIPE_DISTANCE_PX,dx);
         return;
       }
       if(cancelled) return;    // real movement before the hold — a scroll, not a tap
@@ -4795,7 +4859,7 @@ function wireHourCellCreate(cell,day,h0,gridWrap){
       const a=startWhen<curWhen?startWhen:curWhen, b=startWhen<curWhen?curWhen:startWhen;
       openTimelineCreateModal(a,b);
     }
-    function onCancel(){ cleanup(); }
+    function onCancel(){ cleanup(); if(swiping)settleSwipe(false,0); }
     document.addEventListener("pointermove",onMove);
     document.addEventListener("pointerup",onUp);
     document.addEventListener("pointercancel",onCancel);
@@ -6842,16 +6906,28 @@ function arowHTML(label,html){ return html?`<div style="margin-bottom:4px"><span
 // day lists/edits/adds entries for that date. Self-contained: repaints just
 // this block (not the whole animal list) on every add/edit, so logging an
 // entry doesn't collapse the card's expanded detail.
-function paintDiary(container,a){
+// opts: {editId, onChange} — used when this is mounted somewhere other than
+// the animal's own detail panel (currently: a modal opened directly from the
+// Timeline, see openCalItem) so it can jump straight to editing one specific
+// entry instead of landing on the month calendar, and so the caller can
+// refresh its own view (e.g. renderTimeline()) the moment something here
+// actually changes, since this widget has no idea such a view exists.
+function paintDiary(container,a,opts){
   if(!container)return;
+  opts=opts||{};
   if(!Array.isArray(a.diary))a.diary=[];
   const startD=a.diary.length?new Date([...a.diary].sort((x,y)=>x.date.localeCompare(y.date)).pop().date+"T00:00:00"):new Date();
   let viewY=startD.getFullYear(), viewM=startD.getMonth();
   let selDate=todayDateStr();
   let visibleTypes=new Set(diaryTypeDefs().map(t=>t.key));
   let formType=null, editingId=null;
+  if(opts.editId){
+    const seed=a.diary.find(e=>e.id===opts.editId);
+    if(seed){ selDate=seed.date; formType=seed.type; editingId=seed.id; }
+  }
   let expandedIds=new Set(); // entries currently showing their full read-only detail
   const WD=["Su","Mo","Tu","We","Th","Fr","Sa"];
+  function notifyChange(){ if(opts.onChange) opts.onChange(); }
 
   function formActions(){
     return `<div style="display:flex;gap:6px;margin-top:8px">
@@ -6992,7 +7068,7 @@ function paintDiary(container,a){
       // implies sacrifice (not the reverse) - only for a completed (today or
       // earlier), not a future-scheduled, entry.
       if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
-      persist();
+      persist(); notifyChange();
       formType=null; editingId=null;
       draw();
     };
@@ -7099,7 +7175,7 @@ function paintDiary(container,a){
     const doneBtn=e.target.closest(".dg-done");
     if(doneBtn){
       const entry=a.diary.find(x=>x.id===doneBtn.dataset.id); if(!entry)return;
-      entry.done=!entry.done; persist(); draw(); return;
+      entry.done=!entry.done; persist(); notifyChange(); draw(); return;
     }
     const viewBtn=e.target.closest(".dg-view"), editBtn=e.target.closest(".dg-edit"), delBtn=e.target.closest(".dg-del");
     if(viewBtn){
@@ -7112,7 +7188,7 @@ function paintDiary(container,a){
     } else if(delBtn){
       if(confirm("Delete this diary entry?")){
         a.diary=a.diary.filter(x=>x.id!==delBtn.dataset.id);
-        persist(); draw();
+        persist(); notifyChange(); draw();
       }
     }
   });
