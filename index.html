@@ -4939,11 +4939,18 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
     const topY=clientY-grabOffsetY;
     const under=document.elementFromPoint(clientX,topY);
     const cell=under&&under.closest&&under.closest(".cal-hour-cell");
+    // Horizontal gets the same continuous treatment vertical already had —
+    // it used to snap straight to whichever day column's exact left/width
+    // the pointer happened to be over, so a week-view drag between days
+    // visibly jumped column-to-column instead of sliding. rect is the chip's
+    // own lifted box; startX is the drag's own origin — same "every pixel
+    // shows, only the commit snaps" idea, just on the other axis now too.
+    evtEl.style.left=(rect.left+(clientX-startX))+"px";
+    evtEl.style.width=rect.width+"px";
     if(cell){
       const cr=cell.getBoundingClientRect();
       const rawMinuteInHour=Math.min(Math.max(((topY-cr.top)/cr.height)*60,0),59.999);
       const snappedMinuteInHour=Math.min(Math.max(snap(rawMinuteInHour),0),60-SNAP_MIN);
-      evtEl.style.left=cr.left+"px"; evtEl.style.width=cr.width+"px";
       evtEl.style.top=(cr.top+(rawMinuteInHour/60)*cr.height)+"px";
       evtEl.classList.remove("drag-invalid");
       dropTarget={date:cell.dataset.date,hour:+cell.dataset.hour,minute:snappedMinuteInHour};
@@ -4970,6 +4977,35 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
       return true;
     });
   }
+  // Day view only ever renders one day's cells, so dragging an event toward
+  // its left/right edge had nowhere to go — Google Calendar's own answer is
+  // to turn the page mid-drag once the finger dwells at the edge, same idea
+  // as edge auto-scroll just on the date axis instead of the time one. A
+  // deliberate dwell (not an instant flip) so passing through the edge on
+  // the way to a mid-day drop doesn't turn the page by accident.
+  const DAY_EDGE_HOLD_MS=550;
+  let dayChangeTimer=null, dayChangeSide=null;
+  function edgeDayChangeStep(){
+    if(calMode!=="day"||mode!=="move"||!gridWrap)return;
+    const wrapRect=gridWrap.getBoundingClientRect();
+    const side=lastX<wrapRect.left+EDGE_ZONE_PX?"prev":lastX>wrapRect.right-EDGE_ZONE_PX?"next":null;
+    if(side===dayChangeSide)return;
+    clearTimeout(dayChangeTimer); dayChangeTimer=null; dayChangeSide=side;
+    if(!side)return;
+    dayChangeTimer=setTimeout(()=>{
+      calWeekOffset+=side==="prev"?-1:1;
+      renderTimeline();
+      // renderTimeline() rebuilds .cal-grid-wrap from scratch — evtEl/ghostEl
+      // survive (liftChipForDrag reparented evtEl outside #timeline, and the
+      // old ghost belonged to the day being left behind anyway), but every
+      // reference to the wrap itself has to move to the fresh one, or the
+      // rest of this drag (scroll edge, cell lookups) would keep acting on a
+      // detached node.
+      gridWrap=document.querySelector(".cal-grid-wrap");
+      dayChangeSide=null;
+      updateDragVisual(lastX,lastY);
+    },DAY_EDGE_HOLD_MS);
+  }
   function onMove(e){
     const dx=e.clientX-startX, dy=e.clientY-startY;
     if(!armed){
@@ -4993,6 +5029,7 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
     if(mode==="move"){
       updateDragVisual(e.clientX,e.clientY);
       edgeAutoScrollStep();
+      edgeDayChangeStep();
     } else if(mode==="resize-bottom"){
       // same idea: the edge tracks the finger continuously, onUp snaps the
       // duration that's actually saved. (newDur/60)*52 below was also a
@@ -5011,6 +5048,7 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
   }
   function cleanup(){
     clearTimeout(holdTimer);
+    clearTimeout(dayChangeTimer);
     gridWrap?._scrollLoop?.stop();
     evtEl.classList.remove("holding");
     if(ghostEl){ ghostEl.remove(); ghostEl=null; }
