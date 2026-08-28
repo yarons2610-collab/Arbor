@@ -4719,30 +4719,40 @@ function wireHourCellCreate(cell,day,h0,gridWrap,slideEl){
   cell.addEventListener("pointerdown",downEvent=>{
     if(downEvent.button||downEvent.target!==cell) return;
     gridWrap?._scrollLoop?.stop();  // a new gesture always wins over whatever was still coasting
-    // Finishes a swipe gesture: past the distance threshold, continues the
-    // slide the rest of the way off in the same direction before actually
-    // turning the page (renderTimeline() builds a fresh, transform-free
-    // outer, so the old offscreen one is simply discarded, not reset); short
-    // of it, springs back to 0. A transitionend fallback timeout guards
-    // against a transition that, for whatever reason, never fires one.
+    // Finishes a swipe gesture. Short of the distance threshold, springs the
+    // current grid back to 0. Past it, turns the page *immediately*
+    // (renderTimeline() is synchronous — there's no gap where nothing is on
+    // screen) and lets the freshly-rendered grid slide the rest of the way
+    // in from the direction the finger was already heading. An earlier
+    // version waited for the old grid to finish sliding fully off before
+    // rendering the new one — same idea, opposite order — which left a real
+    // blank window between the old content leaving and the new content
+    // appearing: the "small black screen" every day/week turn produced.
     function settleSwipe(committed,dx){
-      if(!slideEl){ if(committed){ calWeekOffset+=dx<0?1:-1; renderTimeline(); } return; }
-      const width=slideEl.getBoundingClientRect().width||window.innerWidth||document.documentElement.clientWidth||800;
-      const exitDir=dx<0?-1:1;   // animation only: which way the content visually exits (left swipe exits left)
-      let done=false;
-      function finish(){
-        if(done)return; done=true;
-        // NOT exitDir — a left swipe exits the screen leftward but means
-        // "next" (+1), the opposite sign. Keeping this the same formula the
-        // rest of the app's already-verified swipe-nav uses (below) rather
-        // than reusing the animation's own sign convention.
-        if(committed){ calWeekOffset+=dx<0?1:-1; renderTimeline(); }
-        else { slideEl.style.transition=""; slideEl.style.transform=""; }
+      if(committed){
+        calWeekOffset+=dx<0?1:-1; renderTimeline();
+        const fresh=document.querySelector(".cal-outer"); if(!fresh)return;
+        const width=fresh.getBoundingClientRect().width||window.innerWidth||document.documentElement.clientWidth||800;
+        const enterDir=dx<0?1:-1;   // opposite of the exit direction: content enters from where the swipe was headed
+        fresh.style.transition="none";
+        fresh.style.transform=`translateX(${enterDir*width}px)`;
+        requestAnimationFrame(()=>{
+          fresh.style.transition="transform .16s ease-out";
+          fresh.style.transform="translateX(0px)";
+          let done=false;
+          const reset=()=>{ if(done)return; done=true; fresh.style.transition=""; fresh.style.transform=""; };
+          fresh.addEventListener("transitionend",reset,{once:true});
+          setTimeout(reset,200);
+        });
+        return;
       }
-      slideEl.style.transition="transform .18s ease-out";
-      slideEl.style.transform=committed?`translateX(${exitDir*width}px)`:"translateX(0px)";
-      slideEl.addEventListener("transitionend",finish,{once:true});
-      setTimeout(finish,220);
+      if(!slideEl)return;
+      let done=false;
+      const reset=()=>{ if(done)return; done=true; slideEl.style.transition=""; slideEl.style.transform=""; };
+      slideEl.style.transition="transform .16s ease-out";
+      slideEl.style.transform="translateX(0px)";
+      slideEl.addEventListener("transitionend",reset,{once:true});
+      setTimeout(reset,200);
     }
     // deliberately no preventDefault() here — see the note above
     const startX=downEvent.clientX, startY=downEvent.clientY;
@@ -4880,6 +4890,15 @@ function resizeModeFor(e){
 function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
   downEvent.preventDefault();
   const startX=downEvent.clientX, startY=downEvent.clientY;
+  // Where inside the chip the finger actually grabbed it — measured now,
+  // before anything about the chip's own position or size changes (lift()
+  // hasn't fired yet at pointerdown). Without this, a "move" drag re-anchored
+  // the chip's own top edge to the raw pointer Y on every frame instead of
+  // preserving this offset, so grabbing anywhere but the very top edge made
+  // the whole block visibly jump the instant the drag armed — down, if the
+  // grab point was in the lower half, which for a normal-sized chip it
+  // usually is.
+  const grabOffsetY=downEvent.clientY-evtEl.getBoundingClientRect().top;
   // Read from the CSS variable rather than hardcoded, so a shrunk mobile row
   // height (see the mobile media query) can never fall out of step with what
   // a drag actually computes — a duplicated number here would silently
@@ -4914,11 +4933,15 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
     // meant the block only actually moved once every ~9-13px of real
     // movement had accumulated: motion in discrete little jumps instead of
     // a smooth drag, regardless of how good the pop-in or the colour looked.
-    const under=document.elementFromPoint(clientX,clientY);
+    // topY (not clientY) is the chip's own top edge — offset back by however
+    // far down the chip the finger originally grabbed it, so the chip's edge
+    // tracks the finger's *movement*, not the finger's raw position.
+    const topY=clientY-grabOffsetY;
+    const under=document.elementFromPoint(clientX,topY);
     const cell=under&&under.closest&&under.closest(".cal-hour-cell");
     if(cell){
       const cr=cell.getBoundingClientRect();
-      const rawMinuteInHour=Math.min(Math.max(((clientY-cr.top)/cr.height)*60,0),59.999);
+      const rawMinuteInHour=Math.min(Math.max(((topY-cr.top)/cr.height)*60,0),59.999);
       const snappedMinuteInHour=Math.min(Math.max(snap(rawMinuteInHour),0),60-SNAP_MIN);
       evtEl.style.left=cr.left+"px"; evtEl.style.width=cr.width+"px";
       evtEl.style.top=(cr.top+(rawMinuteInHour/60)*cr.height)+"px";
