@@ -834,13 +834,11 @@
         <button class="mat-stab" data-ms="inventory">Inventory</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
         <button class="mat-stab" data-ms="viruses">Viruses</button>
-        <button class="mat-stab" data-ms="eventtypes">Event Types</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview hidden" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-procedures"></div>
-      <div class="wrap mat-subview hidden" id="ms-eventtypes"></div>
       <div class="wrap mat-subview" id="ms-diarytypes"></div>
     </div>
     <div class="view hidden wrap" id="library"></div>
@@ -3158,13 +3156,15 @@ function taskEditor(t,after,occWhen,occEndDate){
         </div>
       </div>
     </div>
-    ${t.isEvent?`<div class="fld"><label>Category</label>
-      <select id="tk_evtype"><option value="">— none —</option>
-        ${(DB.config.eventTypes||[]).map(et=>`<option value="${escAttr(et.id)}" ${t.eventTypeId===et.id?"selected":""}>${esc(et.name||"(unnamed)")}</option>`).join("")}
-      </select></div>`:""}
     <div class="fld"><label>Colour</label>
+      ${t.isEvent?`<div id="tk_cat_chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+        <input type="color" id="tk_cat_newcolor" value="${GCAL_COLORS[(DB.config.eventTypes||[]).length%GCAL_COLORS.length][0]}" style="width:28px;height:28px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
+        <input id="tk_cat_newname" placeholder="new category…" style="flex:1;min-width:100px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px">
+        <button type="button" id="tk_cat_add" class="btn ghost" style="font-size:12px;flex:0 0 auto">＋ Add</button>
+      </div>`:""}
       <div style="display:flex;align-items:center;gap:8px">
-        <span class="tag" id="tk_color_auto" data-c="" style="cursor:pointer;${!t.color?"box-shadow:0 0 0 2px var(--ink-dim)":""}">Automatic</span>
+        <span class="tag" id="tk_color_auto" data-c="" style="cursor:pointer;${!t.color&&!t.eventTypeId?"box-shadow:0 0 0 2px var(--ink-dim)":""}">Automatic</span>
         <input type="color" id="tk_color_pick" value="${t.color||GCAL_COLORS[0][0]}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer">
       </div></div>
     ${t.isEvent?"":`<div class="fld"><label>Part of</label>
@@ -3216,18 +3216,81 @@ function taskEditor(t,after,occWhen,occEndDate){
   // an event has no "Part of" field at all — nothing to attach to a project
   const tkExp=document.getElementById("tk_exp");
   if(tkExp) tkExp.addEventListener("change",e=>setTaskTarget(t,e.target.value));
-  // an event's stand-in for the project colour a task would otherwise
+  const tkColorAuto=document.getElementById("tk_color_auto");
+  // An event's stand-in for the project colour a task would otherwise
   // inherit — see taskColorOf's own comment for the priority order (an
-  // explicit colour pick below still wins over this)
-  const tkEvtype=document.getElementById("tk_evtype");
-  if(tkEvtype) tkEvtype.addEventListener("change",e=>{ t.eventTypeId=e.target.value||null; persist(); });
-  document.getElementById("tk_color_auto").addEventListener("click",()=>{
-    t.color=null; persist();
-    document.getElementById("tk_color_auto").style.boxShadow="0 0 0 2px var(--ink-dim)";
+  // explicit colour pick still wins over a category). Managed right here,
+  // inline, rather than a separate settings tab — add/rename/recolour/
+  // delete a category without ever leaving the event you're editing.
+  const catChipsHost=document.getElementById("tk_cat_chips");
+  let paintCatChips=()=>{}; // no-op for a plain task, which has no chips host at all
+  if(catChipsHost){
+    paintCatChips=function(){
+      const types=DB.config.eventTypes||[];
+      catChipsHost.innerHTML=types.length?types.map(et=>`
+        <span class="cat-chip${t.eventTypeId===et.id?" on":""}" data-id="${escAttr(et.id)}" style="display:inline-flex;align-items:center;gap:5px;border:1px solid ${t.eventTypeId===et.id?"var(--gcamp)":"var(--line2)"};background:var(--panel2);border-radius:20px;padding:3px 8px 3px 3px;cursor:pointer;font-size:11.5px;color:var(--ink-dim)">
+          <input type="color" class="cat-chip-color" data-id="${escAttr(et.id)}" value="${et.color&&et.color.startsWith("#")?et.color:"#7db4ff"}" style="width:18px;height:18px;border:none;border-radius:50%;padding:0;cursor:pointer;flex:0 0 auto">
+          <span class="cat-chip-name" data-id="${escAttr(et.id)}" title="double-click to rename">${esc(et.name||"(unnamed)")}</span>
+          <button type="button" class="cat-chip-del" data-id="${escAttr(et.id)}" title="delete category" style="border:0;background:transparent;color:var(--ink-faint);cursor:pointer;padding:0 2px;font-size:11px;line-height:1">✕</button>
+        </span>`).join("")
+        : `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">no categories yet — add one below</span>`;
+    }
+    paintCatChips();
+    catChipsHost.addEventListener("click",e=>{
+      const del=e.target.closest(".cat-chip-del");
+      if(del){
+        const et=(DB.config.eventTypes||[]).find(x=>x.id===del.dataset.id); if(!et)return;
+        if(confirm(`Delete "${et.name||"(unnamed)"}"? Events already using it keep their own colour, they just won't show as this category any more.`)){
+          DB.config.eventTypes=(DB.config.eventTypes||[]).filter(x=>x.id!==et.id);
+          if(t.eventTypeId===et.id)t.eventTypeId=null;
+          persist(); paintCatChips(); tkColorAuto.style.boxShadow=(!t.color&&!t.eventTypeId)?"0 0 0 2px var(--ink-dim)":"";
+        }
+        return;
+      }
+      if(e.target.classList.contains("cat-chip-color"))return; // its own input handler below
+      const chip=e.target.closest(".cat-chip"); if(!chip)return;
+      // click again to deselect back to "no category"; a category pick
+      // clears any one-off custom colour so the pick actually shows,
+      // rather than sitting masked by a stale override
+      t.eventTypeId=(t.eventTypeId===chip.dataset.id)?null:chip.dataset.id;
+      t.color=null;
+      persist(); paintCatChips();
+      tkColorAuto.style.boxShadow="";
+    });
+    catChipsHost.addEventListener("input",e=>{
+      if(!e.target.classList.contains("cat-chip-color"))return;
+      const et=(DB.config.eventTypes||[]).find(x=>x.id===e.target.dataset.id); if(!et)return;
+      et.color=e.target.value; persist();
+    });
+    catChipsHost.addEventListener("dblclick",e=>{
+      const nameEl=e.target.closest(".cat-chip-name"); if(!nameEl)return;
+      const et=(DB.config.eventTypes||[]).find(x=>x.id===nameEl.dataset.id); if(!et)return;
+      const nv=prompt("Rename category",et.name||""); if(nv==null)return;
+      et.name=nv.trim(); persist(); paintCatChips();
+    });
+    const newNameEl=document.getElementById("tk_cat_newname"), newColorEl=document.getElementById("tk_cat_newcolor");
+    function addCategory(){
+      const name=newNameEl.value.trim(); if(!name)return;
+      const et={id:uid("et_"),name,color:newColorEl.value};
+      (DB.config.eventTypes=DB.config.eventTypes||[]).push(et);
+      t.eventTypeId=et.id; t.color=null;
+      persist();
+      newNameEl.value="";
+      newColorEl.value=GCAL_COLORS[DB.config.eventTypes.length%GCAL_COLORS.length][0];
+      paintCatChips(); tkColorAuto.style.boxShadow="";
+    }
+    document.getElementById("tk_cat_add").onclick=addCategory;
+    newNameEl.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); addCategory(); } });
+  }
+  tkColorAuto.addEventListener("click",()=>{
+    t.color=null; if(t.isEvent)t.eventTypeId=null;
+    persist();
+    tkColorAuto.style.boxShadow="0 0 0 2px var(--ink-dim)";
+    paintCatChips(); // clears whichever chip was showing "on"
   });
   document.getElementById("tk_color_pick").addEventListener("input",e=>{
     t.color=e.target.value; persist();
-    document.getElementById("tk_color_auto").style.boxShadow="";
+    tkColorAuto.style.boxShadow="";
   });
   const wrap=document.getElementById("tk_customwrap"), dowBox=document.getElementById("tk_dow"),
         ivl=document.getElementById("tk_ivl"), freqSel=document.getElementById("tk_freq"),
@@ -5402,7 +5465,6 @@ function renderMatSubTab(){
   else if(matSubTab === "sites")    renderSiteLib();
   else if(matSubTab === "procedures") renderProcedureLib();
   else if(matSubTab === "diarytypes") renderDiaryTypesLib();
-  else if(matSubTab === "eventtypes") renderEventTypesLib();
 }
 
 /* ── INVENTORY ─────────────────────────────────────────────────────────────── */
@@ -6084,60 +6146,9 @@ function renderDiaryTypesLib(){
   });
 }
 
-/* ---------- EVENT TYPES (named colour categories for calendar events) ----------
-   A task borrows its colour from whatever project it's attached to; an event
-   has no "Part of" field at all, so it had nothing to borrow from and every
-   uncategorized one fell back to the same flat blue. This is the same
-   name+colour idea diaryTypes already has (see renderDiaryTypesLib above),
-   stripped down to just that — an event category has no icon, no custom
-   fields, and no "shows on Timeline" flag to worry about, unlike a diary type. */
-function renderEventTypesLib(){
-  const host=document.getElementById("ms-eventtypes"); host.innerHTML="";
-  const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
-
-  const hdr=document.createElement("div");
-  hdr.style.cssText="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap";
-  hdr.innerHTML=`<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
-      Named colour categories for calendar events (Timeline → an item marked "Event") — pick one on an event to colour it consistently, instead of a one-off colour per event.</span>
-    <button id="etlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New category</button>`;
-  host.appendChild(hdr);
-
-  const wrap=document.createElement("div"); host.appendChild(wrap);
-  function paintRows(){
-    const types=DB.config.eventTypes||[];
-    wrap.innerHTML=types.length ? types.map((et,i)=>`
-      <div style="display:flex;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:10px 14px;margin-bottom:8px">
-        <input type="color" class="etlib_color" data-i="${i}" value="${et.color&&et.color.startsWith("#")?et.color:"#7db4ff"}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
-        <input class="etlib_name" data-i="${i}" value="${escAttr(et.name)}" placeholder="Category name (e.g. Meeting)" style="flex:1;min-width:140px;${IST}">
-        <button class="etlib_del" data-i="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕</button>
-      </div>`).join("")
-      : `<div class="empty" style="padding:20px 0">No event categories yet — add one above, then pick it on any event's own "Category" field.</div>`;
-  }
-  paintRows();
-
-  host.querySelector("#etlib_add").onclick=()=>{
-    (DB.config.eventTypes=DB.config.eventTypes||[]).push({id:uid("et_"),name:"",color:GCAL_COLORS[(DB.config.eventTypes||[]).length%GCAL_COLORS.length][0]});
-    persist(); paintRows();
-    const rows=wrap.querySelectorAll(".etlib_name"); if(rows.length) rows[rows.length-1].focus();
-  };
-  wrap.addEventListener("input",e=>{
-    if(!e.target.classList.contains("etlib_name"))return;
-    const et=(DB.config.eventTypes||[])[+e.target.dataset.i]; if(!et)return;
-    et.name=e.target.value; persist();
-  });
-  wrap.addEventListener("change",e=>{
-    if(!e.target.classList.contains("etlib_color"))return;
-    const et=(DB.config.eventTypes||[])[+e.target.dataset.i]; if(!et)return;
-    et.color=e.target.value; persist();
-  });
-  wrap.addEventListener("click",e=>{
-    const del=e.target.closest(".etlib_del"); if(!del)return;
-    const et=(DB.config.eventTypes||[])[+del.dataset.i]; if(!et)return;
-    if(confirm(`Delete "${et.name||"(unnamed)"}"? Events already using it keep their own colour, they just won't show as this category any more.`)){
-      (DB.config.eventTypes||[]).splice(+del.dataset.i,1); persist(); paintRows();
-    }
-  });
-}
+// Event categories (named colours) are managed inline from the event editor's
+// own Colour field now — see taskEditor's tk_cat_* wiring — not from a
+// separate settings tab.
 
 /* ---------- READING (two-track: core canon + capped frontier) ---------- */
 const daysSince=ts=>ts?Math.floor((Date.now()-ts)/864e5):0;
