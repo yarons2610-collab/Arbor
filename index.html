@@ -834,11 +834,13 @@
         <button class="mat-stab" data-ms="inventory">Inventory</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
         <button class="mat-stab" data-ms="viruses">Viruses</button>
+        <button class="mat-stab" data-ms="eventtypes">Event Types</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview hidden" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-procedures"></div>
+      <div class="wrap mat-subview hidden" id="ms-eventtypes"></div>
       <div class="wrap mat-subview" id="ms-diarytypes"></div>
     </div>
     <div class="view hidden wrap" id="library"></div>
@@ -961,6 +963,14 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   animalFilters:{cohort:"all",experiment:"all",group:"all",status:"all",search:"",sort:"name"},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   libraryGroups:[], // user-defined filing groups for the Library (papers + protocols) — {id,name}
+  // Named, colour-coded event categories — tasks already get an implicit
+  // colour from whatever project they're attached to, but an event (isEvent:
+  // true) is never attached to a project at all, so every uncategorized
+  // event fell back to the exact same flat blue with no way to tell two
+  // kinds of event apart at a glance. {id,name,color}; empty by default —
+  // unlike diaryTypes there's no natural seed list, so this starts as
+  // whatever the user actually names.
+  eventTypes:[],
   // seeded diary entry types - fully user-editable afterward (label/icon/color/
   // fields/timeline flag), not a locked-in schema. "timeline:true" means entries
   // of that type surface on the global Timeline (procedures - the "big things
@@ -1368,6 +1378,7 @@ function migrate(){                       // backfill fields added in later vers
     if(!DB.config.animalFilters) DB.config.animalFilters={...DEFAULT_CONFIG.animalFilters};
     if(!DB.config.taskLib)  DB.config.taskLib=[...DEFAULT_CONFIG.taskLib];
     if(!DB.config.libraryGroups) DB.config.libraryGroups=[...DEFAULT_CONFIG.libraryGroups];
+    if(!DB.config.eventTypes) DB.config.eventTypes=[...DEFAULT_CONFIG.eventTypes];
     // taskLib upgraded from plain task-name strings (autocomplete-only) to
     // objects with a flexible per-task parameter list (different behavioral
     // tasks log different metrics — a 2AFC session and an open-field session
@@ -1734,6 +1745,17 @@ function calDayDelta(fromISO,toISO){
 // Dragging one occurrence of a repeating task moves the whole series by the same
 // amount. Per-occurrence exceptions would need somewhere to record them; moving
 // the series is at least predictable, and it is said out loud.
+// A drag or resize on a touchscreen has no equivalent of a mouse's own
+// hover-to-preview — the app already saved silently either way, but nothing
+// ever confirmed a drop actually landed, or where. Every commit path below
+// ends by handing its own (newWhen,newEnd,newDur) to this.
+function calChangeSummary(newWhen,newEnd,newDur){
+  if(newWhen!=null&&newDur!=null) return `Moved to ${fmtWhenFull(newWhen)} (${newDur} min)`;
+  if(newWhen!=null) return `Moved to ${fmtWhenFull(newWhen)}`;
+  if(newDur!=null) return `Resized to ${newDur} min`;
+  if(newEnd) return `Now ends ${fmtWhenFull(newEnd)}`;
+  return "Updated";
+}
 function commitCalMove(x,newWhen,newEnd,newDur){
   const src=x.src;
   // A diary entry belongs to one animal on one day. Moving it here is the same
@@ -1751,13 +1773,13 @@ function commitCalMove(x,newWhen,newEnd,newDur){
       // an end time cannot run past midnight on a single-day entry
       e.endTime=t2>=1440?"23:59":`${p4(Math.floor(t2/60))}:${p4(t2%60)}`;
     }
-    persist(); return true;
+    persist(); toast(calChangeSummary(newWhen,newEnd,newDur)); return true;
   }
   if(x.kind==="exp"){
     if(newWhen!=null)src.deadline=newWhen;
     if(newEnd!==undefined)src.endDate=newEnd;
     if(newDur!=null)src.duration=newDur;
-    persist(); return true;
+    persist(); toast(calChangeSummary(newWhen,newEnd,newDur)); return true;
   }
   const rep=src.repeat&&src.repeat.every;
   // Dragging one occurrence of a repeating task is still an edit to a shared
@@ -1765,6 +1787,8 @@ function commitCalMove(x,newWhen,newEnd,newDur){
   // asks in taskEditor, just triggered by a drop instead of a Save click.
   if(rep&&(newWhen!=null||newDur!=null)){
     occurrenceScopeModal(scope=>{
+      const what=calChangeSummary(newWhen,undefined,newDur);
+      const scopeLabel=scope==="all"?"whole repeating series":scope==="this"?"just this occurrence":"this and every occurrence after it";
       if(scope==="all"){
         // shift the anchor by however far this occurrence moved — today's
         // pre-scoping behaviour, kept exactly for the "all events" choice
@@ -1775,15 +1799,15 @@ function commitCalMove(x,newWhen,newEnd,newDur){
           if(src.endDate&&d)src.endDate=addDaysISO(src.endDate,d);
         }
         if(newDur!=null)src.duration=newDur;
-        persist(); toast("Moved the whole repeating series");
+        persist();
       } else {
         const patch={when:newWhen!=null?newWhen:x.deadline,
           endDate:newEnd!==undefined?newEnd:x.endDate,
           duration:newDur!=null?newDur:x.duration};
         if(scope==="this")detachOccurrence(src,x.deadline,patch);
         else splitSeriesFrom(src,x.deadline,patch);
-        toast(scope==="this"?"Moved just this occurrence":"Moved this and every occurrence after it");
       }
+      toast(`${what} (${scopeLabel})`);
       renderTimeline();
     });
     return true;
@@ -1792,6 +1816,7 @@ function commitCalMove(x,newWhen,newEnd,newDur){
   else if(newEnd!==undefined){ src.endDate=newEnd; }
   if(newDur!=null)src.duration=newDur;
   persist();
+  toast(calChangeSummary(newWhen,newEnd,newDur));
   return true;
 }
 // Drag an all-day bar sideways to move it, keeping its length. Pointer events so
@@ -1917,11 +1942,19 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
   chip.addEventListener("pointerdown",ev=>{
     if(ev.button)return;
     ev.preventDefault();
-    const startX=ev.clientX, startY=ev.clientY, startCol=cells.findIndex(c=>c.contains(chip));
-    const isTouch=ev.pointerType!=="mouse";
-    let armed=!isTouch, moved=false, cancelled=false, targetCol=startCol, rect=null, ghostEl=null;
+    const startX=ev.clientX, startY=ev.clientY;
     const colAt=x=>{ for(let i=0;i<cells.length;i++){ const r=cells[i].getBoundingClientRect();
       if(x>=r.left&&x<=r.right)return i; } return -1; };
+    // Which day the chip started in — geometry, not DOM containment: a
+    // multi-day bar or a month-view chip is a grid sibling of its day cells,
+    // not nested inside one, so cells.findIndex(c=>c.contains(chip)) always
+    // came back -1 for either. targetCol is already computed this same way
+    // during the drag; matching it here means delta is "how many columns did
+    // the pointer travel", correct regardless of where on a wide bar it was
+    // grabbed.
+    const startCol=colAt(startX);
+    const isTouch=ev.pointerType!=="mouse";
+    let armed=!isTouch, moved=false, cancelled=false, targetCol=startCol, rect=null, ghostEl=null;
     // moving more than the wiggle before the hold fires aborts the gesture
     // outright — not a drag (never armed) and not a click either (a real
     // move happened), the same as lifting your finger and trying again
@@ -2574,8 +2607,15 @@ const taskDone=t=>{
   return occDone(t,t.when);
 };
 const stepDone=st=>!!String(st.outcome||"").trim();
+function eventTypeById(id){ return (DB.config.eventTypes||[]).find(x=>x.id===id)||null; }
 function taskColorOf(t){
   if(t.color) return t.color;           // an explicit choice always wins over anything derived
+  // An event is never attached to a project (no "Part of" field at all — see
+  // taskEditor), so without this every uncategorized event fell straight
+  // through to the same flat fallback blue below, same as a task with
+  // nowhere to inherit a colour from — its category stands in for the
+  // project a task would otherwise borrow one from.
+  if(t.isEvent&&t.eventTypeId){ const et=eventTypeById(t.eventTypeId); if(et)return et.color; }
   const pr=t.projectId?projById(t.projectId):null;
   if(pr)return pr.color;
   const e=t.experimentId?expById(t.experimentId):null;
@@ -2620,15 +2660,42 @@ function taskSpan(t){
 // task is done once its date has passed, occurrences need no completion state —
 // past ones are finished and future ones are not, for free.
 const REPEATS=[["","Does not repeat"],["day","Every day"],["week","Every week"],
-               ["2week","Every 2 weeks"],["month","Every month"],["custom","Custom…"]];
+               ["2week","Every 2 weeks"],["month","Every month"],["year","Every year"],["custom","Custom…"]];
 const DOW=["Su","Mo","Tu","We","Th","Fr","Sa"];
-function repeatLabel(r){
+const DOW_FULL=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const NTH_NAMES=["first","second","third","fourth","fifth"];
+// "Monthly on the ___" always derives from the date itself rather than being
+// stored separately — if the start date ever changes, which weekday/which-
+// occurrence-of-it it means changes right along with it, the same way
+// Google Calendar's own "Monthly on the third Tuesday" tracks whatever date
+// is actually picked instead of freezing on whatever it first meant.
+function nthWeekdayLabel(iso){
+  const d=new Date(iso.slice(0,10)+"T00:00:00");
+  const dow=d.getDay(), date=d.getDate();
+  const nth=Math.min(Math.ceil(date/7),5);
+  const isLast=(date+7)>new Date(d.getFullYear(),d.getMonth()+1,0).getDate();
+  return `${isLast?"last":NTH_NAMES[nth-1]} ${DOW_FULL[dow]}`;
+}
+function repeatLabel(r,when){
   if(!r||!r.every)return "";
   if(r.every==="custom"){
-    const d=(r.days||[]).slice().sort((a,b)=>a-b).map(i=>DOW[i]).join(", ");
-    if(!d)return "custom";
-    const iv=Math.max(1,+r.interval||1);
-    return iv>1?`${d} every ${iv} weeks`:d;
+    const freq=r.freq||"week", iv=Math.max(1,+r.interval||1);
+    if(freq==="week"){
+      const d=(r.days||[]).slice().sort((a,b)=>a-b).map(i=>DOW[i]).join(", ");
+      if(!d)return "custom";
+      return iv>1?`${d} every ${iv} weeks`:d;
+    }
+    const unit=freq==="day"?"day":freq==="month"?"month":"year";
+    const every=iv>1?`every ${iv} ${unit}s`:`every ${unit}`;
+    // "Monthly on the ___" is derived from the task's own start date (see
+    // nthWeekdayLabel) rather than stored on the rule, so it always reflects
+    // whatever date the task actually starts on today, not whatever it
+    // started on the moment this mode was picked.
+    if(freq==="month"&&r.monthMode==="weekday"){
+      const nth=when?nthWeekdayLabel(when):"—";
+      return iv>1 ? `on the ${nth}, every ${iv} months` : `monthly on the ${nth}`;
+    }
+    return every;
   }
   const m=REPEATS.find(x=>x[0]===r.every); return m?m[1].toLowerCase():r.every;
 }
@@ -2647,11 +2714,58 @@ function addMonthsISO(iso,n){
   const p2=x=>String(x).padStart(2,"0");
   return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`+(t?"T"+t:"");
 }
+function addYearsISO(iso,n){
+  const t=iso.length>10?iso.slice(11):null;
+  const d=new Date(iso.slice(0,10)+"T00:00:00"); const day=d.getDate();
+  d.setDate(1); d.setFullYear(d.getFullYear()+n);
+  // clamp so Feb 29 on a non-leap target year doesn't spill into March
+  d.setDate(Math.min(day,new Date(d.getFullYear(),d.getMonth()+1,0).getDate()));
+  const p2=x=>String(x).padStart(2,"0");
+  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`+(t?"T"+t:"");
+}
+// Every occurrence of "the Nth <weekday> of the month", stepping by iv months
+// at a time from the anchor's own month. Returns the ISO date (no time) for
+// month-index m past the anchor, or null if that month has no such day (only
+// possible for a numbered 1st-4th anchor, e.g. "4th Monday" landing on a
+// month with only four — a "last" anchor is a genuinely different pattern,
+// not a numbered one that happens to fall back to "last" when it overflows:
+// it means the last <weekday> of *every* month, so October gets its own
+// actual last Friday (the 30th) even though August's last Friday happened
+// to also be its 4th.
+function nthWeekdayOfMonth(anchorISO,monthsForward){
+  const anchor=new Date(anchorISO.slice(0,10)+"T00:00:00");
+  const dow=anchor.getDay();
+  const nth=Math.min(Math.ceil(anchor.getDate()/7),5);
+  const isLast=(anchor.getDate()+7)>new Date(anchor.getFullYear(),anchor.getMonth()+1,0).getDate();
+  const first=new Date(anchor.getFullYear(),anchor.getMonth()+monthsForward,1);
+  const y=first.getFullYear(), mo=first.getMonth();
+  const firstDow=first.getDay();
+  const daysInMonth=new Date(y,mo+1,0).getDate();
+  const firstOccurrence=1+((dow-firstDow+7)%7);
+  let day;
+  if(isLast){
+    day=firstOccurrence+Math.floor((daysInMonth-firstOccurrence)/7)*7;
+  } else {
+    day=firstOccurrence+(nth-1)*7;
+    if(day>daysInMonth)return null;
+  }
+  const p2=x=>String(x).padStart(2,"0");
+  return `${y}-${p2(mo+1)}-${p2(day)}`;
+}
 function stepRepeat(iso,r,i){
   if(r.every==="day")  return addDaysISO(iso,i);
   if(r.every==="week") return addDaysISO(iso,i*7);
   if(r.every==="2week")return addDaysISO(iso,i*14);
   if(r.every==="month")return addMonthsISO(iso,i);
+  if(r.every==="year") return addYearsISO(iso,i);
+  if(r.every==="custom"){
+    const iv=Math.max(1,+r.interval||1), freq=r.freq||"week";
+    if(freq==="day")  return addDaysISO(iso,i*iv);
+    if(freq==="month"&&r.monthMode!=="weekday") return addMonthsISO(iso,i*iv);
+    if(freq==="year") return addYearsISO(iso,i*iv);
+    // freq "week" and monthMode "weekday" have their own dedicated generators
+    // in taskOccurrences — not reachable through this generic stepper
+  }
   return iso;
 }
 // every occurrence of a task that touches [from,to], as {t,when,endDate}
@@ -2667,43 +2781,74 @@ function taskOccurrences(t,fromISO,toISO){
   // standalone task (see detachOccurrence/splitSeriesFrom) — these are
   // separate events now, so the rule must never regenerate them.
   const excluded=new Set(t.excludedDates||[]);
+  // Shared by every mode whose occurrences come one at a time from
+  // stepRepeat (day/N, month-on-same-date/N, year/N, plus the two plain
+  // presets that aren't "custom" at all) — the weekly-on-weekdays and
+  // monthly-on-Nth-weekday modes below generate their own dates directly
+  // instead, since neither is "the same calendar delta every time".
+  function genericSteps(){
+    const res=[];
+    for(let i=0;i<400;i++){
+      const w=stepRepeat(t.when,t.repeat,i);
+      if(until&&w.slice(0,10)>until)break;
+      if(w.slice(0,10)>toISO)break;
+      if(excluded.has(w))continue;
+      const e=span?addDaysISO(w,span):null;
+      if((e||w).slice(0,10)>=fromISO) res.push({t,when:w,endDate:e});
+    }
+    return res;
+  }
   if(t.repeat.every==="custom"){
-    const days=(t.repeat.days||[]).slice().sort((a,b)=>a-b);
-    if(!days.length)return [];
+    const freq=t.repeat.freq||"week";
     const iv=Math.max(1,+t.repeat.interval||1);
     const startISO=t.when.slice(0,10), time=t.when.length>10?t.when.slice(11):null;
-    // week 0 is the Sunday-based week the task starts in; occurrences fall on
-    // the chosen weekdays of every iv-th week from there
-    const anchor=new Date(startISO+"T00:00:00");
-    const w0=new Date(anchor); w0.setDate(anchor.getDate()-anchor.getDay());
-    const p2=x=>String(x).padStart(2,"0");
-    for(let w=0;w<520;w+=iv){
-      const ws2=new Date(w0); ws2.setDate(w0.getDate()+w*7);
-      if(`${ws2.getFullYear()}-${p2(ws2.getMonth()+1)}-${p2(ws2.getDate())}`>toISO)break;
-      for(const d of days){
-        const dt=new Date(ws2); dt.setDate(ws2.getDate()+d);
-        const iso=`${dt.getFullYear()}-${p2(dt.getMonth()+1)}-${p2(dt.getDate())}`;
+    if(freq==="week"){
+      const days=(t.repeat.days||[]).slice().sort((a,b)=>a-b);
+      if(!days.length)return [];
+      // week 0 is the Sunday-based week the task starts in; occurrences fall on
+      // the chosen weekdays of every iv-th week from there
+      const anchor=new Date(startISO+"T00:00:00");
+      const w0=new Date(anchor); w0.setDate(anchor.getDate()-anchor.getDay());
+      const p2=x=>String(x).padStart(2,"0");
+      for(let w=0;w<520;w+=iv){
+        const ws2=new Date(w0); ws2.setDate(w0.getDate()+w*7);
+        if(`${ws2.getFullYear()}-${p2(ws2.getMonth()+1)}-${p2(ws2.getDate())}`>toISO)break;
+        for(const d of days){
+          const dt=new Date(ws2); dt.setDate(ws2.getDate()+d);
+          const iso=`${dt.getFullYear()}-${p2(dt.getMonth()+1)}-${p2(dt.getDate())}`;
+          if(iso<startISO)continue;
+          if(until&&iso>until)continue;
+          if(iso>toISO)continue;
+          const when=iso+(time?"T"+time:"");
+          if(excluded.has(when))continue;
+          const e=span?addDaysISO(when,span):null;
+          if((e||when).slice(0,10)>=fromISO) out.push({t,when,endDate:e});
+        }
+      }
+      out.sort((a,b)=>a.when.localeCompare(b.when));
+      return out;
+    }
+    if(freq==="month"&&t.repeat.monthMode==="weekday"){
+      // A month with no such day (a numbered, non-"last" occurrence — e.g.
+      // "4th Monday" — landing on a month short one) is skipped entirely
+      // rather than shifted onto some other day.
+      for(let m=0;m<240;m+=iv){
+        const iso=nthWeekdayOfMonth(startISO,m);
+        if(!iso)continue;
+        if(iso>toISO)break;
         if(iso<startISO)continue;
         if(until&&iso>until)continue;
-        if(iso>toISO)continue;
         const when=iso+(time?"T"+time:"");
         if(excluded.has(when))continue;
         const e=span?addDaysISO(when,span):null;
         if((e||when).slice(0,10)>=fromISO) out.push({t,when,endDate:e});
       }
+      return out;
     }
-    out.sort((a,b)=>a.when.localeCompare(b.when));
-    return out;
+    // day / month-on-the-same-date / year: one calendar delta per step
+    return genericSteps();
   }
-  for(let i=0;i<400;i++){
-    const w=stepRepeat(t.when,t.repeat,i);
-    if(until&&w.slice(0,10)>until)break;
-    if(w.slice(0,10)>toISO)break;
-    if(excluded.has(w))continue;
-    const e=span?addDaysISO(w,span):null;
-    if((e||w).slice(0,10)>=fromISO) out.push({t,when:w,endDate:e});
-  }
-  return out;
+  return genericSteps();
 }
 // the soonest occurrence still ahead of (or on) today
 function nextOccurrence(t){
@@ -2714,7 +2859,7 @@ function nextOccurrence(t){
 function addTask(init){
   const t={id:uid("tk_"),title:"",when:null,endDate:null,duration:null,
            projectId:null,experimentId:null,repeat:null,links:[],doneOccurrences:[],
-           isEvent:false,color:null,created:Date.now(),...(init||{})};
+           isEvent:false,color:null,eventTypeId:null,created:Date.now(),...(init||{})};
   taskList().push(t); persist(); return t;
 }
 function deleteTask(id){ DB.schedule=taskList().filter(x=>x.id!==id); persist(); }
@@ -2984,16 +3129,39 @@ function taskEditor(t,after,occWhen,occEndDate){
       <div class="fld" style="flex:1"><label>Until</label>
         <button type="button" id="tk_end" class="datebtn ${t.endDate?"":"datebtn-empty"}">${t.endDate?fmtWhenFull(t.endDate):"📅 end"}</button></div>
     </div>
+    <label style="display:flex;align-items:center;gap:6px;margin:-6px 0 12px;font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);cursor:pointer">
+      <input type="checkbox" id="tk_allday" style="width:auto" ${t.when&&!hasTime(t.when)?"checked":""}>All day
+    </label>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Repeats</label>
         <select id="tk_rep">${REPEATS.map(r=>`<option value="${r[0]}" ${((t.repeat&&t.repeat.every)||"")===r[0]?"selected":""}>${r[1]}</option>`).join("")}</select></div>
       <div class="fld" style="flex:1"><label>Repeat until</label>
         <button type="button" id="tk_until" class="datebtn ${t.repeat&&t.repeat.until?"":"datebtn-empty"}">${t.repeat&&t.repeat.until?fmtWhenFull(t.repeat.until):"📅 no end"}</button></div>
     </div>
-    <div class="fld" id="tk_customwrap" style="display:none"><label>On these days</label>
-      <div class="dow-row" id="tk_dow"></div>
-      <div class="dow-every"><span>repeat every</span>
-        <input id="tk_ivl" type="number" min="1" max="12" value="1"><span>week(s)</span></div></div>
+    <div class="fld" id="tk_customwrap" style="display:none">
+      <label>Custom repeat</label>
+      <div class="dow-every" style="margin:0 0 10px">
+        <span>repeat every</span>
+        <input id="tk_ivl" type="number" min="1" max="365" value="1" style="width:52px">
+        <select id="tk_freq">
+          <option value="day">day(s)</option>
+          <option value="week">week(s)</option>
+          <option value="month">month(s)</option>
+          <option value="year">year(s)</option>
+        </select>
+      </div>
+      <div id="tk_freq_week"><div class="dow-row" id="tk_dow"></div></div>
+      <div id="tk_freq_month" style="display:none">
+        <div class="dow-row" id="tk_monthmode">
+          <button type="button" data-v="date">on day <span id="tk_mm_date"></span></button>
+          <button type="button" data-v="weekday">on the <span id="tk_mm_weekday"></span></button>
+        </div>
+      </div>
+    </div>
+    ${t.isEvent?`<div class="fld"><label>Category</label>
+      <select id="tk_evtype"><option value="">— none —</option>
+        ${(DB.config.eventTypes||[]).map(et=>`<option value="${escAttr(et.id)}" ${t.eventTypeId===et.id?"selected":""}>${esc(et.name||"(unnamed)")}</option>`).join("")}
+      </select></div>`:""}
     <div class="fld"><label>Colour</label>
       <div style="display:flex;align-items:center;gap:8px">
         <span class="tag" id="tk_color_auto" data-c="" style="cursor:pointer;${!t.color?"box-shadow:0 0 0 2px var(--ink-dim)":""}">Automatic</span>
@@ -3011,7 +3179,7 @@ function taskEditor(t,after,occWhen,occEndDate){
     b.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${t.endDate?fmtWhenFull(t.endDate):"end"}`;
     b.classList.toggle("datebtn-empty",!t.endDate);
   };
-  bindDateButton(document.getElementById("tk_start"), ()=>t.when||"", v=>{
+  function applyStartWhen(v){
     const prev=t.when;
     t.when=v||null;
     if(t.when){
@@ -3021,13 +3189,38 @@ function taskEditor(t,after,occWhen,occEndDate){
       if(t.endDate&&t.endDate<t.when) t.endDate=suggestEnd(t.when);
     }
     persist(); paintEnd();
-  });
+  }
+  const paintStart=()=>{
+    const b=document.getElementById("tk_start"); if(!b)return;
+    b.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${t.when?fmtWhenFull(t.when):"start"}`;
+    b.classList.toggle("datebtn-empty",!t.when);
+  };
+  bindDateButton(document.getElementById("tk_start"), ()=>t.when||"", v=>{ applyStartWhen(v); paintStart(); });
   // opening an unset end starts it at the suggestion rather than at today
   bindDateButton(document.getElementById("tk_end"), ()=>t.endDate||suggestEnd(t.when)||"",
     v=>{ t.endDate=v||null; persist(); });
+  // One toggle instead of having to open the date picker and hunt down its
+  // small "remove time" ✕ on both the start and end fields separately — the
+  // same "does this have a time or not" question a calendar's all-day switch
+  // always asks up front, not two clicks buried in a popover each.
+  document.getElementById("tk_allday").addEventListener("change",e=>{
+    if(e.target.checked){
+      t.when=(t.when||todayDateStr()).slice(0,10);
+      if(t.endDate)t.endDate=t.endDate.slice(0,10);
+      persist();
+    } else if(t.when){
+      applyStartWhen(t.when.slice(0,10)+"T"+DEFAULT_ENTRY_TIME);
+    }
+    paintStart(); paintEnd();
+  });
   // an event has no "Part of" field at all — nothing to attach to a project
   const tkExp=document.getElementById("tk_exp");
   if(tkExp) tkExp.addEventListener("change",e=>setTaskTarget(t,e.target.value));
+  // an event's stand-in for the project colour a task would otherwise
+  // inherit — see taskColorOf's own comment for the priority order (an
+  // explicit colour pick below still wins over this)
+  const tkEvtype=document.getElementById("tk_evtype");
+  if(tkEvtype) tkEvtype.addEventListener("change",e=>{ t.eventTypeId=e.target.value||null; persist(); });
   document.getElementById("tk_color_auto").addEventListener("click",()=>{
     t.color=null; persist();
     document.getElementById("tk_color_auto").style.boxShadow="0 0 0 2px var(--ink-dim)";
@@ -3037,21 +3230,52 @@ function taskEditor(t,after,occWhen,occEndDate){
     document.getElementById("tk_color_auto").style.boxShadow="";
   });
   const wrap=document.getElementById("tk_customwrap"), dowBox=document.getElementById("tk_dow"),
-        ivl=document.getElementById("tk_ivl");
+        ivl=document.getElementById("tk_ivl"), freqSel=document.getElementById("tk_freq"),
+        weekBox=document.getElementById("tk_freq_week"), monthBox=document.getElementById("tk_freq_month"),
+        monthModeBox=document.getElementById("tk_monthmode");
   function drawRepeat(){
     const custom=!!(t.repeat&&t.repeat.every==="custom");
     wrap.style.display=custom?"":"none";
     if(!custom)return;
-    const days=(t.repeat.days||[]);
-    dowBox.innerHTML=DOW.map((d,i)=>`<button type="button" data-d="${i}" class="${days.includes(i)?"on":""}">${d}</button>`).join("");
+    const freq=t.repeat.freq||"week";
     ivl.value=Math.max(1,+t.repeat.interval||1);
-    dowBox.querySelectorAll("button").forEach(b=>b.onclick=()=>{
-      const i=+b.dataset.d;
-      t.repeat.days=(t.repeat.days||[]).includes(i)
-        ? t.repeat.days.filter(x=>x!==i) : [...(t.repeat.days||[]),i];
-      persist(); drawRepeat(); });
+    freqSel.value=freq;
+    weekBox.style.display=freq==="week"?"":"none";
+    monthBox.style.display=freq==="month"?"":"none";
+    if(freq==="week"){
+      const days=(t.repeat.days||[]);
+      dowBox.innerHTML=DOW.map((d,i)=>`<button type="button" data-d="${i}" class="${days.includes(i)?"on":""}">${d}</button>`).join("");
+      dowBox.querySelectorAll("button").forEach(b=>b.onclick=()=>{
+        const i=+b.dataset.d;
+        t.repeat.days=(t.repeat.days||[]).includes(i)
+          ? t.repeat.days.filter(x=>x!==i) : [...(t.repeat.days||[]),i];
+        persist(); drawRepeat(); });
+    } else if(freq==="month"&&t.when){
+      // Both options are read straight off the task's own start date — "on
+      // day 15" and "on the third Tuesday" aren't independent choices, one
+      // is just how the other one reads once you know which date it is.
+      document.getElementById("tk_mm_date").textContent=+t.when.slice(8,10);
+      document.getElementById("tk_mm_weekday").textContent=nthWeekdayLabel(t.when);
+      const mode=t.repeat.monthMode||"date";
+      monthModeBox.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.v===mode));
+    }
   }
-  ivl.addEventListener("change",()=>{ if(t.repeat)t.repeat.interval=Math.max(1,Math.min(12,+ivl.value||1)); persist(); drawRepeat(); });
+  ivl.addEventListener("change",()=>{ if(t.repeat)t.repeat.interval=Math.max(1,Math.min(365,+ivl.value||1)); persist(); drawRepeat(); });
+  freqSel.addEventListener("change",()=>{
+    if(!t.repeat)return;
+    t.repeat.freq=freqSel.value;
+    // seed a freshly-switched-to mode with something that actually produces
+    // occurrences, the same reasoning the weekday seed below already used
+    if(t.repeat.freq==="week"&&!(t.repeat.days||[]).length){
+      t.repeat.days=[t.when?new Date(t.when.slice(0,10)+"T00:00:00").getDay():new Date().getDay()];
+    }
+    if(t.repeat.freq==="month"&&!t.repeat.monthMode) t.repeat.monthMode="date";
+    persist(); drawRepeat();
+  });
+  monthModeBox.addEventListener("click",e=>{
+    const b=e.target.closest("button"); if(!b||!t.repeat)return;
+    t.repeat.monthMode=b.dataset.v; persist(); drawRepeat();
+  });
   document.getElementById("tk_rep").addEventListener("change",e=>{
     const v=e.target.value;
     if(!v){ t.repeat=null; }
@@ -3062,7 +3286,7 @@ function taskEditor(t,after,occWhen,occEndDate){
       // is never a repeat that produces nothing
       if(v==="custom"){
         const d=t.when?new Date(t.when.slice(0,10)+"T00:00:00").getDay():new Date().getDay();
-        t.repeat.days=[d]; t.repeat.interval=1;
+        t.repeat.freq="week"; t.repeat.days=[d]; t.repeat.interval=1;
       }
     }
     persist(); drawRepeat(); });
@@ -3547,7 +3771,7 @@ function renderProjectPlan(id){
     return `<div class="step-line${fin?" done":""}" data-id="${st.id}">
       <button type="button" class="step-dot" title="${fin?"Done — click to undo":"Mark done"}">${fin?"✓":""}</button>
       <span class="step-title">${esc(st.title||"(unnamed task)")}</span>
-      ${st.repeat?`<span class="step-n">↻ ${esc(repeatLabel(st.repeat))}</span>`:""}
+      ${st.repeat?`<span class="step-n">↻ ${esc(repeatLabel(st.repeat,st.when))}</span>`:""}
       ${st.when?`<span class="step-date">${esc(taskSpan(st))}</span>`:`<span class="step-date unset">not scheduled</span>`}
     </div>`;
   };
@@ -4165,6 +4389,28 @@ function wireCalModeSeg(root){
 }
 // Month is its own renderer: an hour grid makes no sense at this zoom, so it is
 // a plain day matrix with the diary entries listed in each cell.
+// Interval-packs items carrying {colStart,span} into the fewest tracks such
+// that no two overlapping-in-column items ever share one — the same idea
+// the hourly grid already uses to keep two same-hour events off the same
+// pixel row, generalized across a row of days instead of a single hour.
+// Mutates each item with .colEnd/.track, returns the total track count.
+// Shared by month view and the week/day all-day banner, which both place a
+// multi-day item as one bar spanning several day columns.
+function packDayTracks(items){
+  // widest first: a multi-day bar claims its track before the single-day
+  // items around it have to be routed around it, which is what keeps a
+  // long-running item on one steady row instead of hopping tracks as
+  // shorter items come and go beside it
+  items.sort((a,b)=>a.colStart-b.colStart||b.span-a.span);
+  const tracks=[];
+  items.forEach(it=>{
+    it.colEnd=it.colStart+it.span-1;
+    let t=tracks.findIndex(occ=>!occ.some(o=>it.colStart<=o.colEnd&&it.colEnd>=o.colStart));
+    if(t<0){ tracks.push([]); t=tracks.length-1; }
+    tracks[t].push(it); it.track=t;
+  });
+  return tracks.length;
+}
 function renderMonthView(host){
   const base=new Date(); base.setDate(1); base.setHours(0,0,0,0);
   base.setMonth(base.getMonth()+calWeekOffset);
@@ -4234,21 +4480,7 @@ function renderMonthView(host){
       d=new Date(segEnd); d.setDate(d.getDate()+1);
     }
   });
-  weeks.forEach(items=>{
-    // widest first: a multi-day bar claims its track before the single-day
-    // items around it have to be routed around it, which is what keeps a
-    // long-running experiment on one steady row all month rather than hopping
-    // tracks as shorter items come and go beside it
-    items.sort((a,b)=>a.colStart-b.colStart||b.span-a.span);
-    const tracks=[];
-    items.forEach(it=>{
-      it.colEnd=it.colStart+it.span-1;
-      let t=tracks.findIndex(occ=>!occ.some(o=>it.colStart<=o.colEnd&&it.colEnd>=o.colStart));
-      if(t<0){ tracks.push([]); t=tracks.length-1; }
-      tracks[t].push(it); it.track=t;
-    });
-    items._trackCount=tracks.length;
-  });
+  weeks.forEach(items=>{ items._trackCount=packDayTracks(items); });
 
   const today0=todayDateStr();
   weeks.forEach((items,w)=>{
@@ -4403,50 +4635,39 @@ function renderTimeline(){
   // cells (still real, still holding whatever's in them) rather than the
   // events themselves — nothing is lost, just not drawn until reopened.
   const alldayCollapsed=!!DB.config.calAlldayCollapsed;
-  const alldayToggle=document.createElement("button");
-  alldayToggle.type="button";
-  // The label itself was still full-size once collapsed — the event cells
-  // hid, but the row's own height was whatever "all-day ▾" at normal padding
-  // needed, which is most of what made the row feel like it hadn't actually
-  // collapsed. Collapsed state drops to a bare chevron at a fraction of the
-  // padding, so the row shrinks to close to nothing rather than to one
-  // slightly shorter line.
-  alldayToggle.className="cal-allday-gutter cal-allday-toggle"+(alldayCollapsed?" collapsed":"");
-  alldayToggle.textContent=alldayCollapsed?"▸":"all-day ▾";
-  alldayToggle.title=alldayCollapsed?"Show all-day events":"Hide all-day events";
-  alldayToggle.onclick=()=>{ DB.config.calAlldayCollapsed=!alldayCollapsed; persist(); renderTimeline(); };
-  alldayGrid.appendChild(alldayToggle);
-  const alldayCells=[];
-  for(let d=0;d<NCOL;d++){
-    const cell=document.createElement("div"); cell.className="cal-allday-cell"+(alldayCollapsed?" collapsed":"");
-    alldayGrid.appendChild(cell); alldayCells.push(cell);
-  }
-  // scrolling grid gets a gutter spacer to align with the allday zone
-  grid.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",style:"visibility:hidden;border-right:1px solid var(--line)"}));
-  for(let d=0;d<NCOL;d++) grid.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",style:"visibility:hidden"}));
-  // place all-day and multi-day tasks
+  // Every all-day/multi-day item — both tasks/experiments and diary entries
+  // — used to be placed independently: a task bar landed in its first day's
+  // own little flex-column cell, a diary chip in its own day's cell, each
+  // stacking only against its own category with zero awareness of the
+  // other. Two items from different categories landing on the same visual
+  // row was pure coincidence, not something either cell's layout prevented
+  // — that coincidence is what the overlap looked like. Now every item is
+  // collected first, everything is packed into shared day-tracks together
+  // (packDayTracks — the same packer month view already uses), and only
+  // then does anything actually get drawn, as a direct grid child positioned
+  // by its own resolved track — not nested inside a per-day cell at all.
+  let alldayCells=[];
+  const alldayItems=[]; // {colStart,span,build():HTMLElement}
   weekTasks.forEach(t=>{
     const tStart=new Date(whenDate(t.deadline).setHours(0,0,0,0));
     const tEnd=t.endDate?new Date(whenDate(t.endDate).setHours(0,0,0,0)):tStart;
     // skip same-day timed tasks (start time, optionally an end time for duration) — they render in the hourly grid instead.
     // a timed task whose endDate falls on a different day is a genuine multi-day span, so it still gets a banner chip.
     if(hasTime(t.deadline)&&tEnd.getTime()===tStart.getTime()) return;
-    const col=calColor(t);
-    const overdue=dueClass(t.deadline,calDone(t)?"done":"",t.endDate)==="overdue";
     // One bar spanning the days it covers, rather than a separate chip per day
-    // with only the first one labelled. It is laid inside its first visible
-    // day's cell and widened across the rest, so it still sits in the grid.
+    // with only the first one labelled.
     let first=-1,last=-1;
     for(let d=0;d<NCOL;d++){
       const day=new Date(ws); day.setDate(ws.getDate()+d);
       if(day<tStart||day>tEnd) continue;
       if(first<0)first=d; last=d;
     }
-    if(first>=0){
-      const span=last-first+1;
+    if(first<0)return;
+    alldayItems.push({colStart:first,span:last-first+1,build:()=>{
+      const col=calColor(t);
+      const overdue=dueClass(t.deadline,calDone(t)?"done":"",t.endDate)==="overdue";
       const chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
-      chip.style.cssText=`background:${col}22;border-left:3px solid ${overdue?"var(--overdue)":col};color:${overdue?"var(--overdue)":col};`
-        +(span>1?`width:calc(${span*100}% + ${(span-1)*7}px);`:"");
+      chip.style.cssText=`background:${col}22;border-left:3px solid ${overdue?"var(--overdue)":col};color:${overdue?"var(--overdue)":col}`;
       const ckHTML=t.kind==="task"
         ?`<button type="button" class="cal-evt-ck${calDone(t)?" on":""}" title="${calDone(t)?"Done — click to undo":"Mark done"}"></button>`:"";
       chip.innerHTML=`<div class="et">${ckHTML}${eventIconHTML(t.src)}${esc(t.title)}</div>`;
@@ -4459,9 +4680,9 @@ function renderTimeline(){
         ck.addEventListener("pointerdown",e=>e.stopPropagation());
         ck.addEventListener("click",e=>{ e.stopPropagation(); setOccDone(t.src,t.deadline,!calDone(t)); renderTimeline(); });
       }
-      alldayCells[first].appendChild(chip);
       makeAllDayDraggable(chip,t,alldayCells,ws);
-    }
+      return chip;
+    }});
   });
 
   // ── Diary entries whose type is flagged "shows on Timeline" ─────────────
@@ -4485,20 +4706,56 @@ function renderTimeline(){
       const def=diaryTypeDef(e.type);
       const isFuture=e.date>today0;
       if(e.time){ diaryTimedEvents.push({an,e,def,isFuture,dayIdx:d}); return; }
-      const chip=document.createElement("div"); chip.className="cal-evt";
-      const dc=diaryColors(an,def);
-      chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
-      const ckHTML=`<button type="button" class="cal-evt-ck${e.done?" on":""}" title="${e.done?"Done — click to undo":"Mark done"}"></button>`;
-      chip.innerHTML=`<div class="et">${ckHTML}${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
-      chip.title=`${def.label} — ${an.name} — ${e.date}${isFuture?" (scheduled)":""}`;
-      alldayCells[d].appendChild(chip);
-      const ck=chip.querySelector(".cal-evt-ck");
-      ck.addEventListener("pointerdown",ev=>ev.stopPropagation());
-      ck.addEventListener("click",ev=>{ ev.stopPropagation(); setDiaryDone(e,!e.done); renderTimeline(); });
-      makeAllDayDraggable(chip,{kind:"diary",id:e.id,title:`${an.name} — ${def.label}`,
-        deadline:e.date,endDate:null,duration:null,src:{a:an,e}},alldayCells,ws);
+      alldayItems.push({colStart:d,span:1,build:()=>{
+        const chip=document.createElement("div"); chip.className="cal-evt";
+        const dc=diaryColors(an,def);
+        chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
+        const ckHTML=`<button type="button" class="cal-evt-ck${e.done?" on":""}" title="${e.done?"Done — click to undo":"Mark done"}"></button>`;
+        chip.innerHTML=`<div class="et">${ckHTML}${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
+        chip.title=`${def.label} — ${an.name} — ${e.date}${isFuture?" (scheduled)":""}`;
+        const ck=chip.querySelector(".cal-evt-ck");
+        ck.addEventListener("pointerdown",ev=>ev.stopPropagation());
+        ck.addEventListener("click",ev=>{ ev.stopPropagation(); setDiaryDone(e,!e.done); renderTimeline(); });
+        makeAllDayDraggable(chip,{kind:"diary",id:e.id,title:`${an.name} — ${def.label}`,
+          deadline:e.date,endDate:null,duration:null,src:{a:an,e}},alldayCells,ws);
+        return chip;
+      }});
     });
   });
+
+  // Collapsed: the row shrinks to a bare chevron regardless of how many
+  // tracks it would otherwise need — nothing is deleted, just not drawn
+  // (or even packed) until reopened.
+  const trackCount=alldayCollapsed?1:Math.max(packDayTracks(alldayItems),1);
+  const alldayToggle=document.createElement("button");
+  alldayToggle.type="button";
+  // The label itself was still full-size once collapsed — the event cells
+  // hid, but the row's own height was whatever "all-day ▾" at normal padding
+  // needed, which is most of what made the row feel like it hadn't actually
+  // collapsed. Collapsed state drops to a bare chevron at a fraction of the
+  // padding, so the row shrinks to close to nothing rather than to one
+  // slightly shorter line.
+  alldayToggle.className="cal-allday-gutter cal-allday-toggle"+(alldayCollapsed?" collapsed":"");
+  alldayToggle.textContent=alldayCollapsed?"▸":"all-day ▾";
+  alldayToggle.title=alldayCollapsed?"Show all-day events":"Hide all-day events";
+  alldayToggle.onclick=()=>{ DB.config.calAlldayCollapsed=!alldayCollapsed; persist(); renderTimeline(); };
+  alldayToggle.style.gridRow=`2 / ${trackCount+2}`;
+  alldayGrid.appendChild(alldayToggle);
+  for(let d=0;d<NCOL;d++){
+    const cell=document.createElement("div"); cell.className="cal-allday-cell"+(alldayCollapsed?" collapsed":"");
+    cell.style.gridColumn=`${d+2} / ${d+3}`;
+    cell.style.gridRow=`2 / ${trackCount+2}`;
+    alldayGrid.appendChild(cell); alldayCells.push(cell);
+  }
+  if(!alldayCollapsed) alldayItems.forEach(it=>{
+    const chip=it.build();
+    chip.style.gridColumn=`${it.colStart+2} / ${it.colStart+2+it.span}`;
+    chip.style.gridRow=String(it.track+2);
+    alldayGrid.appendChild(chip);
+  });
+  // scrolling grid gets a gutter spacer to align with the allday zone
+  grid.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",style:"visibility:hidden;border-right:1px solid var(--line)"}));
+  for(let d=0;d<NCOL;d++) grid.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",style:"visibility:hidden"}));
 
   // ── Overlap layout for timed same-day events ────────────────────────────
   // Two events sharing time on the same day used to render fully on top of
@@ -4675,16 +4932,20 @@ function renderTimeline(){
     });
     // click-to-create on hour cells; drag-to-create sets a duration first
     hourCells.forEach(({cell,day})=>wireHourCellCreate(cell,day,h,wrap,outer));
-    // now-line on current hour
+    // now-line on current hour. Found by matching each cell's own date against
+    // today — not by now.getDay() (0-6, Sunday-based) indexing directly into
+    // hourCells, which only happened to line up in week view (where day index
+    // and weekday number are the same thing by construction) and meant the
+    // line only ever showed in day view when the visible day was a Sunday,
+    // the one case where hourCells[0] and hourCells[now.getDay()] coincide.
     if(calWeekOffset===0){
-      const now=new Date(); const nowDay=now.getDay();
-      if(now.getHours()===h){
-        const cell=hourCells[nowDay]?.cell; if(cell){
-          const pct=(now.getMinutes()/60)*100;
-          const line=document.createElement("div"); line.className="cal-now-line"; line.style.top=pct+"%";
-          const dot=document.createElement("div"); dot.className="cal-now-dot"; line.appendChild(dot);
-          cell.appendChild(line);
-        }
+      const now=new Date();
+      const todayCell=hourCells.find(hc=>hc.day.getTime()===today.getTime());
+      if(now.getHours()===h&&todayCell){
+        const pct=(now.getMinutes()/60)*100;
+        const line=document.createElement("div"); line.className="cal-now-line"; line.style.top=pct+"%";
+        const dot=document.createElement("div"); dot.className="cal-now-dot"; line.appendChild(dot);
+        todayCell.cell.appendChild(line);
       }
     }
   }
@@ -5141,6 +5402,7 @@ function renderMatSubTab(){
   else if(matSubTab === "sites")    renderSiteLib();
   else if(matSubTab === "procedures") renderProcedureLib();
   else if(matSubTab === "diarytypes") renderDiaryTypesLib();
+  else if(matSubTab === "eventtypes") renderEventTypesLib();
 }
 
 /* ── INVENTORY ─────────────────────────────────────────────────────────────── */
@@ -5818,6 +6080,61 @@ function renderDiaryTypesLib(){
     } else if(delF){
       const t = (DB.config.diaryTypes||[])[+delF.dataset.ti]; if(!t) return;
       t.fields.splice(+delF.dataset.fi,1); persist(); paintDTRows();
+    }
+  });
+}
+
+/* ---------- EVENT TYPES (named colour categories for calendar events) ----------
+   A task borrows its colour from whatever project it's attached to; an event
+   has no "Part of" field at all, so it had nothing to borrow from and every
+   uncategorized one fell back to the same flat blue. This is the same
+   name+colour idea diaryTypes already has (see renderDiaryTypesLib above),
+   stripped down to just that — an event category has no icon, no custom
+   fields, and no "shows on Timeline" flag to worry about, unlike a diary type. */
+function renderEventTypesLib(){
+  const host=document.getElementById("ms-eventtypes"); host.innerHTML="";
+  const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
+
+  const hdr=document.createElement("div");
+  hdr.style.cssText="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap";
+  hdr.innerHTML=`<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
+      Named colour categories for calendar events (Timeline → an item marked "Event") — pick one on an event to colour it consistently, instead of a one-off colour per event.</span>
+    <button id="etlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New category</button>`;
+  host.appendChild(hdr);
+
+  const wrap=document.createElement("div"); host.appendChild(wrap);
+  function paintRows(){
+    const types=DB.config.eventTypes||[];
+    wrap.innerHTML=types.length ? types.map((et,i)=>`
+      <div style="display:flex;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:10px 14px;margin-bottom:8px">
+        <input type="color" class="etlib_color" data-i="${i}" value="${et.color&&et.color.startsWith("#")?et.color:"#7db4ff"}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
+        <input class="etlib_name" data-i="${i}" value="${escAttr(et.name)}" placeholder="Category name (e.g. Meeting)" style="flex:1;min-width:140px;${IST}">
+        <button class="etlib_del" data-i="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕</button>
+      </div>`).join("")
+      : `<div class="empty" style="padding:20px 0">No event categories yet — add one above, then pick it on any event's own "Category" field.</div>`;
+  }
+  paintRows();
+
+  host.querySelector("#etlib_add").onclick=()=>{
+    (DB.config.eventTypes=DB.config.eventTypes||[]).push({id:uid("et_"),name:"",color:GCAL_COLORS[(DB.config.eventTypes||[]).length%GCAL_COLORS.length][0]});
+    persist(); paintRows();
+    const rows=wrap.querySelectorAll(".etlib_name"); if(rows.length) rows[rows.length-1].focus();
+  };
+  wrap.addEventListener("input",e=>{
+    if(!e.target.classList.contains("etlib_name"))return;
+    const et=(DB.config.eventTypes||[])[+e.target.dataset.i]; if(!et)return;
+    et.name=e.target.value; persist();
+  });
+  wrap.addEventListener("change",e=>{
+    if(!e.target.classList.contains("etlib_color"))return;
+    const et=(DB.config.eventTypes||[])[+e.target.dataset.i]; if(!et)return;
+    et.color=e.target.value; persist();
+  });
+  wrap.addEventListener("click",e=>{
+    const del=e.target.closest(".etlib_del"); if(!del)return;
+    const et=(DB.config.eventTypes||[])[+del.dataset.i]; if(!et)return;
+    if(confirm(`Delete "${et.name||"(unnamed)"}"? Events already using it keep their own colour, they just won't show as this category any more.`)){
+      (DB.config.eventTypes||[]).splice(+del.dataset.i,1); persist(); paintRows();
     }
   });
 }
@@ -8318,6 +8635,20 @@ function modal(h,opts){ const s=document.getElementById("scrim"); const m=docume
 function closeModal(){ document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(document.getElementById("modal")); }
 // Modals close only via Cancel / ✕ / Save — NOT by clicking outside, so a stray click never discards an edit.
 document.getElementById("modalX").onclick=()=>closeModal();
+// Every text field in this app is generated from a template string, so there
+// is no one place to hang spellcheck="false" on — instead, killing it once
+// on focus (a live property, not just a markup attribute, so setting it here
+// still works even though the browser already decided to spellcheck by the
+// time this fires) covers every current field and every one a future render
+// creates, with nothing to remember to add per-template.
+document.addEventListener("focusin",e=>{
+  const el=e.target;
+  if(!el.matches) return;
+  if(!el.matches("input[type=text],input[type=search],input:not([type]),textarea,[contenteditable=true],[contenteditable='']")) return;
+  el.spellcheck=false;
+  el.setAttribute("autocorrect","off");
+  el.setAttribute("autocapitalize","off");
+});
 document.addEventListener("keydown",e=>{
   if(e.key!=="Escape")return;
   // a modal sits above the detail panel, so it gets the key first
