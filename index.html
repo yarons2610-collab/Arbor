@@ -3188,6 +3188,13 @@ function taskEditor(t,after,occWhen,occEndDate){
       // never leave an end sitting before its own start
       if(t.endDate&&t.endDate<t.when) t.endDate=suggestEnd(t.when);
     }
+    // Rendering (and the drag/resize math) prefers t.duration over the
+    // start/end pair whenever it's set — a leftover from an earlier drag
+    // resize. Without clearing it here, editing the date/time by hand kept
+    // silently doing nothing visible: the record's when/endDate genuinely
+    // changed, but the box on the Timeline kept the old resized length,
+    // since that stale duration was still the thing actually read.
+    t.duration=null;
     persist(); paintEnd();
   }
   const paintStart=()=>{
@@ -3198,7 +3205,10 @@ function taskEditor(t,after,occWhen,occEndDate){
   bindDateButton(document.getElementById("tk_start"), ()=>t.when||"", v=>{ applyStartWhen(v); paintStart(); });
   // opening an unset end starts it at the suggestion rather than at today
   bindDateButton(document.getElementById("tk_end"), ()=>t.endDate||suggestEnd(t.when)||"",
-    v=>{ t.endDate=v||null; persist(); });
+    // t.duration (a leftover from an earlier drag-resize) otherwise keeps
+    // winning over whatever end time is actually picked here — see
+    // applyStartWhen's own comment on the same bug, on the start side.
+    v=>{ t.endDate=v||null; t.duration=null; persist(); });
   // One toggle instead of having to open the date picker and hunt down its
   // small "remove time" ✕ on both the start and end fields separately — the
   // same "does this have a time or not" question a calendar's all-day switch
