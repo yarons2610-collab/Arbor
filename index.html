@@ -1370,6 +1370,9 @@ function migrate(){                       // backfill fields added in later vers
   if(!DB.readings)DB.readings=[];
   // Protocols are literature's twin: a titled pointer to where the method lives.
   if(!DB.protocols)DB.protocols=[];
+  // Same shape as reading/protocol, no bibliographic fields of its own — for
+  // whatever belongs in the Library but isn't really a paper or a protocol.
+  if(!DB.other)DB.other=[];
   // Notes belong to nothing else — a place for anything that doesn't fit a
   // project, an animal, or an experiment.
   if(!DB.notes)DB.notes=[];
@@ -2522,6 +2525,7 @@ const LINK_GROUPS=[
   {kind:"task",     icon:"🎯", label:"Behavioural tasks"},
   {kind:"reading",  icon:"📖", label:"Literature"},
   {kind:"protocol", icon:"📋", label:"Protocols"},
+  {kind:"other",    icon:"🗂", label:"Other"},
   {kind:"url",      icon:"🔗", label:"External"}
 ];
 const TERM_LABEL={alive:"alive",sacrificed:"sacrificed",early_death:"early death",excluded:"excluded"};
@@ -2538,6 +2542,7 @@ function linkName(l){
   if(l.kind==="task") return l.id||"";
   if(l.kind==="reading"){ const x=DB.readings.find(v=>v.id===l.id); return x?x.title:"(deleted paper)"; }
   if(l.kind==="protocol"){ const x=DB.protocols.find(v=>v.id===l.id); return x?x.title:"(deleted protocol)"; }
+  if(l.kind==="other"){ const x=DB.other.find(v=>v.id===l.id); return x?x.title:"(deleted item)"; }
   if(l.kind==="url") return l.url||"";
   return l.id||"";
 }
@@ -2578,6 +2583,10 @@ function linkDetail(l){
   }
   if(l.kind==="protocol"){
     const x=DB.protocols.find(v=>v.id===l.id); if(!x)return {text:"deleted"};
+    return {text:x.link||x.fileName||""};
+  }
+  if(l.kind==="other"){
+    const x=DB.other.find(v=>v.id===l.id); if(!x)return {text:"deleted"};
     return {text:x.link||x.fileName||""};
   }
   return {text:""};
@@ -3048,6 +3057,7 @@ function linkOptions(kind){
   if(kind==="template") return (DB.config.procedureLib||[]).map(x=>({v:x.id,t:x.name||"(unnamed)"}));
   if(kind==="reading") return DB.readings.map(r=>({v:r.id,t:r.title}));
   if(kind==="protocol") return DB.protocols.map(x=>({v:x.id,t:x.title}));
+  if(kind==="other") return DB.other.map(x=>({v:x.id,t:x.title}));
   if(kind==="material") return [
     {grp:"Viruses",     items:(activeViruses()||[]).map(v=>({v:"virus::"+v.name,t:v.name}))},
     {grp:"Injection sites",items:(DB.config.siteLib||[]).map(x=>({v:"site::"+x.name,t:x.name}))},
@@ -6263,7 +6273,7 @@ const canPickFiles=()=>typeof window.showOpenFilePicker==="function";
 // when there are no records at all, so an empty or not-yet-loaded workspace can
 // never be read as "everything here is an orphan".
 function pruneOrphanFiles(){
-  const live=new Set([...(DB.readings||[]),...(DB.protocols||[])].map(x=>x.id));
+  const live=new Set([...(DB.readings||[]),...(DB.protocols||[]),...(DB.other||[])].map(x=>x.id));
   if(!live.size)return;
   fileDB().then(db=>{
     const rq=db.transaction(FILE_STORE,"readonly").objectStore(FILE_STORE).getAllKeys();
@@ -6404,7 +6414,12 @@ const LIBS={
   protocol:{list:()=>DB.protocols, set:v=>{DB.protocols=v;}, prefix:"pt_",
             Noun:"Protocol", noun:"protocol",
             fields:[{key:"writtenBy",label:"Written by",type:"text"},
-                    {key:"date",label:"Date",type:"date"}] }
+                    {key:"date",label:"Date",type:"date"}] },
+  // No bibliographic fields of its own — a catch-all for anything filed in
+  // the Library that isn't really a paper or a protocol.
+  other:{   list:()=>DB.other,     set:v=>{DB.other=v;},     prefix:"o_",
+            Noun:"Other",    noun:"item",
+            fields:[] }
 };
 // Title always sorts first (and is the only option while viewing "All",
 // since a paper's Year and a protocol's Date aren't the same axis) — each
@@ -6414,9 +6429,10 @@ const LIB_SORTS={
   reading:[{key:"title",label:"Title"},{key:"authors",label:"Authors"},
            {key:"year",label:"Year",chrono:true},{key:"journal",label:"Journal"}],
   protocol:[{key:"title",label:"Title"},{key:"writtenBy",label:"Written by"},
-            {key:"date",label:"Date",chrono:true}]
+            {key:"date",label:"Date",chrono:true}],
+  other:[{key:"title",label:"Title"}]
 };
-const LIB_ICON={reading:"📖",protocol:"📋"};
+const LIB_ICON={reading:"📖",protocol:"📋",other:"🗂"};
 // session-only, like matSubTab — not worth persisting a filter choice across reloads
 let libKindFilter="all", libGroupFilter="all", libSortBy="title";
 function libGroupName(gid){ const g=(DB.config.libraryGroups||[]).find(x=>x.id===gid); return g?g.name:""; }
@@ -6429,7 +6445,7 @@ function renderLibrary(){
   top.style.cssText="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap";
   const groups=DB.config.libraryGroups||[];
   top.innerHTML=`
-    <div class="seg" id="lib_kind" style="flex:0 0 auto">${[["all","All"],["reading","Papers"],["protocol","Protocols"]]
+    <div class="seg" id="lib_kind" style="flex:0 0 auto">${[["all","All"],["reading","Papers"],["protocol","Protocols"],["other","Other"]]
       .map(([v,l])=>`<button type="button" data-k="${v}" class="${libKindFilter===v?"on":""}">${l}</button>`).join("")}</div>
     <select id="lib_group_filter" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:6px 8px;font-size:12px">
       <option value="all" ${libGroupFilter==="all"?"selected":""}>All groups</option>
@@ -6444,6 +6460,7 @@ function renderLibrary(){
     <button class="btn ghost" id="lib_groups_btn" style="font-size:12px">⚙ Groups</button>
     <div style="margin-left:auto;display:flex;gap:8px">
       <button class="btn ghost" id="addPaper" style="font-size:12px">＋ 📖 Paper</button>
+      <button class="btn ghost" id="addOther" style="font-size:12px">＋ 🗂 Other</button>
       <button class="btn accent" id="addProtocol" style="font-size:12px">＋ 📋 Protocol</button>
     </div>`;
   host.appendChild(top);
@@ -6461,11 +6478,13 @@ function renderLibrary(){
   });
   top.querySelector("#lib_groups_btn").onclick=()=>libraryGroupsModal();
   top.querySelector("#addPaper").onclick=()=>libModal("reading");
+  top.querySelector("#addOther").onclick=()=>libModal("other");
   top.querySelector("#addProtocol").onclick=()=>libModal("protocol");
 
   let items=[
     ...DB.readings.map(rec=>({kind:"reading",rec})),
-    ...DB.protocols.map(rec=>({kind:"protocol",rec}))
+    ...DB.protocols.map(rec=>({kind:"protocol",rec})),
+    ...DB.other.map(rec=>({kind:"other",rec}))
   ];
   if(libKindFilter!=="all") items=items.filter(it=>it.kind===libKindFilter);
   if(libGroupFilter==="none") items=items.filter(it=>!it.rec.groupId);
@@ -6473,9 +6492,9 @@ function renderLibrary(){
 
   if(!items.length){
     host.appendChild(Object.assign(document.createElement("div"),{className:"empty",
-      textContent:(DB.readings.length||DB.protocols.length)
+      textContent:(DB.readings.length||DB.protocols.length||DB.other.length)
         ? "Nothing matches this filter."
-        : "Nothing here yet. Add a paper or a protocol — a link, a file on this computer, or both."}));
+        : "Nothing here yet. Add a paper, a protocol, or something else — a link, a file on this computer, or both."}));
     return;
   }
   const byTitle=(a,b)=>(a.rec.title||"").localeCompare(b.rec.title||"");
@@ -6588,9 +6607,10 @@ function libraryGroupsModal(){
     document.getElementById("lg_rows").addEventListener("click",e=>{
       const del=e.target.closest(".lg_del"); if(!del)return;
       const g=groups[+del.dataset.i]; if(!g)return;
-      if(!confirm(`Delete group "${g.name||"(unnamed)"}"? Papers/protocols filed under it become ungrouped.`))return;
+      if(!confirm(`Delete group "${g.name||"(unnamed)"}"? Papers/protocols/other items filed under it become ungrouped.`))return;
       DB.readings.forEach(x=>{ if(x.groupId===g.id)x.groupId=null; });
       DB.protocols.forEach(x=>{ if(x.groupId===g.id)x.groupId=null; });
+      DB.other.forEach(x=>{ if(x.groupId===g.id)x.groupId=null; });
       DB.config.libraryGroups=groups.filter(x=>x.id!==g.id);
       persist(); draw();
     });
