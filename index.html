@@ -1771,8 +1771,17 @@ function commitCalMove(x,newWhen,newEnd,newDur){
       e.date=newWhen.slice(0,10);
       e.time=newWhen.length>10?newWhen.slice(11,16):"";
     }
-    const mins=newDur!=null?newDur:(x.duration||null);
-    if(e.time&&e.endTime&&mins){
+    // An explicit resize (newDur set) always writes an end time from the new
+    // duration, even for an entry that never had one — a bare instant-in-time
+    // entry like a weight log has no endTime and x.duration defaults to 60
+    // purely for its own unresized on-screen height, so requiring e.endTime
+    // to already exist (the old condition) meant resizing one of those did
+    // nothing at all: the drag committed, the toast fired, but nothing was
+    // ever actually written, so nothing ever appeared to change. A plain
+    // move (newDur not passed) still only carries an existing duration
+    // forward — it should never invent an end time an entry didn't have.
+    const mins=newDur!=null?newDur:(e.endTime?x.duration:null);
+    if(e.time&&mins){
       const [h,m]=e.time.split(":").map(Number);
       const t2=h*60+m+mins, p4=n=>String(n).padStart(2,"0");
       // an end time cannot run past midnight on a single-day entry
