@@ -8626,7 +8626,20 @@ function openLinked(l){
   if(l.kind==="animal"){ closeDetail(); switchTo("animals"); animalModal(l.id); return; }
   if(l.kind==="template"){ closeDetail(); goMaterials("procedures"); return; }
   if(l.kind==="task"){ closeDetail(); goMaterials("diarytypes"); return; }
-  if(l.kind==="reading"||l.kind==="protocol"){ closeDetail(); switchTo("library"); return; }
+  // A paper/protocol/other Library record — straight to its own link, the
+  // same one the Library row's own ↗ button opens, instead of just landing
+  // on the Library tab in general and leaving the actual click to find it.
+  // "other" was missing here entirely (added after this function existed),
+  // which is why clicking one from a project card did nothing at all.
+  if(l.kind==="reading"||l.kind==="protocol"||l.kind==="other"){
+    closeDetail();
+    const rec=(LIBS[l.kind].list()||[]).find(x=>x.id===l.id);
+    if(rec&&rec.link){ window.open(/^https?:\/\//i.test(rec.link)?rec.link:"https://"+rec.link,"_blank","noopener"); return; }
+    // no link (file-only, or a deleted record) — land filtered to its own
+    // kind on the Library tab rather than doing nothing
+    switchTo("library"); libKindFilter=l.kind; renderLibrary();
+    return;
+  }
   if(l.kind==="material"){ closeDetail();
     // land on the library the material actually lives in
     goMaterials({virus:"viruses",site:"sites"}[l.cat]||"inventory"); return; }
