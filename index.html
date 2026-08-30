@@ -3198,14 +3198,14 @@ function taskEditor(t,after,occWhen,occEndDate){
   }
   const seeded=JSON.parse(JSON.stringify(t));   // what the form actually opened showing
   // Each project offers itself first, then its experiments, so "this belongs to
-  // the project but to no one experiment" is a thing you can actually say.
+  // the project but to no one experiment" is a thing you can actually say. A
+  // flat list, not an optgroup — an optgroup's own non-clickable label would
+  // just repeat the exact text the project's own option already reads.
   const opts=DB.projects.map(pr=>{
     const own=(!t.experimentId&&t.projectId===pr.id)?" selected":"";
-    return `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">`
-      +`<option value="p:${pr.id}"${own}>${esc(pr.name||"(unnamed project)")}</option>`
+    return `<option value="p:${pr.id}"${own}>${esc(pr.name||"(unnamed project)")}</option>`
       +experimentsOf(pr).map(e=>
-        `<option value="e:${e.id}" ${t.experimentId===e.id?"selected":""}>${esc(e.title||"(unnamed experiment)")}</option>`).join("")
-      +`</optgroup>`;
+        `<option value="e:${e.id}" ${t.experimentId===e.id?"selected":""}>&nbsp;&nbsp;› ${esc(e.title||"(unnamed experiment)")}</option>`).join("");
   }).join("");
   modal(`<h3>${t.isEvent?"Event":"Task"}</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
@@ -3257,6 +3257,7 @@ function taskEditor(t,after,occWhen,occEndDate){
         <span class="tag" id="tk_color_auto" data-c="" style="cursor:pointer;${!t.color&&!t.eventTypeId?"box-shadow:0 0 0 2px var(--ink-dim)":""}">Automatic</span>
         <input type="color" id="tk_color_pick" value="${t.color||GCAL_COLORS[0][0]}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer">
       </div></div>
+    <div class="fld"><label>Notes</label><textarea id="tk_notes" rows="3">${esc(t.notes||"")}</textarea></div>
     ${t.isEvent?"":`<div class="fld"><label>Part of</label>
       <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>`}
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="tk_del">Delete task</button></div>
@@ -3462,9 +3463,11 @@ function taskEditor(t,after,occWhen,occEndDate){
   // detach/split/exclude below starts from a clean, untouched base.
   const revert=()=>{ for(const k of Object.keys(t))delete t[k]; Object.assign(t,before); };
   document.getElementById("tk_save").onclick=()=>{
-    t.title=document.getElementById("tk_name").value; persist();
+    t.title=document.getElementById("tk_name").value;
+    t.notes=document.getElementById("tk_notes").value.trim();
+    persist();
     const finish=()=>{ closeModal(); if(after)after(); };
-    const fieldsOf=x=>JSON.stringify({title:x.title,when:x.when,endDate:x.endDate,color:x.color,projectId:x.projectId,experimentId:x.experimentId,repeat:x.repeat});
+    const fieldsOf=x=>JSON.stringify({title:x.title,when:x.when,endDate:x.endDate,color:x.color,projectId:x.projectId,experimentId:x.experimentId,repeat:x.repeat,notes:x.notes});
     if(fieldsOf(t)===fieldsOf(seeded)||!wasRecurring||occWhen==null){ finish(); return; }
     occurrenceScopeModal(scope=>{
       if(scope==="all"){
@@ -3479,7 +3482,7 @@ function taskEditor(t,after,occWhen,occEndDate){
         persist(); finish(); return;
       }
       const patch={title:t.title,when:t.when,endDate:t.endDate,color:t.color,
-        projectId:t.projectId,experimentId:t.experimentId,isEvent:t.isEvent};
+        projectId:t.projectId,experimentId:t.experimentId,isEvent:t.isEvent,notes:t.notes};
       if(scope==="following")patch.repeat=t.repeat;
       revert();
       if(scope==="this")detachOccurrence(t,occWhen,patch);
@@ -3776,10 +3779,17 @@ function mountPendingLinks(host,pending){
       <div class="ag-add">
         <select id="ag_pendlink"><option value="">＋ add to a project or experiment…</option>${
           DB.projects.map(pr=>{
-            const own=pending.includes("p:"+pr.id) ? "" : `<option value="p:${pr.id}">${esc(pr.name||"(unnamed project)")}</option>`;
-            const exps=experimentsOf(pr).filter(e=>!pending.includes("e:"+e.id))
-              .map(e=>`<option value="e:${e.id}">${esc(e.title||"(unnamed experiment)")}</option>`).join("");
-            return (own||exps) ? `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">${own}${exps}</optgroup>` : "";
+            const alreadyOwn=pending.includes("p:"+pr.id);
+            const exps=experimentsOf(pr).filter(e=>!pending.includes("e:"+e.id));
+            if(alreadyOwn&&!exps.length)return "";
+            // A flat list, not an optgroup — its own non-clickable label would
+            // just repeat the exact text the project's own option already
+            // reads. Already added? Keep it as a disabled heading rather than
+            // dropping it, so the experiments below still read as belonging
+            // to something.
+            const head=`<option value="p:${pr.id}"${alreadyOwn?" disabled":""}>${esc(pr.name||"(unnamed project)")}</option>`;
+            const expOpts=exps.map(e=>`<option value="e:${e.id}">&nbsp;&nbsp;› ${esc(e.title||"(unnamed experiment)")}</option>`).join("");
+            return head+expOpts;
           }).join("")}</select>
       </div>`;
     host.querySelectorAll(".ag-row").forEach(el=>{
@@ -3840,10 +3850,14 @@ function mountAttachments(host,link,opts){
       <div class="ag-add">
         <select id="ag_sel"><option value="">＋ add to a project or experiment…</option>${
           DB.projects.map(pr=>{
-            const own=(pr.links||[]).some(l=>sameLink(l,link)) ? "" : `<option value="p:${pr.id}">${esc(pr.name||"(unnamed project)")}</option>`;
-            const exps=experimentsOf(pr).filter(st=>!(st.links||[]).some(l=>sameLink(l,link)))
-              .map(st=>`<option value="e:${pr.id}::${st.id}">${esc(st.title||"(unnamed experiment)")}</option>`).join("");
-            return (own||exps) ? `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">${own}${exps}</optgroup>` : "";
+            const alreadyOwn=(pr.links||[]).some(l=>sameLink(l,link));
+            const exps=experimentsOf(pr).filter(st=>!(st.links||[]).some(l=>sameLink(l,link)));
+            if(alreadyOwn&&!exps.length)return "";
+            // Flat, not an optgroup — see the identical comment in
+            // mountPendingLinks above for why.
+            const head=`<option value="p:${pr.id}"${alreadyOwn?" disabled":""}>${esc(pr.name||"(unnamed project)")}</option>`;
+            const expOpts=exps.map(st=>`<option value="e:${pr.id}::${st.id}">&nbsp;&nbsp;› ${esc(st.title||"(unnamed experiment)")}</option>`).join("");
+            return head+expOpts;
           }).join("")}</select>
       </div>`;
     host.querySelectorAll(".ag-row").forEach(el=>{
@@ -6527,8 +6541,8 @@ function renderLibrary(){
       <option value="none" ${libProjFilter==="none"?"selected":""}>Unattached</option>
       ${DB.projects.map(pr=>{
         const own=`<option value="p:${pr.id}" ${libProjFilter==="p:"+pr.id?"selected":""}>${esc(pr.name||"(unnamed project)")}</option>`;
-        const exps=experimentsOf(pr).map(st=>`<option value="e:${st.id}" ${libProjFilter==="e:"+st.id?"selected":""}>${esc(st.title||"(unnamed experiment)")}</option>`).join("");
-        return `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">${own}${exps}</optgroup>`;
+        const exps=experimentsOf(pr).map(st=>`<option value="e:${st.id}" ${libProjFilter==="e:"+st.id?"selected":""}>&nbsp;&nbsp;› ${esc(st.title||"(unnamed experiment)")}</option>`).join("");
+        return own+exps;
       }).join("")}
     </select>
     <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">sort</span>
