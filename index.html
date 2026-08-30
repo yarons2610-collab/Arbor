@@ -934,7 +934,25 @@
   if(navigator.storage&&navigator.storage.persist) navigator.storage.persist().catch(()=>{});
 })();
 if("serviceWorker" in navigator){
-  window.addEventListener("load",()=>{ navigator.serviceWorker.register("service-worker.js").catch(()=>{}); });
+  // register() itself only ever checks for a newer service-worker.js once,
+  // right when this call happens — a browser does NOT re-check on some timer
+  // while the tab just sits open, only on a fresh navigation (close and
+  // reopen, or an actual reload). That's the whole reason the update banner
+  // needed a full reopen to show up at all. registration.update() is the
+  // same check, callable any time; running it whenever the tab regains focus
+  // (the same "you looked back at this tab" moment autoPull already reacts
+  // to, see below) means a deploy that happened while you were away shows up
+  // the moment you switch back, not only if you happen to fully relaunch.
+  let swReg=null;
+  window.addEventListener("load",()=>{
+    navigator.serviceWorker.register("service-worker.js").then(reg=>{ swReg=reg; }).catch(()=>{});
+  });
+  document.addEventListener("visibilitychange",()=>{ if(!document.hidden) swReg?.update().catch(()=>{}); });
+  // Covers the tab that just stays open and frontmost for a long stretch —
+  // visibilitychange never fires there since it's never actually hidden, so
+  // without this a deploy could sit unnoticed indefinitely regardless of the
+  // check above.
+  setInterval(()=>{ if(!document.hidden) swReg?.update().catch(()=>{}); },30*60*1000);
   // The service worker's own skipWaiting()+clients.claim() activate a newly-deployed
   // version in the background, but the already-open tab keeps running the OLD
   // page's JS until something reloads it — that gap is why past deploys sat
