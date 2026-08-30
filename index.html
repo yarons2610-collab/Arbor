@@ -237,6 +237,11 @@
   .pc-items{padding:0 0 6px 16px;display:flex;flex-direction:column;gap:4px}
   .pc-item{display:flex;flex-direction:column;gap:1px;padding:4px 7px;border-radius:6px;cursor:pointer;background:var(--panel2)}
   .pc-item:hover{background:rgba(255,255,255,.05)}
+  /* .pc-item-file is a real <a> (see projCatsHTML) so a chosen local file can be
+     pre-armed and opened without an async gap Safari would treat as no longer a
+     click — reset the browser's own link styling so it reads like every other
+     .pc-item instead of standing out in default blue-and-underlined. */
+  a.pc-item, a.pc-item:visited{color:inherit;text-decoration:none}
   .pc-iname{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pc-idet{font-family:var(--mono);font-size:9.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .lit-list{display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -8744,16 +8749,26 @@ function openLinked(l){
   if(l.kind==="reading"||l.kind==="protocol"||l.kind==="other"){
     closeDetail();
     const rec=(LIBS[l.kind].list()||[]).find(x=>x.id===l.id);
-    if(rec&&rec.link){ window.open(/^https?:\/\//i.test(rec.link)?rec.link:"https://"+rec.link,"_blank","noopener"); return; }
-    // no link (file-only, or a deleted record) — land filtered to its own
-    // kind on the Library tab rather than doing nothing
-    switchTo("library"); libKindFilter=l.kind; renderLibrary();
+    if(!rec){ toast(`That ${LIBS[l.kind].noun} was deleted`); return; }
+    if(rec.link){ window.open(/^https?:\/\//i.test(rec.link)?rec.link:"https://"+rec.link,"_blank","noopener"); return; }
+    if(rec.fileName){ openLocalFile(rec.id).then(ok=>{ if(!ok) libModal(l.kind,rec.id); }); return; }
+    // neither a link nor a file yet — its own editor is the useful thing to
+    // land on. Switching to the whole Library tab (the old behavior) left
+    // whatever page you clicked from behind, so closing the record's own
+    // editor here, opened without switching tabs at all, drops you right
+    // back where you were instead of stranding you on a different tab.
+    libModal(l.kind,rec.id);
     return;
   }
   if(l.kind==="material"){ closeDetail();
     // land on the library the material actually lives in
     goMaterials({virus:"viruses",site:"sites"}[l.cat]||"inventory"); return; }
-  if(l.kind==="note"){ closeDetail(); switchTo("notes"); noteModal(l.id); return; }
+  // No switchTo("notes") — noteModal() doesn't need the Notes tab to actually
+  // be showing underneath it, and its own save/delete already only refresh
+  // that tab's list when it's the one currently visible. Switching to it
+  // just to open the modal left you stranded there once you closed it,
+  // instead of back on whatever page (a project, say) you clicked from.
+  if(l.kind==="note"){ closeDetail(); noteModal(l.id); return; }
   if(l.url) window.open(/^https?:\/\//i.test(l.url)?l.url:"https://"+l.url,"_blank","noopener");
 }
 function drawSpines(t){
