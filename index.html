@@ -2110,7 +2110,7 @@ function openCalItem(x){
     // this modal closes, however the user closes it.
     const a=x.src.a, e=x.src.e;
     modal(`<h3>${esc(a.name)} — Diary</h3><div id="calDiaryEditHost"></div>`,{wide:true});
-    paintDiary(document.getElementById("calDiaryEditHost"),a,{editId:e.id,onChange:renderTimeline});
+    paintDiary(document.getElementById("calDiaryEditHost"),a,{editId:e.id,onChange:renderTimeline,closeOnDone:true});
     return;
   }
   if(x.kind==="task"){ taskEditor(x.src,()=>{ renderTimeline(); },x.deadline,x.endDate); return; }
@@ -3202,7 +3202,7 @@ function taskEditor(t,after,occWhen,occEndDate){
   const opts=DB.projects.map(pr=>{
     const own=(!t.experimentId&&t.projectId===pr.id)?" selected":"";
     return `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">`
-      +`<option value="p:${pr.id}"${own}>the project in general</option>`
+      +`<option value="p:${pr.id}"${own}>${esc(pr.name||"(unnamed project)")}</option>`
       +experimentsOf(pr).map(e=>
         `<option value="e:${e.id}" ${t.experimentId===e.id?"selected":""}>${esc(e.title||"(unnamed experiment)")}</option>`).join("")
       +`</optgroup>`;
@@ -3776,7 +3776,7 @@ function mountPendingLinks(host,pending){
       <div class="ag-add">
         <select id="ag_pendlink"><option value="">＋ add to a project or experiment…</option>${
           DB.projects.map(pr=>{
-            const own=pending.includes("p:"+pr.id) ? "" : `<option value="p:${pr.id}">the project in general</option>`;
+            const own=pending.includes("p:"+pr.id) ? "" : `<option value="p:${pr.id}">${esc(pr.name||"(unnamed project)")}</option>`;
             const exps=experimentsOf(pr).filter(e=>!pending.includes("e:"+e.id))
               .map(e=>`<option value="e:${e.id}">${esc(e.title||"(unnamed experiment)")}</option>`).join("");
             return (own||exps) ? `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">${own}${exps}</optgroup>` : "";
@@ -3840,7 +3840,7 @@ function mountAttachments(host,link,opts){
       <div class="ag-add">
         <select id="ag_sel"><option value="">＋ add to a project or experiment…</option>${
           DB.projects.map(pr=>{
-            const own=(pr.links||[]).some(l=>sameLink(l,link)) ? "" : `<option value="p:${pr.id}">the project in general</option>`;
+            const own=(pr.links||[]).some(l=>sameLink(l,link)) ? "" : `<option value="p:${pr.id}">${esc(pr.name||"(unnamed project)")}</option>`;
             const exps=experimentsOf(pr).filter(st=>!(st.links||[]).some(l=>sameLink(l,link)))
               .map(st=>`<option value="e:${pr.id}::${st.id}">${esc(st.title||"(unnamed experiment)")}</option>`).join("");
             return (own||exps) ? `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">${own}${exps}</optgroup>` : "";
@@ -6526,7 +6526,7 @@ function renderLibrary(){
       <option value="all" ${libProjFilter==="all"?"selected":""}>Any project</option>
       <option value="none" ${libProjFilter==="none"?"selected":""}>Unattached</option>
       ${DB.projects.map(pr=>{
-        const own=`<option value="p:${pr.id}" ${libProjFilter==="p:"+pr.id?"selected":""}>the project in general</option>`;
+        const own=`<option value="p:${pr.id}" ${libProjFilter==="p:"+pr.id?"selected":""}>${esc(pr.name||"(unnamed project)")}</option>`;
         const exps=experimentsOf(pr).map(st=>`<option value="e:${st.id}" ${libProjFilter==="e:"+st.id?"selected":""}>${esc(st.title||"(unnamed experiment)")}</option>`).join("");
         return `<optgroup label="${escAttr(pr.name||"(unnamed project)")}">${own}${exps}</optgroup>`;
       }).join("")}
@@ -7473,7 +7473,15 @@ function paintDiary(container,a,opts){
       ${formActions()}</div>`;
   }
   function wireForm(host,type,editing){
-    host.querySelector(".dg-cancel").onclick=()=>{ formType=null; editingId=null; draw(); };
+    // Opened from the Timeline (openCalItem), this modal exists to edit one
+    // entry and nothing else — Cancel/Save should close it, not fall back to
+    // the calendar/list view underneath, which is what the animal detail
+    // panel's own inline widget (no modal, opts.closeOnDone unset) wants instead.
+    host.querySelector(".dg-cancel").onclick=()=>{
+      formType=null; editingId=null;
+      if(opts.closeOnDone){ closeModal(); return; }
+      draw();
+    };
     // shared date+time picker (same drum-scroll UI tasks use), 15-minute steps
     // A new entry starts at 08:00 — nothing in the lab happens at midnight, and
     // an all-day entry is still one click away by clearing the time.
@@ -7581,6 +7589,7 @@ function paintDiary(container,a,opts){
       if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
       persist(); notifyChange();
       formType=null; editingId=null;
+      if(opts.closeOnDone){ closeModal(); return; }
       draw();
     };
   }
