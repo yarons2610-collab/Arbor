@@ -4713,7 +4713,11 @@ function renderTimeline(){
     const day=new Date(ws); day.setDate(ws.getDate()+d);
     const isToday=day.getTime()===today.getTime();
     const hdr=document.createElement("div"); hdr.className="cal-day-hdr"+(isToday?" today":"");
-    hdr.innerHTML=`<div class="dow">${DAYS[d]}</div><div class="dom">${day.getDate()}</div>`;
+    // day.getDay(), not the loop index d — the two only coincide in week view,
+    // where ws is always Sunday-aligned so d itself happens to equal the
+    // weekday; in day view NCOL is 1 and d is always 0 regardless of which
+    // actual day is showing, which is why every day read "Sun" at the top.
+    hdr.innerHTML=`<div class="dow">${DAYS[day.getDay()]}</div><div class="dom">${day.getDate()}</div>`;
     alldayGrid.appendChild(hdr);
   }
   // all-day row in the sticky zone
