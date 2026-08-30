@@ -2582,6 +2582,7 @@ const LINK_GROUPS=[
   {kind:"reading",  icon:"📖", label:"Literature"},
   {kind:"protocol", icon:"📋", label:"Protocols"},
   {kind:"other",    icon:"🗂", label:"Other"},
+  {kind:"note",     icon:"📝", label:"Notes"},
   {kind:"url",      icon:"🔗", label:"External"}
 ];
 const TERM_LABEL={alive:"alive",sacrificed:"sacrificed",early_death:"early death",excluded:"excluded"};
@@ -2599,6 +2600,7 @@ function linkName(l){
   if(l.kind==="reading"){ const x=DB.readings.find(v=>v.id===l.id); return x?x.title:"(deleted paper)"; }
   if(l.kind==="protocol"){ const x=DB.protocols.find(v=>v.id===l.id); return x?x.title:"(deleted protocol)"; }
   if(l.kind==="other"){ const x=DB.other.find(v=>v.id===l.id); return x?x.title:"(deleted item)"; }
+  if(l.kind==="note"){ const x=DB.notes.find(v=>v.id===l.id); return x?(x.title||"(untitled note)"):"(deleted note)"; }
   if(l.kind==="url") return l.url||"";
   return l.id||"";
 }
@@ -2645,6 +2647,11 @@ function linkDetail(l){
     const x=DB.other.find(v=>v.id===l.id); if(!x)return {text:"deleted"};
     return {text:x.link||x.fileName||""};
   }
+  if(l.kind==="note"){
+    const x=DB.notes.find(v=>v.id===l.id); if(!x)return {text:"deleted"};
+    const plain=richTextPlain(noteBodyHTML(x)).trim();
+    return {text:plain.length>60?plain.slice(0,60)+"…":plain};
+  }
   return {text:""};
 }
 const projOpen=new Set();          // which link categories are open, per owner
@@ -2664,10 +2671,20 @@ function projCatsHTML(owner,keyPrefix){
       </button>
       ${open?`<div class="pc-items">${items.map(({l,i})=>{
         const d=linkDetail(l);
-        return `<div class="pc-item" data-i="${i}">
+        // A file-only Library record (no Link URL, just something chosen on
+        // this device) can't be opened with a plain openLinked() — it needs
+        // wireFileOpener's blob-URL dance, which only survives Safari's
+        // "was this really a click" check if it's armed on a real <a href>
+        // ahead of time. Rendered as an <a> here so the wiring pass below
+        // can do exactly that instead of falling back to the Library tab.
+        const rec=(l.kind==="reading"||l.kind==="protocol"||l.kind==="other")
+          ? (LIBS[l.kind].list()||[]).find(x=>x.id===l.id) : null;
+        const fileOnly=rec&&!rec.link&&rec.fileName;
+        const tag=fileOnly?"a":"div";
+        return `<${tag} class="pc-item${fileOnly?" pc-item-file":""}" data-i="${i}"${fileOnly?` data-filekey="${escAttr(rec.id)}" href="#"`:""}>
           <span class="pc-iname">${esc(linkName(l))}</span>
           ${d.text?`<span class="pc-idet" style="color:${d.color||"var(--ink-faint)"}">${esc(d.text)}</span>`:""}
-        </div>`; }).join("")}</div>`:""}
+        </${tag}>`; }).join("")}</div>`:""}
     </div>`;
   }).join("");
 }
@@ -3114,6 +3131,7 @@ function linkOptions(kind){
   if(kind==="reading") return DB.readings.map(r=>({v:r.id,t:r.title}));
   if(kind==="protocol") return DB.protocols.map(x=>({v:x.id,t:x.title}));
   if(kind==="other") return DB.other.map(x=>({v:x.id,t:x.title}));
+  if(kind==="note") return DB.notes.map(x=>({v:x.id,t:x.title||"(untitled note)"}));
   if(kind==="material") return [
     {grp:"Viruses",     items:(activeViruses()||[]).map(v=>({v:"virus::"+v.name,t:v.name}))},
     {grp:"Injection sites",items:(DB.config.siteLib||[]).map(x=>({v:"site::"+x.name,t:x.name}))},
@@ -3911,6 +3929,7 @@ let projOpenId=null;
 const openSteps=new Set();
 function renderProjectPlan(id){
   const pr=projById(id); if(!pr){ projOpenId=null; return renderProjects(); }
+  releaseFileURLs();                     // the previous draw's blob URLs are dead
   const host=document.getElementById("projects"); host.innerHTML="";
 
   const head=document.createElement("div"); head.className="plan-head";
@@ -3926,6 +3945,25 @@ function renderProjectPlan(id){
   const q=document.createElement("div"); q.className="fld"; host.appendChild(q);
   q.innerHTML=`<label>Research question</label><textarea id="pl_q" rows="2">${esc(pr.question||"")}</textarea>`;
   q.querySelector("#pl_q").addEventListener("input",e=>{ pr.question=e.target.value; persist(); });
+
+  // Only the project's own direct links (materials/library/notes/etc attached
+  // to the project in general) — each experiment shows its own further down,
+  // so this isn't the rolled-up view the overview cards use.
+  if((pr.links||[]).length){
+    const lw=document.createElement("div"); lw.className="fld"; host.appendChild(lw);
+    const drawProjLinks=()=>{ lw.innerHTML=`<label>Linked</label>${projCatsHTML(pr)}`;
+      lw.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=e=>{
+        e.stopPropagation();
+        const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k); drawProjLinks(); });
+      lw.querySelectorAll(".pc-item").forEach(r=>r.onclick=e=>{
+        e.stopPropagation(); openLinked((pr.links||[])[+r.dataset.i]); });
+      lw.querySelectorAll(".pc-item-file").forEach(r=>{
+        wireFileOpener(r,r.dataset.filekey);
+        const inner=r.onclick; r.onclick=e=>{ e.stopPropagation(); return inner&&inner.call(r,e); };
+      });
+    };
+    drawProjLinks();
+  }
 
   const sw=document.createElement("div"); sw.className="fld"; host.appendChild(sw);
   sw.innerHTML=`<label>Experiments</label>
@@ -4039,6 +4077,7 @@ function renderProjectPlan(id){
           ${(st.groupDefs||[]).length?`<span class="em-arms ${grp.ok?"ok":""}">${esc(grp.text)}</span>`:""}
           ${rawKids.length?`<button class="exp-caret">${open?"▾":"▸"} ${rawKids.length} task${rawKids.length!==1?"s":""}</button>`:""}
         </div>
+        ${(st.links||[]).length?projCatsHTML(st):""}
         ${open&&kids.length?`<div class="step-list">${kids.map(stepRow).join("")}</div>`:""}
       </div>`;
     };
@@ -4065,6 +4104,15 @@ function renderProjectPlan(id){
       if(caret) caret.onclick=()=>{ openSteps.has(st.id)?openSteps.delete(st.id):openSteps.add(st.id); drawSteps(); };
       c.querySelector(".exp-open").onclick=()=>stepModal(pr,st,()=>renderProjectPlan(id));
       c.querySelector(".exp-name").onclick=()=>stepModal(pr,st,()=>renderProjectPlan(id));
+      c.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=e=>{
+        e.stopPropagation();
+        const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k); drawSteps(); });
+      c.querySelectorAll(".pc-item").forEach(r=>r.onclick=e=>{
+        e.stopPropagation(); openLinked((st.links||[])[+r.dataset.i]); });
+      c.querySelectorAll(".pc-item-file").forEach(r=>{
+        wireFileOpener(r,r.dataset.filekey);
+        const inner=r.onclick; r.onclick=e=>{ e.stopPropagation(); return inner&&inner.call(r,e); };
+      });
       c.querySelector(".exp-sub").onclick=()=>{ const k=addTask({experimentId:st.id,projectId:pr.id}); openSteps.add(st.id); taskEditor(k,()=>renderProjectPlan(id)); };
     });
   }
@@ -4125,6 +4173,7 @@ function projSummary(pr){
 }
 function renderProjects(){
   if(projOpenId) return renderProjectPlan(projOpenId);
+  releaseFileURLs();                     // the previous draw's blob URLs are dead
   const host=document.getElementById("projects"); host.innerHTML="";
   const top=document.createElement("div");
   top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px";
@@ -4156,6 +4205,10 @@ function renderProjects(){
       e.stopPropagation();
       const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k); renderProjects(); });
     card.querySelectorAll(".pc-item").forEach(r=>r.onclick=e=>{ e.stopPropagation(); openLinked(allLinks[+r.dataset.i]); });
+    card.querySelectorAll(".pc-item-file").forEach(r=>{
+      wireFileOpener(r,r.dataset.filekey);
+      const inner=r.onclick; r.onclick=e=>{ e.stopPropagation(); return inner&&inner.call(r,e); };
+    });
     card.onclick=()=>{ projOpenId=pr.id; renderProjects(); };
     grid.appendChild(card);
   });
@@ -8700,6 +8753,7 @@ function openLinked(l){
   if(l.kind==="material"){ closeDetail();
     // land on the library the material actually lives in
     goMaterials({virus:"viruses",site:"sites"}[l.cat]||"inventory"); return; }
+  if(l.kind==="note"){ closeDetail(); switchTo("notes"); noteModal(l.id); return; }
   if(l.url) window.open(/^https?:\/\//i.test(l.url)?l.url:"https://"+l.url,"_blank","noopener");
 }
 function drawSpines(t){
