@@ -1149,10 +1149,15 @@ async function loadDB(){
   if(gistToken()){
     try{
       const remote=await gistLoad();
-      if(remote&&remote.domains){DB=remote;migrate();return "gist";}
+      if(remote&&remote.domains){DB=remote;migrate();lastSyncedRemoteUpdatedAt=remote.updatedAt||0;return "gist";}
     }catch(e){console.warn("Gist load failed, falling back to local",e);}
   }
-  try{ const data=await window.arbor.load(); if(data&&data.domains){DB=data;migrate();return "local";} }
+  // No authoritative remote read to anchor on (no token, or the read above
+  // failed) — DB.updatedAt is the best available floor for "state this
+  // device already knows about," so runSync()'s conflict check has a real
+  // baseline instead of treating the Gist's very first read as an instant
+  // conflict.
+  try{ const data=await window.arbor.load(); if(data&&data.domains){DB=data;migrate();lastSyncedRemoteUpdatedAt=DB.updatedAt||0;return "local";} }
   catch(e){}
   return "none";
 }
@@ -1274,10 +1279,11 @@ function setSaveState(s,detail){
     failed:   ["⚠ save failed — export JSON backup","var(--overdue)"],
     syncwarn: ["⚠ showing local copy, not synced — export JSON backup","var(--amber)"],
     throttled:["⏳ sync paused by GitHub — saved on this device","var(--amber)"],
+    conflict: ["⚠ synced newer changes from elsewhere — check your last edit","var(--amber)"],
   };
   const m=states[s]||states.saved; el.textContent=m[0]+(detail?" ("+detail+")":""); el.style.color=m[1]; el.dataset.state=s;
   el.title=detail||"";
-  el.style.cursor=(s==="failed"||s==="syncwarn"||s==="throttled")?"pointer":"default";
+  el.style.cursor=(s==="failed"||s==="syncwarn"||s==="throttled"||s==="conflict")?"pointer":"default";
 }
 
 // Writing to disk is cheap and wants to happen almost immediately. Pushing the
@@ -1290,6 +1296,16 @@ let syncTimer=null, lastSyncAt=0, syncInFlight=false, syncPending=false, syncBac
 // the Gist — autoPull() below must never overwrite DB while this is true, or
 // an edit that hasn't been pushed yet gets silently discarded under it.
 let localDirty=false;
+// The remote's own updatedAt as of the last time THIS device actually read it
+// (a pull, a push, or the initial load) — not to be confused with DB.updatedAt,
+// which is bumped by persist() on every local edit and says nothing about
+// whether this device has seen what any other device has since pushed. A push
+// is a full-workspace overwrite with no merge: if the Gist has moved past this
+// value, someone else pushed something this device never pulled, and writing
+// over it would silently discard that — confirmed live when a stale device's
+// otherwise-unrelated edit clobbered a same-minute note edit and a newly
+// created task purely because its own push landed a few seconds later.
+let lastSyncedRemoteUpdatedAt=0;
 
 async function doWrite(){
   setSaveState("saving");
@@ -1311,7 +1327,31 @@ async function runSync(){
   syncInFlight=true; syncPending=false;
   setSaveState("saving");
   try{
+    // Read-before-write, same compare-and-swap idea applySharedVirusChange()
+    // already uses for the shared virus library: a push overwrites the whole
+    // Gist with no merge, so pushing blind risks silently discarding whatever
+    // another device already landed there since this device last looked.
+    const remote=await gistLoad();
+    if(remote&&remote.domains&&(remote.updatedAt||0)>lastSyncedRemoteUpdatedAt){
+      if(editingInProgress()){
+        // don't yank the DOM out from under an active edit — this device's
+        // own change stays queued (localDirty untouched) and retries shortly
+        syncPending=true; setSaveState(storageOK?"saved":"failed");
+        return;
+      }
+      DB=remote; migrate(); lastSyncedRemoteUpdatedAt=remote.updatedAt||0;
+      // The queued local edit is superseded by what actually landed on the
+      // Gist — surfaced via the toast below rather than silently retried,
+      // since silently retrying is exactly the bug this guard exists to stop.
+      localDirty=false;
+      try{ await window.arbor.save(DB); }catch(e){}
+      render(); syncTopCollapsed();
+      setSaveState("conflict");
+      toast("Synced newer changes from another device — your last change here wasn't saved, please redo it");
+      return;
+    }
     await gistSave(JSON.stringify(DB));
+    lastSyncedRemoteUpdatedAt=DB.updatedAt||0;
     lastSyncAt=Date.now(); syncBackoffUntil=0; localDirty=false; setSaveState("synced");
   }catch(e){
     lastSyncAt=Date.now();
@@ -1370,7 +1410,7 @@ async function autoPull(){
     const remote=await gistLoad();
     if(!remote||!remote.domains)return;
     if((remote.updatedAt||0)<=(DB.updatedAt||0))return;   // nothing newer than what we already have
-    DB=remote; migrate();
+    DB=remote; migrate(); lastSyncedRemoteUpdatedAt=remote.updatedAt||0;
     try{ await window.arbor.save(DB); }catch(e){}          // keep the local disk copy in step too
     render(); syncTopCollapsed();
     setSaveState("synced");
@@ -8802,11 +8842,11 @@ function showGistSetup(){
       msg("Verified ✓ — looking for existing Arbor data…","var(--gcamp)");
       try{
         const remote=await gistLoad();
-        if(remote&&remote.domains){DB=remote;migrate();render();
+        if(remote&&remote.domains){DB=remote;migrate();lastSyncedRemoteUpdatedAt=remote.updatedAt||0;render();
           msg("Connected as @"+login+" — loaded your existing workspace ✓","var(--gcamp)");}
         else{msg("Connected as @"+login+" — saving current workspace…","var(--gcamp)");
-          await gistSave(JSON.stringify(DB));}
-      }catch(e){await gistSave(JSON.stringify(DB));}
+          await gistSave(JSON.stringify(DB)); lastSyncedRemoteUpdatedAt=DB.updatedAt||0;}
+      }catch(e){await gistSave(JSON.stringify(DB)); lastSyncedRemoteUpdatedAt=DB.updatedAt||0;}
       setSaveState("synced");
       scheduleAutoPull();
       setTimeout(()=>closeModal(),1400);
@@ -8831,7 +8871,7 @@ function showGistSetup(){
 document.getElementById("syncBtn").addEventListener("click",()=>showGistSetup());
 document.getElementById("saveState").addEventListener("click",()=>{
   const st=document.getElementById("saveState").dataset.state;
-  if(st==="failed"||st==="noapi"||st==="off"||st==="syncwarn"||st==="throttled"){
+  if(st==="failed"||st==="noapi"||st==="off"||st==="syncwarn"||st==="throttled"||st==="conflict"){
     download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");
     toast("JSON backup downloaded — import this via ⋯ to restore"); }
 });
