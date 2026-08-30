@@ -3473,11 +3473,21 @@ function animalsModal(pr,st,after){
   draw();
   document.getElementById("an_done").onclick=()=>{ closeModal(); experimentModal(pr,st,after); };
 }
+// Grows a textarea to fit whatever's typed instead of scrolling inside a
+// fixed box — for a field long-form enough that clipping it behind a
+// scrollbar means never seeing the whole thing at once. resize:vertical
+// stays on top of this, so a manual drag still works too.
+function autoGrowTextarea(el){
+  if(!el)return;
+  const grow=()=>{ el.style.height="auto"; el.style.height=el.scrollHeight+"px"; };
+  el.addEventListener("input",grow);
+  grow();
+}
 function experimentModal(pr,st,after){
   const animals=()=>animalsForStep(pr,st);
   modal(`<h3>Experiment</h3>
     <div class="fld"><label>Name</label><input id="sm_name" value="${escAttr(st.title)}" autofocus></div>
-    <div class="fld"><label>What this experiment is</label>
+    <div class="fld"><label>Experiment plan</label>
       <textarea id="sm_desc" rows="3">${esc(st.description||"")}</textarea></div>
     <div class="fld"><label>Hypothesis</label>
       <textarea id="sm_hyp" rows="2">${esc(st.hypothesis||"")}</textarea></div>
@@ -3499,6 +3509,9 @@ function experimentModal(pr,st,after){
     <div class="fld"><label>Uses</label><div id="sm_links"></div></div>
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="sm_del">Delete experiment</button></div>
     <div class="actions"><button class="btn accent" id="sm_save">Done</button></div>`,{wide:true});
+  // The plan is the heart of the experiment — worth seeing in full rather
+  // than scrolled inside a fixed 3-row box the moment it grows past that.
+  autoGrowTextarea(document.getElementById("sm_desc"));
 
   const save=()=>{
     st.title=document.getElementById("sm_name").value;
@@ -3848,14 +3861,21 @@ function renderProjectPlan(id){
         <option value="animal">By mouse</option>
         <option value="type">By entry type</option>
       </select>
+      <label style="margin-left:8px;display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);cursor:pointer">
+        <input type="checkbox" id="pl_hidedone" style="width:auto;margin:0">Hide completed</label>
     </div>
     <div id="pl_steps"></div>
     <button class="btn ghost" id="pl_addstep" style="margin-top:10px">＋ Experiment</button>`;
   sw.querySelector("#pl_addstep").onclick=()=>{ const st=addStep(pr,null); stepModal(pr,st,()=>renderProjectPlan(id)); };
-  const sortSel=sw.querySelector("#pl_sort"), groupSel=sw.querySelector("#pl_group");
+  const sortSel=sw.querySelector("#pl_sort"), groupSel=sw.querySelector("#pl_group"), hideDoneChk=sw.querySelector("#pl_hidedone");
   sortSel.value=DB.config.expTaskSort||"alpha"; groupSel.value=DB.config.expTaskGroup||"none";
+  hideDoneChk.checked=!!DB.config.expTaskHideDone;
   sortSel.addEventListener("change",()=>{ DB.config.expTaskSort=sortSel.value; persist(); drawSteps(); });
   groupSel.addEventListener("change",()=>{ DB.config.expTaskGroup=groupSel.value; persist(); drawSteps(); });
+  // One shared setting, same as sort/group above — hides finished tasks (and
+  // finished diary rows) both here and in "Tasks in the project generally"
+  // below, not just whichever list happened to have the control on it.
+  hideDoneChk.addEventListener("change",()=>{ DB.config.expTaskHideDone=hideDoneChk.checked; persist(); drawSteps(); drawProjTasks(); });
 
   // A task renders as a slimmer row: what it is, when, and how often. It has no
   // + of its own — tasks do not nest. Shared by the rows inside an experiment
@@ -3898,7 +3918,15 @@ function renderProjectPlan(id){
   const sortCmp=(a,b)=>(DB.config.expTaskSort==="date")
     ? (String(a.when||"9999").localeCompare(String(b.when||"9999"))||String(a.title||"").localeCompare(String(b.title||"")))
     : String(a.title||"").localeCompare(String(b.title||""));
+  // same done-check wireStepDot's own click handler uses to know which field
+  // to flip — a diary row's "done" is the entry's own flag, a task's is
+  // whether the occurrence at its own when has been checked off
+  function stepItemDone(x){
+    if(String(x.id).startsWith("d_")){ const f=diaryEntryById(x.id); return !!(f&&f.e.done); }
+    return occDone(x,x.when);
+  }
   function sortAndGroup(raw){
+    if(DB.config.expTaskHideDone) raw=raw.filter(x=>!stepItemDone(x));
     const mode=DB.config.expTaskGroup||"none";
     if(mode==="none") return [...raw].sort(sortCmp);
     const keyOf=mode==="animal" ? (x=>x._animal||"General") : (x=>x._type||"Tasks");
@@ -3971,8 +3999,9 @@ function renderProjectPlan(id){
     const k=addTask({projectId:pr.id}); taskEditor(k,()=>renderProjectPlan(id)); };
   function drawProjTasks(){
     const box=document.getElementById("pl_ptasks");
-    const list=taskList().filter(x=>x.projectId===pr.id&&!x.experimentId)
+    let list=taskList().filter(x=>x.projectId===pr.id&&!x.experimentId)
       .sort((a,b)=>String(a.when||"9999").localeCompare(String(b.when||"9999")));
+    if(DB.config.expTaskHideDone) list=list.filter(x=>!occDone(x,x.when));
     if(!list.length){
       box.innerHTML=`<div class="pc-empty">Nothing yet — work that is the project's but no one experiment's lands here.</div>`;
       return;
