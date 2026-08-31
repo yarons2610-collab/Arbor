@@ -4217,6 +4217,39 @@ function renderProjects(){
     card.onclick=()=>{ projOpenId=pr.id; renderProjects(); };
     grid.appendChild(card);
   });
+
+  // A place to review whatever got logged without deciding a project up
+  // front — same "review and file later" idea Library's own "Unattached"
+  // filter and the Animals tab's own "Not in a project" section already
+  // give those two kinds. Events never take a project at all (no "Part
+  // of" field to begin with), so only plain tasks show up here — an event
+  // showing up as "unorganized" would just be noise, not something to act on.
+  const unattached=taskList().filter(t=>!t.isEvent&&!t.projectId)
+    .sort((a,b)=>String(a.when||"9999").localeCompare(String(b.when||"9999")));
+  if(unattached.length){
+    const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="22px";
+    h.innerHTML=`<span class="chip" style="background:#5b6678"></span><h2>Tasks not in a project</h2>
+      <span class="count">${unattached.length}</span>`;
+    host.appendChild(h);
+    const list=document.createElement("div"); list.className="step-list"; list.style.cssText="border-top:none;padding-top:0";
+    list.innerHTML=unattached.map(t=>{
+      const fin=taskDone(t);
+      return `<div class="step-line${fin?" done":""}" data-id="${t.id}">
+        <button type="button" class="step-dot" title="${fin?"Done — click to undo":"Mark done"}">${fin?"✓":""}</button>
+        <span class="step-title">${esc(t.title||"(unnamed task)")}</span>
+        ${t.repeat?`<span class="step-n">↻ ${esc(repeatLabel(t.repeat,t.when))}</span>`:""}
+        ${t.when?`<span class="step-date">${esc(taskSpan(t))}</span>`:`<span class="step-date unset">not scheduled</span>`}
+      </div>`;
+    }).join("");
+    host.appendChild(list);
+    list.querySelectorAll(".step-line").forEach(el=>{
+      const t=taskOf(el.dataset.id); if(!t)return;
+      el.querySelector(".step-dot").onclick=ev=>{
+        ev.stopPropagation(); setOccDone(t,t.when,!occDone(t,t.when)); renderProjects();
+      };
+      el.onclick=()=>taskEditor(t,()=>renderProjects());
+    });
+  }
 }
 
 /* ---------- ARBOR — the network: somata and their dendrites (force graph) ----------
