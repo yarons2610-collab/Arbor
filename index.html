@@ -3993,21 +3993,29 @@ function renderExperiments(){
   // give those two kinds. Events never take an experiment at all (no "Part
   // of" field to begin with), so only plain tasks show up here — an event
   // showing up as "unorganized" would just be noise, not something to act on.
-  const unattached=taskList().filter(t=>!t.isEvent&&!t.experimentId)
-    .sort((a,b)=>String(a.when||"9999").localeCompare(String(b.when||"9999")));
-  if(unattached.length){
+  // Shares the same sort/group/hide-completed bar and collapsed-by-default
+  // caret every experiment card's own task list already uses, rather than
+  // dumping every unattached task straight onto the page unfiltered.
+  const rawUnattached=taskList().filter(t=>!t.isEvent&&!t.experimentId);
+  if(rawUnattached.length){
+    const unattached=sortAndGroupItems(rawUnattached);
+    const openKey="__unattached", open=openSteps.has(openKey);
     const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="22px";
     h.innerHTML=`<span class="chip" style="background:#5b6678"></span><h2>Tasks not in an experiment</h2>
-      <span class="count">${unattached.length}</span>`;
+      <button type="button" class="exp-caret">${open?"▾":"▸"} ${rawUnattached.length} task${rawUnattached.length!==1?"s":""}</button>`;
     host.appendChild(h);
-    const list=document.createElement("div"); list.className="step-list"; list.style.cssText="border-top:none;padding-top:0";
-    list.innerHTML=unattached.map(stepRowHTML).join("");
-    host.appendChild(list);
-    list.querySelectorAll(".step-line").forEach(el=>{
-      const t=taskOf(el.dataset.id); if(!t)return;
-      wireStepDotEl(el,renderExperiments);
-      el.onclick=()=>taskEditor(t,()=>renderExperiments());
-    });
+    h.querySelector(".exp-caret").onclick=()=>{
+      openSteps.has(openKey)?openSteps.delete(openKey):openSteps.add(openKey); renderExperiments(); };
+    if(open&&unattached.length){
+      const list=document.createElement("div"); list.className="step-list"; list.style.cssText="border-top:none;padding-top:0";
+      list.innerHTML=unattached.map(stepRowHTML).join("");
+      host.appendChild(list);
+      list.querySelectorAll(".step-line").forEach(el=>{
+        const t=taskOf(el.dataset.id); if(!t)return;
+        wireStepDotEl(el,renderExperiments);
+        el.onclick=()=>taskEditor(t,()=>renderExperiments());
+      });
+    }
   }
 }
 
