@@ -341,12 +341,6 @@
   .step-date{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);flex:0 0 auto}
   .step-date.unset{color:var(--ink-faint)}
   .step-n{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto}
-  .step-sub-caret{border:1px solid var(--line2);background:var(--panel);color:var(--ink-faint);cursor:pointer;
-    font-family:var(--mono);font-size:9px;padding:1px 6px;border-radius:6px;flex:0 0 auto}
-  .step-sub-caret:hover{color:var(--ink)}
-  .step-sub-add{border:1px solid var(--line2);background:transparent;color:var(--ink-faint);cursor:pointer;
-    font-size:11px;line-height:1;width:18px;height:18px;border-radius:50%;flex:0 0 auto}
-  .step-sub-add:hover{color:var(--ink);border-color:var(--ink-dim)}
   .step-group-hdr{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;
     color:var(--ink-faint);padding:8px 6px 3px;cursor:default}
   .step-group-hdr:first-child{padding-top:0}
@@ -2710,17 +2704,6 @@ const experimentsOf=pr=>(pr.steps||[]).filter(x=>!x.parentId);
 function taskList(){ return DB.schedule||(DB.schedule=[]); }
 function taskOf(id){ return taskList().find(x=>x.id===id); }
 function tasksFor(expId){ return taskList().filter(t=>t.experimentId===expId); }
-// Walks candidateParentId's own parentTaskId chain looking for taskId — used
-// to keep the "Sub-task of" picker from offering a choice that would make a
-// task its own (indirect) ancestor.
-function wouldCreateTaskCycle(taskId,candidateParentId){
-  let cur=candidateParentId;
-  while(cur){
-    if(cur===taskId)return true;
-    cur=(taskOf(cur)||{}).parentTaskId||null;
-  }
-  return false;
-}
 function expById(id){ for(const pr of DB.projects){ const e=(pr.steps||[]).find(x=>x.id===id&&!x.parentId); if(e)return {pr,exp:e}; } return null; }
 // A task is finished once its date has gone by; an unscheduled one never is.
 // An experiment is finished when you have written down what happened.
@@ -2984,17 +2967,11 @@ function nextOccurrence(t){
 }
 function addTask(init){
   const t={id:uid("tk_"),title:"",when:null,endDate:null,duration:null,
-           projectId:null,experimentId:null,parentTaskId:null,repeat:null,links:[],doneOccurrences:[],
+           projectId:null,experimentId:null,repeat:null,links:[],doneOccurrences:[],
            isEvent:false,color:null,eventTypeId:null,created:Date.now(),...(init||{})};
   taskList().push(t); persist(); return t;
 }
-// Orphans (not cascades) any sub-tasks of the one being deleted — same
-// safety-first reparenting deleteStep() already uses for an experiment's
-// own tasks, rather than silently destroying scheduled sub-tasks.
-function deleteTask(id){
-  taskList().forEach(t=>{ if(t.parentTaskId===id) t.parentTaskId=null; });
-  DB.schedule=taskList().filter(x=>x.id!==id); persist();
-}
+function deleteTask(id){ DB.schedule=taskList().filter(x=>x.id!==id); persist(); }
 // Occurrences of a repeating task all read from the one shared record — real,
 // separate events sharing a rule, not copies of each other. Any edit that
 // needs to apply to fewer than "every occurrence forever" has to ask which
@@ -3253,21 +3230,6 @@ function taskEditor(t,after,occWhen,occEndDate){
       +experimentsOf(pr).map(e=>
         `<option value="e:${e.id}" ${t.experimentId===e.id?"selected":""}>&nbsp;&nbsp;› ${esc(e.title||"(unnamed experiment)")}</option>`).join("");
   }).join("");
-  // Any other task can be a parent, except itself or anything already under
-  // it (wouldCreateTaskCycle) — a task can't become its own ancestor.
-  const parentOpts=taskList().filter(x=>x.id!==t.id&&!wouldCreateTaskCycle(t.id,x.id))
-    .sort((a,b)=>String(a.title||"").localeCompare(String(b.title||"")))
-    .map(x=>`<option value="${x.id}" ${t.parentTaskId===x.id?"selected":""}>${esc(x.title||"(unnamed task)")}</option>`).join("");
-  const subtasks=taskList().filter(x=>x.parentTaskId===t.id);
-  const subtaskRow=k=>{
-    const fin=taskDone(k);
-    return `<div class="step-line${fin?" done":""}" data-id="${k.id}">
-      <button type="button" class="step-dot" title="${fin?"Done — click to undo":"Mark done"}">${fin?"✓":""}</button>
-      <span class="step-title">${esc(k.title||"(unnamed task)")}</span>
-      ${k.repeat?`<span class="step-n">↻ ${esc(repeatLabel(k.repeat,k.when))}</span>`:""}
-      ${k.when?`<span class="step-date">${esc(taskSpan(k))}</span>`:`<span class="step-date unset">not scheduled</span>`}
-    </div>`;
-  };
   modal(`<h3>${t.isEvent?"Event":"Task"}</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
     ${wasDetached?`<p style="color:var(--ink-dim);font-size:12px;line-height:1.5;margin:-6px 0 14px;background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:8px 10px">
@@ -3319,13 +3281,7 @@ function taskEditor(t,after,occWhen,occEndDate){
         <input type="color" id="tk_color_pick" value="${t.color||GCAL_COLORS[0][0]}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer">
       </div></div>
     <div class="fld"><label>Notes</label><textarea id="tk_notes" rows="3">${esc(t.notes||"")}</textarea></div>
-    ${t.isEvent?"":`
-    <div class="fld"><label>Sub-task of</label>
-      <select id="tk_parent"><option value="">— not a sub-task —</option>${parentOpts}</select></div>
-    <div class="fld"><label>Sub-tasks</label>
-      <div id="tk_subtasks">${subtasks.length?subtasks.map(subtaskRow).join(""):`<div class="pc-empty">No sub-tasks yet.</div>`}</div>
-      <button type="button" class="btn ghost" id="tk_addsub" style="margin-top:8px;font-size:12px">＋ Add sub-task</button></div>
-    <div class="fld"><label>Part of</label>
+    ${t.isEvent?"":`<div class="fld"><label>Part of</label>
       <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>`}
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="tk_del">Delete task</button></div>
     <div class="actions"><button class="btn accent" id="tk_save">Done</button></div>`,{wide:true});
@@ -3384,28 +3340,6 @@ function taskEditor(t,after,occWhen,occEndDate){
   // an event has no "Part of" field at all — nothing to attach to a project
   const tkExp=document.getElementById("tk_exp");
   if(tkExp) tkExp.addEventListener("change",e=>setTaskTarget(t,e.target.value));
-  // Reopening the same editor (rather than a partial in-place repaint) is
-  // the simplest correct way to reflect a structural change like this one —
-  // same trick noteModal's own drawing-editor round-trip already uses.
-  const tkParent=document.getElementById("tk_parent");
-  if(tkParent) tkParent.addEventListener("change",e=>{
-    const pid=e.target.value||null;
-    t.parentTaskId=pid;
-    if(pid){ const p=taskOf(pid); if(p){ t.projectId=p.projectId; t.experimentId=p.experimentId; } }
-    persist(); taskEditor(t,after,occWhen,occEndDate);
-  });
-  const tkAddSub=document.getElementById("tk_addsub");
-  if(tkAddSub) tkAddSub.onclick=()=>{
-    const k=addTask({parentTaskId:t.id,projectId:t.projectId,experimentId:t.experimentId});
-    taskEditor(k,()=>taskEditor(t,after,occWhen,occEndDate));
-  };
-  document.querySelectorAll("#tk_subtasks .step-line").forEach(el=>{
-    const k=taskOf(el.dataset.id); if(!k)return;
-    el.querySelector(".step-dot").onclick=ev=>{
-      ev.stopPropagation(); setOccDone(k,k.when,!occDone(k,k.when)); taskEditor(t,after,occWhen,occEndDate);
-    };
-    el.onclick=()=>taskEditor(k,()=>taskEditor(t,after,occWhen,occEndDate));
-  });
   const tkColorAuto=document.getElementById("tk_color_auto");
   // An event's stand-in for the project colour a task would otherwise
   // inherit — see taskColorOf's own comment for the priority order (an
@@ -3556,7 +3490,7 @@ function taskEditor(t,after,occWhen,occEndDate){
     t.notes=document.getElementById("tk_notes").value.trim();
     persist();
     const finish=()=>{ closeModal(); if(after)after(); };
-    const fieldsOf=x=>JSON.stringify({title:x.title,when:x.when,endDate:x.endDate,color:x.color,projectId:x.projectId,experimentId:x.experimentId,parentTaskId:x.parentTaskId,repeat:x.repeat,notes:x.notes});
+    const fieldsOf=x=>JSON.stringify({title:x.title,when:x.when,endDate:x.endDate,color:x.color,projectId:x.projectId,experimentId:x.experimentId,repeat:x.repeat,notes:x.notes});
     if(fieldsOf(t)===fieldsOf(seeded)||!wasRecurring||occWhen==null){ finish(); return; }
     occurrenceScopeModal(scope=>{
       if(scope==="all"){
@@ -3571,7 +3505,7 @@ function taskEditor(t,after,occWhen,occEndDate){
         persist(); finish(); return;
       }
       const patch={title:t.title,when:t.when,endDate:t.endDate,color:t.color,
-        projectId:t.projectId,experimentId:t.experimentId,parentTaskId:t.parentTaskId,isEvent:t.isEvent,notes:t.notes};
+        projectId:t.projectId,experimentId:t.experimentId,isEvent:t.isEvent,notes:t.notes};
       if(scope==="following")patch.repeat=t.repeat;
       revert();
       if(scope==="this")detachOccurrence(t,occWhen,patch);
@@ -4066,32 +4000,20 @@ function renderProjectPlan(id){
   // below, not just whichever list happened to have the control on it.
   hideDoneChk.addEventListener("change",()=>{ DB.config.expTaskHideDone=hideDoneChk.checked; persist(); drawSteps(); drawProjTasks(); });
 
-  // A task renders as a slimmer row: what it is, when, and how often —
-  // recursively, since a task can now have sub-tasks of its own (a task
-  // under a task, on top of the experiment/project level it already had).
-  // Shared by the rows inside an experiment and by the project's own list
-  // below them. sortCmp is referenced here but defined further down — fine,
-  // since stepRow is only ever called once sortCmp already exists.
-  const stepRow=(st,depth)=>{
+  // A task renders as a slimmer row: what it is, when, and how often. It has no
+  // + of its own — tasks do not nest. Shared by the rows inside an experiment
+  // and by the project's own list below them.
+  const stepRow=st=>{
     if(st._header) return `<div class="step-group-hdr">${esc(st._header)}</div>`;
     const fin=taskDone(st);
-    const isDiary=String(st.id).startsWith("d_");
-    // Sub-tasks skip sortAndGroup's animal/type grouping — a single parent's
-    // own list is already a small, single-purpose cluster where that
-    // grouping doesn't add anything — but still honor "Hide completed".
-    const kids=isDiary?[]:taskList().filter(x=>x.parentTaskId===st.id);
-    const visKids=(DB.config.expTaskHideDone?kids.filter(x=>!occDone(x,x.when)):kids).slice().sort(sortCmp);
-    const open=openSteps.has(st.id);
     // The dot is a real toggle now, not just a readout — clicking it is the
     // whole point of replacing "the date passed" with "someone confirmed it".
-    return `<div class="step-line${fin?" done":""}" data-id="${st.id}" style="padding-left:${(depth||0)*16}px">
+    return `<div class="step-line${fin?" done":""}" data-id="${st.id}">
       <button type="button" class="step-dot" title="${fin?"Done — click to undo":"Mark done"}">${fin?"✓":""}</button>
       <span class="step-title">${esc(st.title||"(unnamed task)")}</span>
       ${st.repeat?`<span class="step-n">↻ ${esc(repeatLabel(st.repeat,st.when))}</span>`:""}
       ${st.when?`<span class="step-date">${esc(taskSpan(st))}</span>`:`<span class="step-date unset">not scheduled</span>`}
-      ${kids.length?`<button type="button" class="step-sub-caret" data-id="${st.id}">${open?"▾":"▸"} ${kids.length}</button>`:""}
-      ${isDiary?"":`<button type="button" class="step-sub-add" data-id="${st.id}" title="Add a sub-task">＋</button>`}
-    </div>${open&&visKids.length?visKids.map(k=>stepRow(k,(depth||0)+1)).join(""):""}`;
+    </div>`;
   };
   // shared by both task lists below: toggling the dot flips the right thing
   // (a diary entry's own `done`, or a task's confirmation at its own date)
@@ -4109,25 +4031,6 @@ function renderProjectPlan(id){
       }
       redraw();
     };
-  };
-  // A sub-task row's own caret (expand/collapse its children — reuses
-  // openSteps, the same Set an experiment card's own caret already uses,
-  // since "is this id's children shown" means the same thing either way)
-  // and its "+" (add a sub-task under this row). Shared by both task lists
-  // the same way wireStepDot already is.
-  const wireSubtaskControls=(box,redraw)=>{
-    box.querySelectorAll(".step-sub-caret").forEach(b=>b.onclick=e=>{
-      e.stopPropagation();
-      const sid=b.dataset.id; openSteps.has(sid)?openSteps.delete(sid):openSteps.add(sid);
-      redraw();
-    });
-    box.querySelectorAll(".step-sub-add").forEach(b=>b.onclick=e=>{
-      e.stopPropagation();
-      const parent=taskOf(b.dataset.id); if(!parent)return;
-      const k=addTask({parentTaskId:parent.id,projectId:parent.projectId,experimentId:parent.experimentId});
-      openSteps.add(parent.id);
-      taskEditor(k,()=>renderProjectPlan(id));
-    });
   };
   // Sort orders the flat list or, under a grouping, each cluster on its own;
   // group buckets by whichever animal a diary row names (a scheduled task
@@ -4162,10 +4065,8 @@ function renderProjectPlan(id){
     const card=(st,depth)=>{
       // Scheduled tasks and the animals' own diary entries, together — a diary
       // entry is as much a record of what happened in this experiment as a
-      // task is of what is planned. A task with its own parentTaskId is a
-      // sub-task — it renders nested under that parent's own row (stepRow's
-      // own recursion) rather than flattened in here too.
-      const rawKids=[...tasksFor(st.id).filter(x=>!x.parentTaskId),...diaryTasksForStep(pr,st)];
+      // task is of what is planned.
+      const rawKids=[...tasksFor(st.id),...diaryTasksForStep(pr,st)];
       const kids=sortAndGroup(rawKids);
       const open=openSteps.has(st.id), grp=stepGroupTally(pr,st);
       return `<div class="exp-card${stepDone(st)?" done":""}" data-id="${st.id}">
@@ -4182,7 +4083,7 @@ function renderProjectPlan(id){
           ${rawKids.length?`<button class="exp-caret">${open?"▾":"▸"} ${rawKids.length} task${rawKids.length!==1?"s":""}</button>`:""}
         </div>
         ${(st.links||[]).length?projCatsHTML(st):""}
-        ${open&&kids.length?`<div class="step-list">${kids.map(k=>stepRow(k,0)).join("")}</div>`:""}
+        ${open&&kids.length?`<div class="step-list">${kids.map(stepRow).join("")}</div>`:""}
       </div>`;
     };
     box.innerHTML=roots.map(st=>card(st,0)).join("");
@@ -4198,7 +4099,6 @@ function renderProjectPlan(id){
       const t=taskOf(el.dataset.id); if(!t)return;
       el.onclick=()=>taskEditor(t,()=>renderProjectPlan(id));
     });
-    wireSubtaskControls(box,drawSteps);
     box.querySelectorAll(".exp-card").forEach(c=>{
       const st=(pr.steps||[]).find(x=>x.id===c.dataset.id); if(!st)return;
       // The caret is only rendered when the experiment has tasks. Reaching
@@ -4232,22 +4132,19 @@ function renderProjectPlan(id){
     const k=addTask({projectId:pr.id}); taskEditor(k,()=>renderProjectPlan(id)); };
   function drawProjTasks(){
     const box=document.getElementById("pl_ptasks");
-    // Sub-tasks (parentTaskId set) render nested under their own parent's
-    // row instead — same exclusion as the per-experiment list above.
-    let list=taskList().filter(x=>x.projectId===pr.id&&!x.experimentId&&!x.parentTaskId)
+    let list=taskList().filter(x=>x.projectId===pr.id&&!x.experimentId)
       .sort((a,b)=>String(a.when||"9999").localeCompare(String(b.when||"9999")));
     if(DB.config.expTaskHideDone) list=list.filter(x=>!occDone(x,x.when));
     if(!list.length){
       box.innerHTML=`<div class="pc-empty">Nothing yet — work that is the project's but no one experiment's lands here.</div>`;
       return;
     }
-    box.innerHTML=list.map(k=>stepRow(k,0)).join("");
+    box.innerHTML=list.map(stepRow).join("");
     box.querySelectorAll(".step-line").forEach(el=>{
       wireStepDot(el,drawProjTasks);
       const k=taskOf(el.dataset.id); if(!k)return;
       el.onclick=()=>taskEditor(k,()=>renderProjectPlan(id));
     });
-    wireSubtaskControls(box,drawProjTasks);
   }
   drawProjTasks();
 
