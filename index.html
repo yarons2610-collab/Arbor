@@ -2110,23 +2110,18 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
     document.addEventListener("pointercancel",onCancel);
   });
 }
-// The one place that opens a modal onto a single animal's diary entry —
-// same paintDiary() widget the animal's own detail panel uses, seeded
-// straight to one entry's edit form (or, with extraOpts.newType etc, a
-// fresh one) instead of landing on its month calendar. Reused by
-// openCalItem (a Timeline click), a sub-item click-through in either
-// editor, and the Timeline's own "+ New" diary-entry flow.
-function openDiaryEntryModal(a,editId,after,extraOpts){
-  modal(`<h3>${esc(a.name)} — Diary</h3><div id="calDiaryEditHost"></div>`,{wide:true});
-  paintDiary(document.getElementById("calDiaryEditHost"),a,
-    {editId,onChange:after,closeOnDone:true,...(extraOpts||{})});
-}
 function openCalItem(x){
   if(x.kind==="diary"){
-    // onChange re-renders the Timeline the moment anything is actually
-    // saved, so it's already current whenever this modal closes, however
-    // the user closes it.
-    openDiaryEntryModal(x.src.a,x.src.e.id,renderTimeline);
+    // Used to jump to the Animals tab just to edit one entry — leaving the
+    // Timeline behind entirely for a change that started right there. Same
+    // paintDiary() widget the animal's own detail panel uses, opened in a
+    // modal and seeded straight to this entry's edit form (editId) instead
+    // of landing on its month calendar; onChange re-renders the Timeline the
+    // moment anything is actually saved, so it's already current whenever
+    // this modal closes, however the user closes it.
+    const a=x.src.a, e=x.src.e;
+    modal(`<h3>${esc(a.name)} — Diary</h3><div id="calDiaryEditHost"></div>`,{wide:true});
+    paintDiary(document.getElementById("calDiaryEditHost"),a,{editId:e.id,onChange:renderTimeline,closeOnDone:true});
     return;
   }
   if(x.kind==="task"){ taskEditor(x.src,()=>{ renderTimeline(); },x.deadline,x.endDate); return; }
@@ -2715,47 +2710,16 @@ const experimentsOf=pr=>(pr.steps||[]).filter(x=>!x.parentId);
 function taskList(){ return DB.schedule||(DB.schedule=[]); }
 function taskOf(id){ return taskList().find(x=>x.id===id); }
 function tasksFor(expId){ return taskList().filter(t=>t.experimentId===expId); }
-// A "sub-item of" parent can be either a real task/event (DB.schedule) or an
-// animal diary entry (a.diary) — the relationship doesn't care which, only
-// wants that thing's own parentTaskId to keep walking a cycle-check chain.
-function parentIdOf(id){
-  const t=taskOf(id); if(t) return t.parentTaskId||null;
-  const found=diaryEntryById(id); if(found) return found.e.parentTaskId||null;
-  return null;
-}
-// Walks candidateParentId's own parentTaskId chain looking for itemId — used
-// to keep a "Sub-task of"/"Sub-item of" picker from offering a choice that
-// would make something its own (indirect) ancestor, across either kind.
-function wouldCreateCycle(itemId,candidateParentId){
+// Walks candidateParentId's own parentTaskId chain looking for taskId — used
+// to keep the "Sub-task of" picker from offering a choice that would make a
+// task its own (indirect) ancestor.
+function wouldCreateTaskCycle(taskId,candidateParentId){
   let cur=candidateParentId;
   while(cur){
-    if(cur===itemId)return true;
-    cur=parentIdOf(cur);
+    if(cur===taskId)return true;
+    cur=(taskOf(cur)||{}).parentTaskId||null;
   }
   return false;
-}
-// A diary entry, dressed up in the same {id,title,when,endDate,...} shape a
-// task/step already has, so it can sit in the same list (a project's task
-// list, another item's own sub-items) as one — kind:"diary" tags it
-// explicitly rather than leaving callers to guess from the id's "d_" prefix.
-function wrapDiaryAsRow(a,e){
-  const def=diaryTypeDef(e.type);
-  return {id:e.id,kind:"diary",title:`${a.name} — ${def.label}`,
-    when:e.time?`${e.date}T${e.time}`:e.date,
-    endDate:e.endTime?`${e.date}T${e.endTime}`:null,
-    repeat:null,parentTaskId:e.parentTaskId||null,_animal:a.name,_type:def.label};
-}
-// Every task and diary entry (across every animal) whose own parentTaskId
-// points at parentId — the one place "what's nested under this?" is
-// answered, regardless of which kind is asking or which kind answers.
-// Named subItemsOf, not childrenOf — that name is already taken by the
-// unrelated Outline/dendrite feature's own DB.tasks/parentId hierarchy.
-function subItemsOf(parentId){
-  const kids=taskList().filter(x=>x.parentTaskId===parentId);
-  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(e.parentTaskId===parentId) kids.push(wrapDiaryAsRow(a,e));
-  }));
-  return kids;
 }
 function expById(id){ for(const pr of DB.projects){ const e=(pr.steps||[]).find(x=>x.id===id&&!x.parentId); if(e)return {pr,exp:e}; } return null; }
 // A task is finished once its date has gone by; an unscheduled one never is.
@@ -2765,7 +2729,7 @@ function expById(id){ for(const pr of DB.projects){ const e=(pr.steps||[]).find(
 // from a date. A real task is asked whether its own anchor occurrence — t.when
 // — has been checked off.
 const taskDone=t=>{
-  if(t.kind==="diary"){ const found=diaryEntryById(t.id); return !!(found&&found.e.done); }
+  if(String(t.id||"").startsWith("d_")){ const found=diaryEntryById(t.id); return !!(found&&found.e.done); }
   return occDone(t,t.when);
 };
 const stepDone=st=>!!String(st.outcome||"").trim();
@@ -3019,27 +2983,17 @@ function nextOccurrence(t){
   return occ[0]||null;
 }
 function addTask(init){
-  const t={id:uid("tk_"),kind:"task",title:"",when:null,endDate:null,duration:null,
+  const t={id:uid("tk_"),title:"",when:null,endDate:null,duration:null,
            projectId:null,experimentId:null,parentTaskId:null,repeat:null,links:[],doneOccurrences:[],
            isEvent:false,color:null,eventTypeId:null,created:Date.now(),...(init||{})};
   taskList().push(t); persist(); return t;
 }
-// Orphans (not cascades) any sub-items of the one being deleted — task or
-// diary, same safety-first reparenting deleteStep() already uses for an
-// experiment's own tasks, rather than silently destroying scheduled
-// sub-items. Shared by deleteTask and deleteDiaryEntry below.
-function orphanChildrenOf(id){
-  taskList().forEach(t=>{ if(t.parentTaskId===id) t.parentTaskId=null; });
-  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{ if(e.parentTaskId===id) e.parentTaskId=null; }));
-}
+// Orphans (not cascades) any sub-tasks of the one being deleted — same
+// safety-first reparenting deleteStep() already uses for an experiment's
+// own tasks, rather than silently destroying scheduled sub-tasks.
 function deleteTask(id){
-  orphanChildrenOf(id);
+  taskList().forEach(t=>{ if(t.parentTaskId===id) t.parentTaskId=null; });
   DB.schedule=taskList().filter(x=>x.id!==id); persist();
-}
-// Same orphaning safety as deleteTask, for the other kind of sub-item.
-function deleteDiaryEntry(a,id){
-  orphanChildrenOf(id);
-  a.diary=(a.diary||[]).filter(x=>x.id!==id); persist();
 }
 // Occurrences of a repeating task all read from the one shared record — real,
 // separate events sharing a rule, not copies of each other. Any edit that
@@ -3144,11 +3098,12 @@ function diaryEntryById(id){
 function diaryTasksForStep(pr,st){
   const animals=animalsForStep(pr,st);
   const out=[];
-  // Entries already nested as someone else's sub-item (parentTaskId set)
-  // render there instead — via stepRow's own recursion — not flattened
-  // into this top-level list too.
   animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(!e.parentTaskId) out.push(wrapDiaryAsRow(a,e));
+    const def=diaryTypeDef(e.type);
+    out.push({ id:e.id, title:`${a.name} — ${def.label}`,
+      when:e.time?`${e.date}T${e.time}`:e.date,
+      endDate:e.endTime?`${e.date}T${e.endTime}`:null, repeat:null,
+      _animal:a.name, _type:def.label });
   }));
   return out;
 }
@@ -3298,25 +3253,15 @@ function taskEditor(t,after,occWhen,occEndDate){
       +experimentsOf(pr).map(e=>
         `<option value="e:${e.id}" ${t.experimentId===e.id?"selected":""}>&nbsp;&nbsp;› ${esc(e.title||"(unnamed experiment)")}</option>`).join("");
   }).join("");
-  // A parent can be another task/event OR an animal diary entry — anything
-  // except itself or anything already under it (wouldCreateCycle), across
-  // either kind. Grouped by animal for the diary half: unlike the
-  // project/experiment picker above, this optgroup label genuinely isn't
-  // redundant — the options underneath are the entries' own descriptions,
-  // not a repeat of the animal's name.
-  const taskParentOpts=taskList().filter(x=>x.id!==t.id&&!wouldCreateCycle(t.id,x.id))
+  // Any other task can be a parent, except itself or anything already under
+  // it (wouldCreateTaskCycle) — a task can't become its own ancestor.
+  const parentOpts=taskList().filter(x=>x.id!==t.id&&!wouldCreateTaskCycle(t.id,x.id))
     .sort((a,b)=>String(a.title||"").localeCompare(String(b.title||"")))
     .map(x=>`<option value="${x.id}" ${t.parentTaskId===x.id?"selected":""}>${esc(x.title||"(unnamed task)")}</option>`).join("");
-  const diaryParentOpts=DB.animals.filter(a=>(a.diary||[]).length).map(a=>{
-    const entries=a.diary.filter(e=>!wouldCreateCycle(t.id,e.id))
-      .map(e=>`<option value="${e.id}" ${t.parentTaskId===e.id?"selected":""}>${esc(diaryEntrySummary(e,a))}</option>`).join("");
-    return entries?`<optgroup label="🐁 ${escAttr(a.name)}">${entries}</optgroup>`:"";
-  }).join("");
-  const parentOpts=(taskParentOpts?`<optgroup label="Tasks &amp; events">${taskParentOpts}</optgroup>`:"")+diaryParentOpts;
-  const subtasks=subItemsOf(t.id);
+  const subtasks=taskList().filter(x=>x.parentTaskId===t.id);
   const subtaskRow=k=>{
     const fin=taskDone(k);
-    return `<div class="step-line${fin?" done":""}" data-id="${k.id}" data-kind="${k.kind||"task"}">
+    return `<div class="step-line${fin?" done":""}" data-id="${k.id}">
       <button type="button" class="step-dot" title="${fin?"Done — click to undo":"Mark done"}">${fin?"✓":""}</button>
       <span class="step-title">${esc(k.title||"(unnamed task)")}</span>
       ${k.repeat?`<span class="step-n">↻ ${esc(repeatLabel(k.repeat,k.when))}</span>`:""}
@@ -3375,10 +3320,10 @@ function taskEditor(t,after,occWhen,occEndDate){
       </div></div>
     <div class="fld"><label>Notes</label><textarea id="tk_notes" rows="3">${esc(t.notes||"")}</textarea></div>
     ${t.isEvent?"":`
-    <div class="fld"><label>Sub-item of</label>
-      <select id="tk_parent"><option value="">— not a sub-item —</option>${parentOpts}</select></div>
-    <div class="fld"><label>Sub-items</label>
-      <div id="tk_subtasks">${subtasks.length?subtasks.map(subtaskRow).join(""):`<div class="pc-empty">No sub-items yet.</div>`}</div>
+    <div class="fld"><label>Sub-task of</label>
+      <select id="tk_parent"><option value="">— not a sub-task —</option>${parentOpts}</select></div>
+    <div class="fld"><label>Sub-tasks</label>
+      <div id="tk_subtasks">${subtasks.length?subtasks.map(subtaskRow).join(""):`<div class="pc-empty">No sub-tasks yet.</div>`}</div>
       <button type="button" class="btn ghost" id="tk_addsub" style="margin-top:8px;font-size:12px">＋ Add sub-task</button></div>
     <div class="fld"><label>Part of</label>
       <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>`}
@@ -3451,28 +3396,15 @@ function taskEditor(t,after,occWhen,occEndDate){
   });
   const tkAddSub=document.getElementById("tk_addsub");
   if(tkAddSub) tkAddSub.onclick=()=>{
-    // Creating a new sub-item here always makes a task, never a diary entry
-    // — a diary entry needs an animal, and there's no sane default one to
-    // pick from a generic task editor. Nesting a diary entry under this
-    // task instead happens from that entry's own "Sub-item of" picker.
     const k=addTask({parentTaskId:t.id,projectId:t.projectId,experimentId:t.experimentId});
     taskEditor(k,()=>taskEditor(t,after,occWhen,occEndDate));
   };
   document.querySelectorAll("#tk_subtasks .step-line").forEach(el=>{
-    const returnHere=()=>taskEditor(t,after,occWhen,occEndDate);
-    if(el.dataset.kind==="diary"){
-      const found=diaryEntryById(el.dataset.id); if(!found)return;
-      el.querySelector(".step-dot").onclick=ev=>{
-        ev.stopPropagation(); setDiaryDone(found.e,!found.e.done); returnHere();
-      };
-      el.onclick=()=>openDiaryEntryModal(found.a,found.e.id,returnHere);
-      return;
-    }
     const k=taskOf(el.dataset.id); if(!k)return;
     el.querySelector(".step-dot").onclick=ev=>{
-      ev.stopPropagation(); setOccDone(k,k.when,!occDone(k,k.when)); returnHere();
+      ev.stopPropagation(); setOccDone(k,k.when,!occDone(k,k.when)); taskEditor(t,after,occWhen,occEndDate);
     };
-    el.onclick=()=>taskEditor(k,returnHere);
+    el.onclick=()=>taskEditor(k,()=>taskEditor(t,after,occWhen,occEndDate));
   });
   const tkColorAuto=document.getElementById("tk_color_auto");
   // An event's stand-in for the project colour a task would otherwise
@@ -4143,23 +4075,22 @@ function renderProjectPlan(id){
   const stepRow=(st,depth)=>{
     if(st._header) return `<div class="step-group-hdr">${esc(st._header)}</div>`;
     const fin=taskDone(st);
-    // Sub-items skip sortAndGroup's animal/type grouping — a single parent's
+    const isDiary=String(st.id).startsWith("d_");
+    // Sub-tasks skip sortAndGroup's animal/type grouping — a single parent's
     // own list is already a small, single-purpose cluster where that
     // grouping doesn't add anything — but still honor "Hide completed".
-    // subItemsOf() finds both task and diary children regardless of which
-    // kind st itself is — a diary entry can have its own sub-items too.
-    const kids=subItemsOf(st.id);
-    const visKids=(DB.config.expTaskHideDone?kids.filter(x=>!taskDone(x)):kids).slice().sort(sortCmp);
+    const kids=isDiary?[]:taskList().filter(x=>x.parentTaskId===st.id);
+    const visKids=(DB.config.expTaskHideDone?kids.filter(x=>!occDone(x,x.when)):kids).slice().sort(sortCmp);
     const open=openSteps.has(st.id);
     // The dot is a real toggle now, not just a readout — clicking it is the
     // whole point of replacing "the date passed" with "someone confirmed it".
-    return `<div class="step-line${fin?" done":""}" data-id="${st.id}" data-kind="${st.kind||"task"}" style="padding-left:${(depth||0)*16}px">
+    return `<div class="step-line${fin?" done":""}" data-id="${st.id}" style="padding-left:${(depth||0)*16}px">
       <button type="button" class="step-dot" title="${fin?"Done — click to undo":"Mark done"}">${fin?"✓":""}</button>
       <span class="step-title">${esc(st.title||"(unnamed task)")}</span>
       ${st.repeat?`<span class="step-n">↻ ${esc(repeatLabel(st.repeat,st.when))}</span>`:""}
       ${st.when?`<span class="step-date">${esc(taskSpan(st))}</span>`:`<span class="step-date unset">not scheduled</span>`}
       ${kids.length?`<button type="button" class="step-sub-caret" data-id="${st.id}">${open?"▾":"▸"} ${kids.length}</button>`:""}
-      <button type="button" class="step-sub-add" data-id="${st.id}" title="Add a sub-task">＋</button>
+      ${isDiary?"":`<button type="button" class="step-sub-add" data-id="${st.id}" title="Add a sub-task">＋</button>`}
     </div>${open&&visKids.length?visKids.map(k=>stepRow(k,(depth||0)+1)).join(""):""}`;
   };
   // shared by both task lists below: toggling the dot flips the right thing
@@ -4169,9 +4100,9 @@ function renderProjectPlan(id){
     const dot=el.querySelector(".step-dot"); if(!dot)return;
     dot.onclick=ev=>{
       ev.stopPropagation();
-      if(el.dataset.kind==="diary"){
+      if(el.dataset.id.startsWith("d_")){
         const found=diaryEntryById(el.dataset.id); if(!found)return;
-        setDiaryDone(found.e,!found.e.done);
+        found.e.done=!found.e.done; persist();
       } else {
         const t=taskOf(el.dataset.id); if(!t)return;
         setOccDone(t,t.when,!occDone(t,t.when));
@@ -4192,15 +4123,9 @@ function renderProjectPlan(id){
     });
     box.querySelectorAll(".step-sub-add").forEach(b=>b.onclick=e=>{
       e.stopPropagation();
-      const pid=b.dataset.id;
-      // The parent row can be a task or a diary entry either way — always
-      // adding a plain task as the child (a diary entry needs an animal,
-      // no sane default one to pick from a generic project-page row).
-      const parentTask=taskOf(pid);
-      const k=addTask({parentTaskId:pid,
-        projectId:parentTask?parentTask.projectId:null,
-        experimentId:parentTask?parentTask.experimentId:null});
-      openSteps.add(pid);
+      const parent=taskOf(b.dataset.id); if(!parent)return;
+      const k=addTask({parentTaskId:parent.id,projectId:parent.projectId,experimentId:parent.experimentId});
+      openSteps.add(parent.id);
       taskEditor(k,()=>renderProjectPlan(id));
     });
   };
@@ -4213,8 +4138,15 @@ function renderProjectPlan(id){
   const sortCmp=(a,b)=>(DB.config.expTaskSort==="date")
     ? (String(a.when||"9999").localeCompare(String(b.when||"9999"))||String(a.title||"").localeCompare(String(b.title||"")))
     : String(a.title||"").localeCompare(String(b.title||""));
+  // same done-check wireStepDot's own click handler uses to know which field
+  // to flip — a diary row's "done" is the entry's own flag, a task's is
+  // whether the occurrence at its own when has been checked off
+  function stepItemDone(x){
+    if(String(x.id).startsWith("d_")){ const f=diaryEntryById(x.id); return !!(f&&f.e.done); }
+    return occDone(x,x.when);
+  }
   function sortAndGroup(raw){
-    if(DB.config.expTaskHideDone) raw=raw.filter(x=>!taskDone(x));
+    if(DB.config.expTaskHideDone) raw=raw.filter(x=>!stepItemDone(x));
     const mode=DB.config.expTaskGroup||"none";
     if(mode==="none") return [...raw].sort(sortCmp);
     const keyOf=mode==="animal" ? (x=>x._animal||"General") : (x=>x._type||"Tasks");
@@ -4256,13 +4188,11 @@ function renderProjectPlan(id){
     box.innerHTML=roots.map(st=>card(st,0)).join("");
     box.querySelectorAll(".step-line").forEach(el=>{
       wireStepDot(el,()=>renderProjectPlan(id));
-      if(el.dataset.kind==="diary"){
+      // a diary row's id keeps the "d_" it was created with; a scheduled task
+      // keeps "tk_" — enough to tell which editor a click should open
+      if(el.dataset.id.startsWith("d_")){
         const found=diaryEntryById(el.dataset.id); if(!found)return;
-        // Opens the same entry editor a sub-item row or a Timeline click
-        // already does, instead of just landing on the Animals tab and
-        // making you find it yourself — otherwise a row advertising its
-        // own sub-items (the new caret) would have no way to reach them.
-        el.onclick=()=>openDiaryEntryModal(found.a,found.e.id,()=>renderProjectPlan(id));
+        el.onclick=()=>{ animalSearch=found.a.name; switchTo("animals"); };   // one-off jump, not a saved search — see openCalItem's own note
         return;
       }
       const t=taskOf(el.dataset.id); if(!t)return;
@@ -4314,15 +4244,6 @@ function renderProjectPlan(id){
     box.innerHTML=list.map(k=>stepRow(k,0)).join("");
     box.querySelectorAll(".step-line").forEach(el=>{
       wireStepDot(el,drawProjTasks);
-      // Top-level rows here are always tasks (diary entries have no
-      // projectId to match the filter above), but a task's own nested
-      // sub-items can be diary entries — same branch drawSteps' own
-      // wiring needs, for the same reason.
-      if(el.dataset.kind==="diary"){
-        const found=diaryEntryById(el.dataset.id); if(!found)return;
-        el.onclick=()=>openDiaryEntryModal(found.a,found.e.id,()=>renderProjectPlan(id));
-        return;
-      }
       const k=taskOf(el.dataset.id); if(!k)return;
       el.onclick=()=>taskEditor(k,()=>renderProjectPlan(id));
     });
@@ -7689,11 +7610,6 @@ function paintDiary(container,a,opts){
   if(opts.editId){
     const seed=a.diary.find(e=>e.id===opts.editId);
     if(seed){ selDate=seed.date; formType=seed.type; editingId=seed.id; }
-  } else if(opts.newType){
-    // Lands straight on the add-entry form for a fresh entry instead of the
-    // calendar-browse-then-pick-type path a bare open would otherwise
-    // start on — used by the Timeline's own "+ New" diary-entry flow.
-    selDate=opts.newDate||selDate; formType=opts.newType;
   }
   let expandedIds=new Set(); // entries currently showing their full read-only detail
   const WD=["Su","Mo","Tu","We","Th","Fr","Sa"];
@@ -7704,41 +7620,6 @@ function paintDiary(container,a,opts){
       <button type="button" class="btn ghost dg-cancel" style="font-size:11px;padding:4px 10px">Cancel</button>
       <button type="button" class="btn accent dg-save" style="font-size:11px;padding:4px 10px">Save</button>
     </div>`;
-  }
-  // Same "Sub-item of"/"Sub-items" pair taskEditor() has, generalized: a
-  // diary entry's parent (or child) can be a task or another diary entry
-  // either way. The picker's own value is gathered at Save time (below),
-  // same as every other field here — a brand-new entry has no id yet for
-  // anything to actually point at until then. The children list only makes
-  // sense once there's a real saved entry to be a parent of.
-  function subItemFieldsHTML(){
-    const selfId=editingId;
-    const currentParent=selfId?(a.diary.find(e=>e.id===selfId)||{}).parentTaskId||null:null;
-    const taskOpts=taskList().filter(x=>!selfId||!wouldCreateCycle(selfId,x.id))
-      .sort((x,y)=>String(x.title||"").localeCompare(String(y.title||"")))
-      .map(x=>`<option value="${x.id}" ${currentParent===x.id?"selected":""}>${esc(x.title||"(unnamed task)")}</option>`).join("");
-    const diaryOptsHTML=DB.animals.filter(an=>(an.diary||[]).length).map(an=>{
-      const entries=an.diary.filter(e=>e.id!==selfId&&(!selfId||!wouldCreateCycle(selfId,e.id)))
-        .map(e=>`<option value="${e.id}" ${currentParent===e.id?"selected":""}>${esc(diaryEntrySummary(e,an))}</option>`).join("");
-      return entries?`<optgroup label="🐁 ${escAttr(an.name)}">${entries}</optgroup>`:"";
-    }).join("");
-    const parentSelectHTML=`<select class="dg-f-parent">
-        <option value="">— not a sub-item —</option>
-        ${taskOpts?`<optgroup label="Tasks &amp; events">${taskOpts}</optgroup>`:""}
-        ${diaryOptsHTML}
-      </select>`;
-    const kids=selfId?subItemsOf(selfId):[];
-    const kidsHTML=selfId?`<div class="fld"><label>Sub-items</label>
-      <div class="dg-subitems">${kids.length?kids.map(k=>{
-        const fin=taskDone(k);
-        return `<div class="step-line${fin?" done":""}" data-id="${k.id}" data-kind="${k.kind||"task"}">
-          <button type="button" class="step-dot" title="${fin?"Done — click to undo":"Mark done"}">${fin?"✓":""}</button>
-          <span class="step-title">${esc(k.title||"(unnamed task)")}</span>
-          ${k.when?`<span class="step-date">${esc(taskSpan(k))}</span>`:`<span class="step-date unset">not scheduled</span>`}
-        </div>`;
-      }).join(""):`<div class="pc-empty">No sub-items yet.</div>`}</div>
-      <button type="button" class="btn ghost dg-addsub" style="margin-top:8px;font-size:11px">＋ Add sub-task</button></div>`:"";
-    return `<div class="fld"><label>Sub-item of</label>${parentSelectHTML}</div>${kidsHTML}`;
   }
   function renderForm(type,d,entryDate,entryTime,entryEndTime){
     d=d||{};
@@ -7764,7 +7645,6 @@ function paintDiary(container,a,opts){
       </div>
       ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
-      <div style="margin-top:6px">${subItemFieldsHTML()}</div>
       ${formActions()}</div>`;
   }
   function wireForm(host,type,editing){
@@ -7778,13 +7658,12 @@ function paintDiary(container,a,opts){
       draw();
     };
     // shared date+time picker (same drum-scroll UI tasks use), 15-minute steps
-    // A new entry starts at 08:00 (or whatever time it was created with, e.g.
-    // a Timeline drag-to-create) — nothing in the lab happens at midnight,
-    // and an all-day entry is still one click away by clearing the time.
+    // A new entry starts at 08:00 — nothing in the lab happens at midnight, and
+    // an all-day entry is still one click away by clearing the time.
     let dtValue=editing
       ? editing.date+(editing.time?"T"+editing.time:"")
-      : selDate+"T"+(opts.newTime||DEFAULT_ENTRY_TIME);
-    let endTimeValue=editing?editing.endTime||"":(opts.newEndTime||"");
+      : selDate+"T"+DEFAULT_ENTRY_TIME;
+    let endTimeValue=editing?editing.endTime||"":"";
     const endWrap=host.querySelector(".dg-f-endwrap");
     bindDateButton(host.querySelector(".dg-f-datetime"), ()=>dtValue, v=>{
       dtValue=v||selDate;
@@ -7877,9 +7756,8 @@ function paintDiary(container,a,opts){
         });
       }
       data.note=host.querySelector(".dg-f-note").value.trim();
-      const parentTaskId=host.querySelector(".dg-f-parent").value||null;
-      if(editing){ editing.data=data; editing.date=entryDate; editing.time=entryTime; editing.endTime=entryEndTime; editing.edited=Date.now(); editing.parentTaskId=parentTaskId; }
-      else { a.diary.push({id:uid("d_"), type, date:entryDate, time:entryTime, endTime:entryEndTime, created:Date.now(), edited:null, data, parentTaskId}); }
+      if(editing){ editing.data=data; editing.date=entryDate; editing.time=entryTime; editing.endTime=entryEndTime; editing.edited=Date.now(); }
+      else { a.diary.push({id:uid("d_"), type, date:entryDate, time:entryTime, endTime:entryEndTime, created:Date.now(), edited:null, data}); }
       // perfusion terminates the animal as part of the procedure, so it always
       // implies sacrifice (not the reverse) - only for a completed (today or
       // earlier), not a future-scheduled, entry.
@@ -7889,32 +7767,6 @@ function paintDiary(container,a,opts){
       if(opts.closeOnDone){ closeModal(); return; }
       draw();
     };
-    // Returns to *this* entry's own editor after a sub-item's editor closes
-    // — a fresh modal when this one is itself a Timeline-opened modal (same
-    // "reopen" trick taskEditor's own sub-items use), or just a redraw when
-    // this is the animal panel's inline widget, since there's no modal to
-    // return to there.
-    const returnHere=()=>{ opts.closeOnDone ? openDiaryEntryModal(a,editingId,opts.onChange) : draw(); };
-    const addSubBtn=host.querySelector(".dg-addsub");
-    if(addSubBtn) addSubBtn.onclick=()=>{
-      const k=addTask({parentTaskId:editingId});
-      taskEditor(k,returnHere);
-    };
-    host.querySelectorAll(".dg-subitems .step-line").forEach(el=>{
-      if(el.dataset.kind==="diary"){
-        const found=diaryEntryById(el.dataset.id); if(!found)return;
-        el.querySelector(".step-dot").onclick=ev=>{
-          ev.stopPropagation(); setDiaryDone(found.e,!found.e.done); returnHere();
-        };
-        el.onclick=()=>openDiaryEntryModal(found.a,found.e.id,returnHere);
-        return;
-      }
-      const k=taskOf(el.dataset.id); if(!k)return;
-      el.querySelector(".step-dot").onclick=ev=>{
-        ev.stopPropagation(); setOccDone(k,k.when,!occDone(k,k.when)); returnHere();
-      };
-      el.onclick=()=>taskEditor(k,returnHere);
-    });
   }
 
   function draw(){
@@ -8007,8 +7859,7 @@ function paintDiary(container,a,opts){
     if(formType){
       const host=container.querySelector(".dg-formhost");
       const editing=editingId?a.diary.find(e=>e.id===editingId):null;
-      host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate,
-        editing?editing.time:(opts.newTime||""), editing?editing.endTime:(opts.newEndTime||""));
+      host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate, editing?editing.time:"", editing?editing.endTime:"");
       wireForm(host,formType,editing);
     }
   }
@@ -8031,8 +7882,8 @@ function paintDiary(container,a,opts){
       formType=entry.type; editingId=entry.id; draw();
     } else if(delBtn){
       if(confirm("Delete this diary entry?")){
-        deleteDiaryEntry(a,delBtn.dataset.id);
-        notifyChange(); draw();
+        a.diary=a.diary.filter(x=>x.id!==delBtn.dataset.id);
+        persist(); notifyChange(); draw();
       }
     }
   });
@@ -9284,10 +9135,6 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
   function paintTask(){ closeModal(); openNewTaskModal(prefillDeadline,prefillEnd,false); }
   function paintEvent(){ closeModal(); openNewTaskModal(prefillDeadline,prefillEnd,true); }
 
-  // Only asks the one thing paintDiary() itself can't — which animal, and
-  // which type to start with — then hands off entirely to the real widget
-  // (same one the animal panel and a Timeline click both already use)
-  // instead of re-implementing its whole form a second time.
   function paintDiary(){
     if(!animals.length){ body.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:10px 0">No animals yet — add one on the Animals tab first.</div>`; return; }
     const types=diaryTypeDefs();
@@ -9298,12 +9145,85 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
         <div class="fld" style="flex:1"><label>Type</label>
           <select id="tc_type">${types.map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}</select></div>
       </div>
-      <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="tc_continue">Continue</button></div>`;
-    document.getElementById("tc_continue").onclick=()=>{
+      <div class="drow">
+        <div class="fld" style="flex:1"><label>Date &amp; start time</label>
+          <button type="button" id="tc_dt" class="datebtn"></button></div>
+        <div class="fld" style="flex:1;${time?"":"display:none"}" id="tc_endwrap"><label>End time</label>
+          <button type="button" id="tc_endtime" class="datebtn datebtn-empty"><span style="opacity:.55;margin-right:6px">🕐</span>set end time</button></div>
+      </div>
+      <div id="tc_fields"></div>
+      <label style="margin-top:6px;display:block">Note</label><textarea id="tc_note"></textarea>
+      <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="tc_save">Save</button></div>`;
+
+    let dtValue=date+(time?"T"+time:""), endTimeValue=time?endTime:"";
+    const dtBtn=document.getElementById("tc_dt");
+    dtBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${fmtWhenFull(dtValue)}`;
+    const endWrap=document.getElementById("tc_endwrap");
+    bindDateButton(dtBtn, ()=>dtValue, v=>{
+      dtValue=v||date; endWrap.style.display=hasTime(dtValue)?"":"none";
+      if(!hasTime(dtValue)) endTimeValue="";
+    }, 15);
+    bindTimeButton(document.getElementById("tc_endtime"), ()=>endTimeValue, v=>{ endTimeValue=v||""; }, 15);
+    // bindTimeButton only repaints the label once the picker is actually
+    // used — an end time carried in from a create-drag needs painting once
+    // up front, or it's correct internally but invisible until you open it
+    if(endTimeValue){
+      const endBtn=document.getElementById("tc_endtime");
+      endBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">🕐</span>${endTimeValue}`;
+      endBtn.classList.remove("datebtn-empty");
+    }
+
+    const typeSel=document.getElementById("tc_type"), fieldsHost=document.getElementById("tc_fields");
+    function paintFields(){
+      const type=typeSel.value;
+      if(type==="training"){
+        fieldsHost.innerHTML=`<label style="margin-top:6px;display:block">Task</label>
+          <input id="tc_task" list="tc_tasklist" autocomplete="off" placeholder="e.g. 2AFC lick">
+          <datalist id="tc_tasklist">${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t.name)}">`).join("")}</datalist>
+          <div id="tc_metrics" style="margin-top:6px">${renderMetricsFields("",{})}</div>`;
+        document.getElementById("tc_task").addEventListener("input",e=>{
+          document.getElementById("tc_metrics").innerHTML=renderMetricsFields(e.target.value.trim(),{});
+        });
+      } else {
+        fieldsHost.innerHTML=renderTypeFields(type,{});
+      }
+    }
+    typeSel.onchange=paintFields; paintFields();
+
+    document.getElementById("tc_save").onclick=()=>{
       const a=DB.animals.find(x=>x.id===document.getElementById("tc_animal").value); if(!a)return;
-      const type=document.getElementById("tc_type").value;
-      closeModal();
-      openDiaryEntryModal(a,null,render,{newType:type,newDate:date,newTime:time||null,newEndTime:endTime||null});
+      const type=typeSel.value;
+      const entryDate=(dtValue||date).slice(0,10);
+      const entryTime=hasTime(dtValue)?dtValue.slice(11,16):null;
+      if(endTimeValue&&entryTime&&endTimeValue<=entryTime){ toast("End time must be after the start time — not saved"); return; }
+      const entryEndTime=(entryTime&&endTimeValue&&endTimeValue>entryTime)?endTimeValue:null;
+      let data={};
+      if(type==="training"){
+        const taskName=document.getElementById("tc_task").value.trim();
+        const metrics={};
+        fieldsHost.querySelectorAll(".dg-metric-field").forEach(el=>{
+          const raw=el.value;
+          if(el.dataset.type==="yesno"){ if(raw!=="")metrics[el.dataset.key]=raw==="1"; return; }
+          if(el.dataset.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))metrics[el.dataset.key]=n; return; }
+          if(raw.trim()!=="")metrics[el.dataset.key]=raw.trim();
+        });
+        data={task:taskName, metrics};
+      } else {
+        const def=diaryTypeDef(type);
+        def.fields.forEach(f=>{
+          const el=[...fieldsHost.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
+          if(!el)return;
+          const raw=el.value;
+          if(f.type==="yesno"){ if(raw!=="")data[f.key]=raw==="1"; return; }
+          if(f.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))data[f.key]=n; return; }
+          if(raw.trim()!=="")data[f.key]=raw.trim();
+        });
+      }
+      data.note=document.getElementById("tc_note").value.trim();
+      a.diary.push({id:uid("d_"), type, date:entryDate, time:entryTime, endTime:entryEndTime, created:Date.now(), edited:null, data});
+      if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
+      persist(); closeModal(); render();
+      toast(`${diaryTypeDef(type).label} entry added for ${a.name}`);
     };
   }
 
