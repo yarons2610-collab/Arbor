@@ -1067,6 +1067,26 @@ const GCAL_COLORS=[
 // cohorts the user creates via "+ Cohort", no pre-populated names
 const COHORT_DOMAIN_SEED={};
 function cohortByName(name){ return (DB.cohorts||[]).find(c=>c.name===name); }
+// Bottom-up, not top-down: a cohort is a fact about the colony (this batch of
+// mice arrived/were bred together) rather than a plan for an experiment — the
+// opposite direction from an experiment's own groups, which exist because the
+// design says so before any animal is assigned to one. Just a name typed onto
+// an animal; a DB.cohorts entity (and its colour) is created the first time a
+// new name is used, never through a separate "define a cohort first" step.
+function syncCohorts(){
+  if(!Array.isArray(DB.cohorts))DB.cohorts=[];
+  const names=[...new Set([...DB.animals.map(a=>a.cohort).filter(Boolean), ...Object.keys(COHORT_DOMAIN_SEED)])];
+  names.forEach(nm=>{
+    if(DB.cohorts.some(c=>c.name===nm))return;
+    const domName=COHORT_DOMAIN_SEED[nm]; const dom=DB.domains.find(d=>d.name===domName);
+    DB.cohorts.push({id:uid("co_"),name:nm,domainId:dom?dom.id:(DB.domains[0]?DB.domains[0].id:null)});
+  });
+  DB.cohorts.forEach((c,i)=>{
+    if(c.color)return;
+    const dom=domById(c.domainId);
+    c.color=dom?dom.color:DOMAIN_PALETTE[i%DOMAIN_PALETTE.length];
+  });
+}
 let saveTimer=null, storageOK=null;
 /* ── PERSISTENCE ─────────────────────────────────────────────────────────────
    Desktop build: DB is stored as a plain JSON file on disk, read/written by the
@@ -1486,6 +1506,7 @@ function migrate(){                       // backfill fields added in later vers
   animalStatus=DB.config.animalFilters.status||"all";
   animalExperiment=DB.config.animalFilters.experiment||"all";
   animalGroup=DB.config.animalFilters.group||"all";
+  animalCohort=DB.config.animalFilters.cohort||"all";
   // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
   // may still carry — each meant ascending (earliest/oldest first) already,
   // so map them onto their explicit _asc equivalent rather than losing the
@@ -1574,22 +1595,7 @@ function migrate(){                       // backfill fields added in later vers
   // field is now removed; see below). A task set that way would look fine
   // until the next reload, then vanish with no diary entry to show for it.
   if(!DB._procTasksPruned){ DB.tasks=DB.tasks.filter(t=>!t.procedureType); DB._procTasksPruned=true; }
-  if(!DB.cohorts)DB.cohorts=[];
-  // build cohort entities from any cohort names present on animals, linking via the seed map
-  const names=[...new Set([...DB.animals.map(a=>a.cohort).filter(Boolean), ...Object.keys(COHORT_DOMAIN_SEED)])];
-  names.forEach(nm=>{
-    if(DB.cohorts.some(c=>c.name===nm))return;
-    const domName=COHORT_DOMAIN_SEED[nm]; const dom=DB.domains.find(d=>d.name===domName);
-    DB.cohorts.push({id:uid("co_"),name:nm,domainId:dom?dom.id:(DB.domains[0]?DB.domains[0].id:null)});
-  });
-  // cohorts now own their own colour directly instead of inheriting one through a linked
-  // domain (mice have cohorts, not domains) — backfill from the old domain link once, then
-  // the domainId becomes vestigial (kept only so any legacy data referencing it still loads).
-  DB.cohorts.forEach((c,i)=>{
-    if(c.color)return;
-    const dom=domById(c.domainId);
-    c.color=dom?dom.color:DOMAIN_PALETTE[i%DOMAIN_PALETTE.length];
-  });
+  syncCohorts();
   // somata (DB.domains) gained a free-text outline: the plan for the project in
   // the user's own words. Additive only — nothing else about a soma changed.
   // A soma is a paper now: what was its free-text outline is its abstract, and
@@ -6776,7 +6782,7 @@ function noteModal(id,over){
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
-let animalExperiment="all", animalGroup="all", animalStatus="all", animalSearch="", animalSort="name";
+let animalExperiment="all", animalGroup="all", animalCohort="all", animalStatus="all", animalSearch="", animalSort="name";
 // Which animal cards have their detail panel open — tracked here rather than
 // as pure per-card DOM state, so a full renderAnimals() (needed whenever a
 // quick-edit might change which animals a status filter or a dob/sacrificed
@@ -6973,7 +6979,7 @@ function renderAnimals(){
       `<option value="${escAttr(o[0])}" ${String(cur)===String(o[0])?"selected":""}>${esc(o[1])}</option>`).join("")}</select>`;
   bar.innerHTML=`
     <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin-bottom:10px;align-items:center">
-      <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search name, cage, strain, notes or experiment…"
+      <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search name, cage, strain, cohort, notes or experiment…"
         style="flex:1 1 160px;max-width:340px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
       <div class="af-sortbar"><span class="af-label af-sort">↕ Sort by</span>
         <select id="a_sort" class="af-sel af-sort">${[["name","Name"],
@@ -6987,6 +6993,7 @@ function renderAnimals(){
       </div>
     </div>
     <div class="af-grid">
+      ${DB.cohorts.length?col("Cohort","a_cohort",animalCohort,[["all","All cohorts"],["none","No cohort"],...[...DB.cohorts].sort((a,b)=>a.name.localeCompare(b.name)).map(c=>[c.name,c.name])]):""}
       ${expNames.length?col("Experiment","a_exp",animalExperiment,[["all","All experiments"],["none","Unattached"],...expNames]):""}
       ${groupNames.length?col("Group","a_group",animalGroup,[["all","All groups"],...groupNames.map(g=>[g,g])]):""}
       ${col("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
@@ -6994,6 +7001,7 @@ function renderAnimals(){
 `;
   host.appendChild(bar);
   const onPick=(id,fn)=>{ const el=bar.querySelector("#"+id); if(el)el.addEventListener("change",e=>fn(e.target.value)); };
+  onPick("a_cohort",v=>{ animalCohort=v; DB.config.animalFilters.cohort=v; persist(); renderAnimals(); });
   onPick("a_exp",v=>{ animalExperiment=v; DB.config.animalFilters.experiment=v; persist(); renderAnimals(); });
   onPick("a_group",v=>{ animalGroup=v; DB.config.animalFilters.group=v; persist(); renderAnimals(); });
   onPick("a_sort",v=>{ animalSort=v; DB.config.animalFilters.sort=v; persist(); renderAnimals(); });
@@ -7018,8 +7026,9 @@ function renderAnimals(){
     // a.comments can be rich HTML now — search the text it actually reads as,
     // not the raw markup (a stray tag shouldn't matter, and shouldn't need
     // to appear in the search term to find a match either)
-    return [a.name,a.cage,a.strain,richTextPlain(richBodyHTML(a.comments,a.commentsRich)),...where].some(v=>v && String(v).toLowerCase().includes(q));
+    return [a.name,a.cage,a.strain,a.cohort,richTextPlain(richBodyHTML(a.comments,a.commentsRich)),...where].some(v=>v && String(v).toLowerCase().includes(q));
   }
+  const inCohort=(a,name)=>name==="all"||(name==="none"?!a.cohort:a.cohort===name);
   // in an experiment = linked to it, or assigned to one of its groups
   const inExperiment=(a,sid)=>{
     if(sid==="all")return true;
@@ -7033,7 +7042,7 @@ function renderAnimals(){
       &&(animalExperiment==="all"||x.st.id===animalExperiment));
   };
   let list=DB.animals.filter(a=>
-    inExperiment(a,animalExperiment) && inGroup(a,animalGroup) &&
+    inCohort(a,animalCohort) && inExperiment(a,animalExperiment) && inGroup(a,animalGroup) &&
     (animalStatus==="all"||a.termination===animalStatus) &&
     searchMatch(a));
   // Missing dates sort last whichever way round, so a half-filled column never
@@ -7079,6 +7088,7 @@ function animalCard(a){
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="width:9px;height:9px;border-radius:50%;background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};flex:0 0 auto" title="${{alive:"Alive",sacrificed:"Sacrificed",early_death:"Early death",excluded:"Excluded"}[a.termination]||""}"></span>
       <span style="font-weight:500;font-size:14px">${esc(a.name)}</span>
+      ${a.cohort?`<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);background:var(--panel2);border:1px solid var(--line2);border-radius:5px;padding:1px 6px" title="Cohort"><span style="width:6px;height:6px;border-radius:50%;background:${(cohortByName(a.cohort)||{}).color||"#5b6678"};flex:0 0 auto"></span>${esc(a.cohort)}</span>`:""}
       <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">${esc(a.cage||"")}${a.sex?" · "+esc(a.sex):""}${a.strain?" · "+esc(a.strain):""}${aw!=null?" · "+aw+"w":""}${lw!=null?" · ⚖ "+lw+"g":""}</span>
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:100%;justify-content:flex-end">
         <button class="a-log" data-id="${a.id}" title="Chronological event log" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">📋</button>
@@ -8320,6 +8330,8 @@ function animalModal(id,draft){
   modal(`<h3>${id?"Edit":"New"} animal</h3>
     <div class="drow">${F("am_name","Name",view.name)}</div>
     <div class="fld"><label>Experiments &amp; groups</label><div id="am_attach"></div></div>
+    <div class="fld"><label>Cohort</label><input id="am_cohort" list="am_cohort_list" value="${escAttr(view.cohort)}" placeholder="which batch/litter this animal is from">
+      <datalist id="am_cohort_list">${(DB.cohorts||[]).map(c=>`<option value="${escAttr(c.name)}">`).join("")}</datalist></div>
     <div class="drow">${F("am_cage","Cage",view.cage)}${F("am_sex","Sex",view.sex)}${F("am_strain","Strain",view.strain)}</div>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",view.dob)}</div>
@@ -8385,6 +8397,7 @@ function animalModal(id,draft){
   function goToLibrary(focus){
     const d={
       name:document.getElementById("am_name").value,
+      cohort:document.getElementById("am_cohort").value,
       cage:document.getElementById("am_cage").value,
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
@@ -8405,6 +8418,7 @@ function animalModal(id,draft){
     // only headpost/window/injections come from the template.
     const d={
       name:document.getElementById("am_name").value,
+      cohort:document.getElementById("am_cohort").value,
       cage:document.getElementById("am_cage").value,
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
@@ -8431,7 +8445,8 @@ function animalModal(id,draft){
     const snap=procEditor.getSnapshot();
     const cleanInjs=snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
     const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
-    const rec={name,cage:document.getElementById("am_cage").value.trim(),
+    const rec={name,cohort:document.getElementById("am_cohort").value.trim(),
+      cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
       dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
       termination, alive:termination==="alive",
@@ -8443,6 +8458,7 @@ function animalModal(id,draft){
       DB.animals.push({id:newId,created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],...rec});
       applyPendingExperiments(newId,pendingExp);
     }
+    syncCohorts();
     persist(); closeModal(); render(); toast(id?"Animal updated":"Animal added");
   };
   if(id)document.getElementById("am_del").onclick=()=>{ if(confirm("Delete this animal record?")){DB.animals=DB.animals.filter(x=>x.id!==id);persist();closeModal();render();toast("Deleted");}};
