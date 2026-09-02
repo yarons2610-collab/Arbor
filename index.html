@@ -989,15 +989,16 @@ if("serviceWorker" in navigator){
 const KEY="arbor_workspace_v3";   // v3: retire stale v2 storage that carried old example tasks; load embedded (uploaded) data fresh
 const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // What a diary entry's colour means on the Timeline: "type" gives the entry
-  // type the fill and the animal's project a thin edge, "project" gives the
-  // project everything. Tasks and experiments are project-coloured either way.
+  // type the fill and the animal's home experiment a thin edge; "experiment"
+  // or "project" gives that one thing the fill instead, edge gone. Tasks and
+  // experiments are coloured by their own record either way.
   calColorBy:"type",
   // How an experiment's combined task+diary list is ordered and clustered.
   expTaskSort:"alpha", expTaskGroup:"none", notesSort:"updated_desc",
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
-  animalFilters:{tag:"all",experiment:"all",group:"all",status:"all",operated:"all",search:"",sort:"name"},
+  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",operated:"all",search:"",sort:"name"},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // Named, colour-coded event categories — tasks already get an implicit
   // colour from whatever project they're attached to, but an event (isEvent:
@@ -1516,6 +1517,7 @@ function migrate(){                       // backfill fields added in later vers
   animalExperiment=DB.config.animalFilters.experiment||"all";
   animalGroup=DB.config.animalFilters.group||"all";
   animalTag=DB.config.animalFilters.tag||"all";
+  animalProject=DB.config.animalFilters.project||"all";
   animalOperated=DB.config.animalFilters.operated||"all";
   // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
   // may still carry — each meant ascending (earliest/oldest first) already,
@@ -1627,10 +1629,28 @@ function migrate(){                       // backfill fields added in later vers
   // and not on the soma. Any older soma-to-soma link lands on the receiver's
   // References dendrite if it has one, so nothing is silently dropped.
   DB.tasks.forEach(t=>{ if(!Array.isArray(t.refs)) t.refs=[]; });
-  // Projects: a plain container that owns nothing of its own and only holds
-  // links to records that live in the other tabs.
+  // Projects: back as an optional grouping layer over experiments — a
+  // project owns nothing itself and holds only its own links; an experiment
+  // just carries a nullable projectId, so nothing is ever forced to belong
+  // to one before that's actually known.
   if(!Array.isArray(DB.projects)) DB.projects=[];
   if(!Array.isArray(DB.experiments)) DB.experiments=[];
+  // An experiment's projectId is undefined on anything that predates this
+  // field. It can also be *stale* rather than merely absent: the old nested-
+  // project flatten below (see st.projectId=pr.id further down, from before
+  // Projects was removed) baked a project's id onto its experiments right
+  // before wiping DB.projects to [] — so any non-null value here is
+  // guaranteed dangling until checked against a project that actually
+  // exists.
+  DB.experiments.forEach(ex=>{
+    if(ex.projectId!=null && !DB.projects.some(p=>p.id===ex.projectId)) ex.projectId=null;
+    if(ex.projectId===undefined) ex.projectId=null;
+  });
+  // calColorBy's "project" value briefly meant "colour by experiment" while
+  // Projects was removed (see calColourSegHTML) — reclaiming it for real
+  // Project colouring now, so any workspace that saved that preference
+  // during the removal keeps the same colouring behaviour under its new name.
+  if(DB.config.calColorBy==="project") DB.config.calColorBy="experiment";
   if(!Array.isArray(DB.schedule)) DB.schedule=[];
   // A task used to be a child row inside its experiment. It is its own record
   // now so it can exist before it belongs anywhere. Lift them out once, keeping
@@ -2741,9 +2761,11 @@ function projCatsHTML(owner,keyPrefix){
 }
 
 /* ---- experiments and tasks ----
-   An experiment is its own top-level record (DB.experiments) — there used
-   to be a "project" grouping several of them together, removed because it
-   forced deciding where something belonged before that was actually known.
+   An experiment is its own top-level record (DB.experiments), not a child
+   of anything — one can exist, and be worked on, with no project at all. A
+   project is an optional label an experiment may point back at afterward
+   (experiment.projectId), once grouping it with others actually says
+   something useful — never a container it has to be created inside.
    A task does not live inside an experiment either: it is its own record
    that MAY name one, so one can be written down from the calendar before
    you know where it belongs, and attached later. DB.tasks is still the
@@ -2753,6 +2775,11 @@ function taskList(){ return DB.schedule||(DB.schedule=[]); }
 function taskOf(id){ return taskList().find(x=>x.id===id); }
 function tasksFor(expId){ return taskList().filter(t=>t.experimentId===expId); }
 function expById(id){ return DB.experiments.find(x=>x.id===id); }
+function projById(id){ return DB.projects.find(x=>x.id===id); }
+// Ids are globally distinct (st_ vs pj_ prefixes), so a combined lookup
+// never needs a kind tag or prefix-parsing to tell the two apart.
+function expOrProjById(id){ return expById(id)||projById(id); }
+function entityLabel(x){ return x.title!=null ? (x.title||"(unnamed experiment)") : (x.name||"(unnamed project)"); }
 // A task is finished once its date has gone by; an unscheduled one never is.
 // An experiment is finished when you have written down what happened.
 // A diary row reaching this (see diaryTasksForStep) carries the real diary
@@ -3084,7 +3111,7 @@ function stepColor(st){ return st.color||"#7db4ff"; }
 function addExperiment(){
   const ex={id:uid("st_"),color:DOMAIN_PALETTE[DB.experiments.length%DOMAIN_PALETTE.length],
     title:"",question:"",description:"",hypothesis:"",exclusions:"",outcome:"",
-    groupDefs:[],groups:{},deadline:null,endDate:null,duration:null,links:[],created:Date.now()};
+    groupDefs:[],groups:{},deadline:null,endDate:null,duration:null,links:[],created:Date.now(),projectId:null};
   DB.experiments.push(ex); persist(); return ex;
 }
 // deleting an experiment orphans its tasks rather than destroying them — they
@@ -3093,6 +3120,17 @@ function addExperiment(){
 function deleteExperiment(id){
   taskList().forEach(t=>{ if(t.experimentId===id) t.experimentId=null; });
   DB.experiments=DB.experiments.filter(x=>x.id!==id); persist();
+}
+function addProject(){
+  const pr={id:uid("pj_"),name:"",color:DOMAIN_PALETTE[DB.projects.length%DOMAIN_PALETTE.length],
+    question:"",notes:"",links:[],created:Date.now()};
+  DB.projects.push(pr); persist(); return pr;
+}
+// deleting a project unassigns its member experiments rather than destroying
+// them — same "attach later" reasoning as deleteExperiment above
+function deleteProject(id){
+  DB.experiments.forEach(ex=>{ if(ex.projectId===id) ex.projectId=null; });
+  DB.projects=DB.projects.filter(x=>x.id!==id); persist();
 }
 // A diary entry (a weight, a surgery, a training session…) belongs to the
 // experiment through the animal it was logged for — the same test animalsForStep
@@ -3599,6 +3637,9 @@ function experimentModal(st,after){
       <div class="fld" style="flex:1"><label>Name</label><input id="sm_name" value="${escAttr(st.title)}" autofocus></div>
       <input type="color" id="sm_color" value="${st.color||"#7db4ff"}" style="width:34px;height:34px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto;align-self:flex-end;margin-bottom:2px">
     </div>
+    <div class="fld"><label>Project</label>
+      <select id="sm_proj"><option value="">No project</option>${[...DB.projects].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).map(pr=>
+        `<option value="${pr.id}" ${st.projectId===pr.id?"selected":""}>${esc(pr.name||"(unnamed project)")}</option>`).join("")}<option value="__new__">+ New project…</option></select></div>
     <div class="fld"><label>Research question</label>
       <textarea id="sm_q" rows="2">${esc(st.question||"")}</textarea></div>
     <div class="fld"><label>Experiment plan</label>
@@ -3639,6 +3680,14 @@ function experimentModal(st,after){
   };
   bindDateButton(document.getElementById("sm_start"), ()=>st.deadline||"", v=>{ st.deadline=v||null; persist(); });
   bindDateButton(document.getElementById("sm_end"),   ()=>st.endDate||"",  v=>{ st.endDate=v||null;  persist(); });
+  document.getElementById("sm_proj").addEventListener("change",e=>{
+    if(e.target.value==="__new__"){
+      const pr=addProject(); st.projectId=pr.id; persist();
+      save(); closeModal(); projectModal(pr,()=>experimentModal(st,after));
+      return;
+    }
+    st.projectId=e.target.value||null; persist();
+  });
 
   function drawGroupDefs(){
     const box=document.getElementById("sm_gdefs");
@@ -3680,6 +3729,36 @@ function experimentModal(st,after){
     deleteExperiment(st.id); closeModal(); if(after)after(); };
   document.getElementById("sm_save").onclick=()=>{ save(); closeModal(); if(after)after(); };
 }
+// A project groups experiments after the fact — it owns no steps of its own,
+// just a name/colour/question and whatever it links to directly ("the
+// project in general", as opposed to any one of its member experiments).
+function projectModal(pr,after){
+  modal(`<h3>Project</h3>
+    <div class="drow">
+      <div class="fld" style="flex:1"><label>Name</label><input id="pm_name" value="${escAttr(pr.name)}" autofocus></div>
+      <input type="color" id="pm_color" value="${pr.color||"#7db4ff"}" style="width:34px;height:34px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto;align-self:flex-end;margin-bottom:2px">
+    </div>
+    <div class="fld"><label>Research question</label>
+      <textarea id="pm_q" rows="2">${esc(pr.question||"")}</textarea></div>
+    <div class="fld"><label>Notes</label>
+      <textarea id="pm_notes" rows="3">${esc(pr.notes||"")}</textarea></div>
+    <div class="fld"><label>Uses</label><div id="pm_links"></div></div>
+    <div class="drow" style="margin-top:16px"><button class="btn danger" id="pm_del">Delete project</button></div>
+    <div class="actions"><button class="btn accent" id="pm_save">Done</button></div>`,{wide:true});
+  const save=()=>{
+    pr.name=document.getElementById("pm_name").value;
+    pr.color=document.getElementById("pm_color").value;
+    pr.question=document.getElementById("pm_q").value;
+    pr.notes=document.getElementById("pm_notes").value;
+    persist();
+  };
+  mountLinkEditor(document.getElementById("pm_links"),pr,()=>{});
+  document.getElementById("pm_del").onclick=()=>{
+    const n=DB.experiments.filter(ex=>ex.projectId===pr.id).length;
+    if(!confirm(`Delete "${pr.name||"this project"}"?${n?` ${n} experiment${n!==1?"s":""} currently in it will become unassigned.`:""}`))return;
+    deleteProject(pr.id); closeModal(); if(after)after(); };
+  document.getElementById("pm_save").onclick=()=>{ save(); closeModal(); if(after)after(); };
+}
 
 // Every (project, experiment, group) an animal is assigned to. Derived, never
 // stored on the animal — the assignment lives on the experiment that made it.
@@ -3716,12 +3795,14 @@ function animalColor(a){
 }
 // Two channels, two variables: what kind of entry this is (the fill, backed up
 // by the icon the chip already carries) and which experiment the animal belongs to
-// (a thin edge down the right). Under "experiment" the experiment takes the fill and
-// the edge goes away, so the whole calendar reads as a single variable.
+// (a thin edge down the right). Under "experiment" or "project" that one takes
+// the fill and the edge goes away, so the whole calendar reads as a single variable.
 function diaryColors(an,def){
   const ex=animalHomeExperiment(an.id);
   const expc=ex?ex.color:null;
-  if((DB.config.calColorBy||"type")==="project") return {fill:expc||"#5b6678",edge:null};
+  const mode=DB.config.calColorBy||"type";
+  if(mode==="experiment") return {fill:expc||"#5b6678",edge:null};
+  if(mode==="project"){ const pr=ex&&ex.projectId?projById(ex.projectId):null; return {fill:pr?pr.color:"#5b6678",edge:null}; }
   return {fill:def.color,edge:expc};
 }
 const edgeCSS=c=>c?`border-right:3px solid ${c};`:"";
@@ -3764,21 +3845,30 @@ function mountPendingExperiments(host,pending){
 // saved there is nothing for an experiment to point at, so the choices are kept
 // here and written the moment it has an id. No groups — only an animal sits in
 // one of those.
+// A flat <select> split into two <optgroup>s rather than the old p:/e: string-
+// prefix scheme — ids are already globally distinct, so no prefix is needed,
+// and an empty side (e.g. no projects yet) is simply omitted.
+function expProjOptionsHTML(exclude){
+  const exps=DB.experiments.filter(e=>!exclude.includes(e.id));
+  const projs=DB.projects.filter(p=>!exclude.includes(p.id));
+  return (exps.length?`<optgroup label="Experiments">${exps.map(e=>
+      `<option value="${e.id}">${esc(entityLabel(e))}</option>`).join("")}</optgroup>`:"")
+    +(projs.length?`<optgroup label="Projects">${projs.map(p=>
+      `<option value="${p.id}">${esc(entityLabel(p))}</option>`).join("")}</optgroup>`:"");
+}
 function mountPendingLinks(host,pending){
   const draw=()=>{
-    if(!DB.experiments.length){ host.innerHTML=`<div class="pc-empty">No experiments yet.</div>`; return; }
-    const rowLabel=v=>{ const found=expById(v); return found?esc(found.title||"(unnamed experiment)"):null; };
+    if(!DB.experiments.length&&!DB.projects.length){ host.innerHTML=`<div class="pc-empty">No experiments or projects yet.</div>`; return; }
+    const rowLabel=v=>{ const found=expOrProjById(v); return found?esc(entityLabel(found)):null; };
     host.innerHTML=`${pending.map((v,i)=>{
         const label=rowLabel(v); if(!label)return "";
         return `<div class="ag-row" data-i="${i}">
           <span class="ag-where">${label}</span>
           <button class="ag-del" title="Remove">✕</button>
         </div>`;
-      }).join("")||`<div class="pc-empty">Not linked to any experiment yet.</div>`}
+      }).join("")||`<div class="pc-empty">Not linked to anything yet.</div>`}
       <div class="ag-add">
-        <select id="ag_pendlink"><option value="">＋ add to an experiment…</option>${
-          DB.experiments.filter(e=>!pending.includes(e.id))
-            .map(e=>`<option value="${e.id}">${esc(e.title||"(unnamed experiment)")}</option>`).join("")}</select>
+        <select id="ag_pendlink"><option value="">＋ add to an experiment or project…</option>${expProjOptionsHTML(pending)}</select>
       </div>`;
     host.querySelectorAll(".ag-row").forEach(el=>{
       el.querySelector(".ag-del").onclick=()=>{ pending.splice(+el.dataset.i,1); draw(); };
@@ -3790,7 +3880,7 @@ function mountPendingLinks(host,pending){
 }
 function applyPendingLinks(link,pending){
   pending.forEach(v=>{
-    const st=expById(v); if(!st)return;
+    const st=expOrProjById(v); if(!st)return;
     if(!(st.links||[]).some(l=>sameLink(l,link))) (st.links=st.links||[]).push({...link});
   });
 }
@@ -3807,18 +3897,17 @@ function mountAttachments(host,link,opts){
   const aid=link.kind==="animal"?link.id:null;
   const withGroups=!!(opts&&opts.groups)&&!!aid;
   const draw=()=>{
-    const rows=DB.experiments.filter(st=>
+    const rows=[...DB.experiments,...DB.projects].filter(st=>
       (st.links||[]).some(l=>sameLink(l,link))||(withGroups&&!!(st.groups||{})[aid]));
-    host.innerHTML=`${rows.length?rows.map((st,i)=>`<div class="ag-row" data-i="${i}">
-        <span class="ag-where">${esc(st.title||"(unnamed experiment)")}</span>
-        ${withGroups?`<select class="ag-pick"><option value="">—</option>${(st.groupDefs||[]).map(g=>
+    host.innerHTML=`${rows.length?rows.map((st,i)=>{ const isExp=st.title!=null; return `<div class="ag-row" data-i="${i}">
+        <span class="ag-where">${esc(entityLabel(st))}</span>
+        ${(withGroups&&isExp)?`<select class="ag-pick"><option value="">—</option>${(st.groupDefs||[]).map(g=>
           `<option value="${g.id}" ${(st.groups||{})[aid]===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>`:""}
-        <button class="ag-del" title="Remove from this experiment">✕</button>
-      </div>`).join(""):`<div class="pc-empty">Not linked to any experiment yet.</div>`}
+        <button class="ag-del" title="Remove">✕</button>
+      </div>`; }).join(""):`<div class="pc-empty">Not linked to anything yet.</div>`}
       <div class="ag-add">
-        <select id="ag_sel"><option value="">＋ add to an experiment…</option>${
-          DB.experiments.filter(st=>!(st.links||[]).some(l=>sameLink(l,link)))
-            .map(st=>`<option value="${st.id}">${esc(st.title||"(unnamed experiment)")}</option>`).join("")}</select>
+        <select id="ag_sel"><option value="">＋ add to an experiment or project…</option>${
+          expProjOptionsHTML([...DB.experiments,...DB.projects].filter(st=>(st.links||[]).some(l=>sameLink(l,link))).map(st=>st.id))}</select>
       </div>`;
     host.querySelectorAll(".ag-row").forEach(el=>{
       const st=rows[+el.dataset.i];
@@ -3837,7 +3926,7 @@ function mountAttachments(host,link,opts){
     });
     host.querySelector("#ag_sel").addEventListener("change",e=>{
       const v=e.target.value; if(!v)return;
-      const st=expById(v); if(!st)return;
+      const st=expOrProjById(v); if(!st)return;
       if(!(st.links||[]).some(l=>sameLink(l,link)))(st.links=st.links||[]).push({...link});
       persist(); draw(); });
   };
@@ -3922,6 +4011,7 @@ function drawExperimentCard(ex){
     const rawKids=[...tasksFor(ex.id),...diaryTasksForStep(ex)];
     const kids=sortAndGroupItems(rawKids);
     const open=openSteps.has(ex.id), grp=stepGroupTally(ex);
+    const pr=ex.projectId?projById(ex.projectId):null;
     card.innerHTML=`<div class="pc-bar" style="background:${ex.color||"#7db4ff"}"></div>
       <div class="pc-body">
         <div class="exp-top">
@@ -3932,6 +4022,7 @@ function drawExperimentCard(ex){
         </div>
         ${ex.question?`<div class="pc-note">${esc(ex.question)}</div>`:""}
         <div class="exp-meta">
+          ${pr?`<span class="exp-proj" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer" title="Open project"><span style="width:6px;height:6px;border-radius:50%;background:${pr.color||"#7db4ff"};flex:0 0 auto"></span>${esc(pr.name||"(unnamed project)")}</span>`:""}
           ${ex.deadline?`<span class="em-date">${esc(stepSpan(ex))}</span>`:""}
           ${(ex.groupDefs||[]).length?`<span class="em-arms ${grp.ok?"ok":""}">${esc(grp.text)}</span>`:""}
           ${rawKids.length?`<button type="button" class="exp-caret">${open?"▾":"▸"} ${rawKids.length} task${rawKids.length!==1?"s":""}</button>`:""}
@@ -3955,6 +4046,8 @@ function drawExperimentCard(ex){
     if(caret) caret.onclick=e=>{ e.stopPropagation(); openSteps.has(ex.id)?openSteps.delete(ex.id):openSteps.add(ex.id); redraw(); };
     card.querySelector(".exp-open").onclick=e=>{ e.stopPropagation(); experimentModal(ex,()=>renderExperiments()); };
     card.querySelector(".exp-name").onclick=e=>{ e.stopPropagation(); experimentModal(ex,()=>renderExperiments()); };
+    const projBadge=card.querySelector(".exp-proj");
+    if(projBadge) projBadge.onclick=e=>{ e.stopPropagation(); if(pr)projectModal(pr,()=>renderExperiments()); };
     card.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=e=>{
       e.stopPropagation();
       const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k); redraw(); });
@@ -3992,20 +4085,59 @@ function renderExperiments(){
       </select>
       <label style="margin-left:8px;display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);cursor:pointer">
         <input type="checkbox" id="ex_hidedone" style="width:auto;margin:0">Hide completed</label>
+      <span class="af-label" style="margin-left:8px">View</span>
+      <select id="ex_viewby" class="af-sel">
+        <option value="flat">Flat</option>
+        <option value="project">By project</option>
+      </select>
     </div>
-    <button id="pj_add" class="btn accent" style="margin-left:auto;font-size:12px">＋ Experiment</button>`;
+    <div style="margin-left:auto;display:flex;gap:8px">
+      <button id="pj_addproj" class="btn ghost" style="font-size:12px">＋ Project</button>
+      <button id="pj_add" class="btn accent" style="font-size:12px">＋ Experiment</button>
+    </div>`;
   host.appendChild(top);
   top.querySelector("#pj_add").onclick=()=>{ const ex=addExperiment(); experimentModal(ex,()=>renderExperiments()); };
-  const sortSel=top.querySelector("#ex_sort"), groupSel=top.querySelector("#ex_group"), hideDoneChk=top.querySelector("#ex_hidedone");
+  top.querySelector("#pj_addproj").onclick=()=>{ const pr=addProject(); projectModal(pr,()=>renderExperiments()); };
+  const sortSel=top.querySelector("#ex_sort"), groupSel=top.querySelector("#ex_group"), hideDoneChk=top.querySelector("#ex_hidedone"), viewBySel=top.querySelector("#ex_viewby");
   sortSel.value=DB.config.expTaskSort||"alpha"; groupSel.value=DB.config.expTaskGroup||"none";
   hideDoneChk.checked=!!DB.config.expTaskHideDone;
+  viewBySel.value=DB.config.expViewBy||"flat";
+  top.querySelector("#pj_addproj").style.display=viewBySel.value==="project"?"":"none";
   sortSel.addEventListener("change",()=>{ DB.config.expTaskSort=sortSel.value; persist(); renderExperiments(); });
   groupSel.addEventListener("change",()=>{ DB.config.expTaskGroup=groupSel.value; persist(); renderExperiments(); });
   hideDoneChk.addEventListener("change",()=>{ DB.config.expTaskHideDone=hideDoneChk.checked; persist(); renderExperiments(); });
+  viewBySel.addEventListener("change",()=>{ DB.config.expViewBy=viewBySel.value; persist(); renderExperiments(); });
 
   if(!DB.experiments.length){
     host.appendChild(Object.assign(document.createElement("div"),
       {className:"empty",textContent:"No experiments yet."}));
+  } else if((DB.config.expViewBy||"flat")==="project"){
+    // A lens on the same flat list, not a different one — every section below
+    // draws its cards with the exact same drawExperimentCard used in Flat
+    // view, just clustered by experiment.projectId instead of shown in one
+    // grid, plus a final bucket for whatever isn't in a project at all.
+    const sectionHead=(color,name,pr)=>{
+      const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="18px";
+      h.innerHTML=`<span class="chip" style="background:${color}"></span><h2>${esc(name)}</h2>
+        ${pr&&pr.question?`<span class="count" style="font-style:italic">${esc(pr.question)}</span>`:""}
+        ${pr?`<button type="button" class="exp-open" style="margin-left:auto">Edit</button>`:""}`;
+      if(pr) h.querySelector(".exp-open").onclick=()=>projectModal(pr,()=>renderExperiments());
+      return h;
+    };
+    [...DB.projects].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).forEach(pr=>{
+      const members=DB.experiments.filter(ex=>ex.projectId===pr.id);
+      host.appendChild(sectionHead(pr.color||"#7db4ff",pr.name||"(unnamed project)",pr));
+      if(pr.links&&pr.links.length){ const catHost=document.createElement("div"); catHost.innerHTML=projCatsHTML(pr); host.appendChild(catHost); }
+      const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
+      if(members.length) members.forEach(ex=>grid.appendChild(drawExperimentCard(ex)));
+      else grid.appendChild(Object.assign(document.createElement("div"),{className:"empty",textContent:"No experiments in this project yet."}));
+    });
+    const unassigned=DB.experiments.filter(ex=>!ex.projectId);
+    if(unassigned.length){
+      host.appendChild(sectionHead("#5b6678","Unassigned",null));
+      const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
+      unassigned.forEach(ex=>grid.appendChild(drawExperimentCard(ex)));
+    }
   } else {
     const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
     DB.experiments.forEach(ex=>grid.appendChild(drawExperimentCard(ex)));
@@ -4438,7 +4570,7 @@ function calColourSegHTML(){
   const m=DB.config.calColorBy||"type";
   return `<div class="seg cal-colour" id="cal_colour" title="What a diary entry's colour means">`
     +`<span class="cc-lab">colour</span>${
-    [["type","Type"],["project","Experiment"]].map(([v,l])=>
+    [["type","Type"],["experiment","Experiment"],["project","Project"]].map(([v,l])=>
       `<button type="button" data-c="${v}" class="${m===v?"on":""}">${l}</button>`).join("")}</div>`;
 }
 function wireCalColourSeg(root){
@@ -6497,20 +6629,20 @@ const LIB_SORTS={
 const LIB_ICON={reading:"📖",protocol:"📋",other:"🗂"};
 // session-only, like matSubTab — not worth persisting a filter choice across reloads
 let libKindFilter="all", libProjFilter="all", libSortBy="title";
-// Every experiment a given link (kind+id) is attached to. A library record
-// carries no experiment field of its own — that relationship has always
-// lived the other way round, on the experiment's own links array — so
-// finding it means asking every experiment rather than reading it straight
-// off the record. Filing groups used to be a second, separate, manually-kept
-// way to say "this belongs with that experiment" and could drift from the
-// real attachment; this is the one real relationship, reused for both the
-// filter and the row's own badge below.
+// Every experiment or project a given link (kind+id) is attached to. A
+// library record carries no experiment/project field of its own — that
+// relationship has always lived the other way round, on the owner's own
+// links array — so finding it means asking every experiment and project
+// rather than reading it straight off the record. Filing groups used to be
+// a second, separate, manually-kept way to say "this belongs with that
+// experiment" and could drift from the real attachment; this is the one
+// real relationship, reused for both the filter and the row's own badge below.
 function attachmentsOf(link){
-  return DB.experiments.filter(st=>(st.links||[]).some(l=>sameLink(l,link)));
+  return [...DB.experiments,...DB.projects].filter(st=>(st.links||[]).some(l=>sameLink(l,link)));
 }
 function attachLabel(rows){
   if(!rows.length)return "";
-  const first=rows[0].title||"(unnamed)";
+  const first=entityLabel(rows[0]);
   return rows.length>1?`${first} +${rows.length-1}`:first;
 }
 function renderLibrary(){
@@ -6524,10 +6656,12 @@ function renderLibrary(){
     <div class="seg" id="lib_kind" style="flex:0 0 auto">${[["all","All"],["reading","Papers"],["protocol","Protocols"],["other","Other"]]
       .map(([v,l])=>`<button type="button" data-k="${v}" class="${libKindFilter===v?"on":""}">${l}</button>`).join("")}</div>
     <select id="lib_proj_filter" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:6px 8px;font-size:12px;max-width:220px">
-      <option value="all" ${libProjFilter==="all"?"selected":""}>Any experiment</option>
+      <option value="all" ${libProjFilter==="all"?"selected":""}>Any experiment or project</option>
       <option value="none" ${libProjFilter==="none"?"selected":""}>Unattached</option>
-      ${DB.experiments.map(st=>
-        `<option value="${st.id}" ${libProjFilter===st.id?"selected":""}>${esc(st.title||"(unnamed experiment)")}</option>`).join("")}
+      ${DB.experiments.length?`<optgroup label="Experiments">${DB.experiments.map(ex=>
+        `<option value="${ex.id}" ${libProjFilter===ex.id?"selected":""}>${esc(entityLabel(ex))}</option>`).join("")}</optgroup>`:""}
+      ${DB.projects.length?`<optgroup label="Projects">${DB.projects.map(pr=>
+        `<option value="${pr.id}" ${libProjFilter===pr.id?"selected":""}>${esc(entityLabel(pr))}</option>`).join("")}</optgroup>`:""}
     </select>
     <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">sort</span>
     <select id="lib_sort" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:6px 8px;font-size:12px">
@@ -6632,7 +6766,7 @@ function libModal(kind,id){
     ${(cfg.fields||[]).map(f=>`<div class="fld"><label>${esc(f.label)}</label>
       <input id="r_f_${f.key}" type="${f.type==="number"?"number":f.type==="date"?"date":"text"}" value="${escAttr(rec[f.key]??"")}"></div>`).join("")}
     <div class="fld"><label>File on this computer</label><div id="r_file"></div></div>
-    <div class="fld"><label>Experiments</label><div id="r_attach"></div></div>
+    <div class="fld"><label>Experiments &amp; projects</label><div id="r_attach"></div></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="r_save">Save</button></div>`);
   mountLocalFile(document.getElementById("r_file"),rec);
@@ -6875,7 +7009,7 @@ function noteModal(id,over){
     <div class="fld"><label>Title</label><input id="n_title" dir="auto" value="${escAttr(titleSeed||"")}" autofocus></div>
     <div class="fld"><label>Note</label><div id="n_bodywrap"></div></div>
     <div class="fld"><label>Drawing</label><div id="n_drawwrap"></div></div>
-    <div class="fld"><label>Experiment</label><div id="n_attach"></div></div>
+    <div class="fld"><label>Experiment &amp; project</label><div id="n_attach"></div></div>
     ${n?`<div class="drow" style="margin-top:14px"><button class="btn danger" id="n_del">Delete note</button></div>`:""}
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="n_save">Save</button></div>`,{wide:true});
@@ -6925,7 +7059,7 @@ function noteModal(id,over){
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
-let animalExperiment="all", animalGroup="all", animalTag="all", animalStatus="all", animalOperated="all", animalSearch="", animalSort="name";
+let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalStatus="all", animalOperated="all", animalSearch="", animalSort="name";
 // Which animal cards have their detail panel open — tracked here rather than
 // as pure per-card DOM state, so a full renderAnimals() (needed whenever a
 // quick-edit might change which animals a status filter or a dob/sacrificed
@@ -7143,6 +7277,7 @@ function renderAnimals(){
     <div class="af-grid">
       ${DB.tags.length?col("Tag","a_tag",animalTag,[["all","All tags"],["none","No tag"],...[...DB.tags].sort((a,b)=>a.name.localeCompare(b.name)).map(c=>[c.name,c.name])]):""}
       ${expNames.length?col("Experiment","a_exp",animalExperiment,[["all","All experiments"],["none","Unattached"],...expNames]):""}
+      ${DB.projects.length?col("Project","a_project",animalProject,[["all","All projects"],["none","No project"],...DB.projects.map(p=>[p.id,p.name||"(unnamed project)"])]):""}
       ${groupNames.length?col("Group","a_group",animalGroup,[["all","All groups"],...groupNames.map(g=>[g,g])]):""}
       ${col("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
       ${col("Operated","a_operated",animalOperated,[["all","All"],["yes","Operated"],["no","Not operated"]])}
@@ -7152,6 +7287,7 @@ function renderAnimals(){
   const onPick=(id,fn)=>{ const el=bar.querySelector("#"+id); if(el)el.addEventListener("change",e=>fn(e.target.value)); };
   onPick("a_tag",v=>{ animalTag=v; DB.config.animalFilters.tag=v; persist(); renderAnimals(); });
   onPick("a_exp",v=>{ animalExperiment=v; DB.config.animalFilters.experiment=v; persist(); renderAnimals(); });
+  onPick("a_project",v=>{ animalProject=v; DB.config.animalFilters.project=v; persist(); renderAnimals(); });
   onPick("a_group",v=>{ animalGroup=v; DB.config.animalFilters.group=v; persist(); renderAnimals(); });
   onPick("a_sort",v=>{ animalSort=v; DB.config.animalFilters.sort=v; persist(); renderAnimals(); });
   onPick("a_status",v=>{ animalStatus=v; DB.config.animalFilters.status=v; persist(); renderAnimals(); });
@@ -7192,8 +7328,15 @@ function renderAnimals(){
       &&(animalExperiment==="all"||x.st.id===animalExperiment));
   };
   const inOperated=(a,v)=>v==="all"||(v==="yes"?!!surgeryDate(a):!surgeryDate(a));
+  // independent of the Experiment filter, deliberately — not a cascading
+  // two-level picker (that was the old animalCohort naming/design bug)
+  const inProject=(a,pid)=>{
+    if(pid==="all")return true;
+    if(pid==="none")return !animalSteps(a.id).some(st=>st.projectId);
+    return animalSteps(a.id).some(st=>st.projectId===pid);
+  };
   let list=DB.animals.filter(a=>
-    inTag(a,animalTag) && inExperiment(a,animalExperiment) && inGroup(a,animalGroup) &&
+    inTag(a,animalTag) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
     (animalStatus==="all"||a.termination===animalStatus) &&
     inOperated(a,animalOperated) &&
     searchMatch(a));
