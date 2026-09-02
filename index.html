@@ -5456,10 +5456,17 @@ function renderTimeline(){
   // hid the other. Standard calendar column-packing: events that mutually
   // overlap (directly, or transitively through a chain of overlaps) share a
   // cluster and split that cluster's width evenly into side-by-side columns.
-  const timedLayout=new Map(); // task.id -> {col, totalCols}
+  // Tasks and diary entries are packed TOGETHER, in one pass per day. They
+  // used to get a column system each, on the reasoning that neither needed to
+  // know about the other — but they are drawn into the same column of the
+  // same grid, so two independent packings just meant a diary entry and a
+  // task sharing an hour each believed it had the full width and one covered
+  // the other outright. Anything occupying the same space has to be packed
+  // against everything else occupying it.
+  const timedLayout=new Map(); // task-occurrence id / diary-entry id -> {col,totalCols}
   for(let d=0;d<NCOL;d++){
     const day=new Date(ws); day.setDate(ws.getDate()+d); day.setHours(0,0,0,0);
-    const dayEvents=weekTasks.filter(t=>{
+    const taskEvents=weekTasks.filter(t=>{
       if(!hasTime(t.deadline)) return false;
       const dd=whenDate(t.deadline); dd.setHours(0,0,0,0);
       return dd.getTime()===day.getTime();
@@ -5468,8 +5475,19 @@ function renderTimeline(){
       const startMin=dt.getHours()*60+dt.getMinutes();
       let durationMins=t.duration||60;
       if(!t.duration&&t.endDate) durationMins=Math.max((whenDate(t.endDate)-dt)/60000,30);
-      return {t,startMin,endMin:startMin+Math.max(durationMins,14)};
-    }).sort((a,b)=>a.startMin-b.startMin||a.endMin-b.endMin);
+      return {key:t.id,startMin,endMin:startMin+Math.max(durationMins,14)};
+    });
+    const diaryEvents=diaryTimedEvents.filter(x=>x.dayIdx===d).map(x=>{
+      const [hh,mm]=x.e.time.split(":").map(Number);
+      const startMin=hh*60+(mm||0);
+      let endMin=startMin+diaryDefaultDuration(x.e.type);
+      if(x.e.endTime){ const [eh,em]=x.e.endTime.split(":").map(Number); endMin=Math.max(eh*60+em,startMin+15); }
+      return {key:x.e.id,startMin,endMin};
+    });
+    // a task-occurrence id and a diary-entry id can never collide (tk_…@when
+    // vs d_…), so one map keyed by id serves both renderers below
+    const dayEvents=[...taskEvents,...diaryEvents]
+      .sort((a,b)=>a.startMin-b.startMin||a.endMin-b.endMin);
     let cluster=[], clusterEnd=-Infinity;
     const flush=()=>{
       if(!cluster.length)return;
@@ -5480,39 +5498,7 @@ function renderTimeline(){
         ev.col=ci;
       });
       const totalCols=colEnds.length;
-      cluster.forEach(ev=>timedLayout.set(ev.t.id,{col:ev.col,totalCols}));
-      cluster=[];
-    };
-    dayEvents.forEach(ev=>{
-      if(ev.startMin>=clusterEnd){ flush(); clusterEnd=-Infinity; }
-      cluster.push(ev);
-      clusterEnd=Math.max(clusterEnd,ev.endMin);
-    });
-    flush();
-  }
-  // same column-packing, run separately for timed diary entries (a task and
-  // a diary entry at the same hour don't need to know about each other's
-  // layout - each source packs its own overlaps independently).
-  const diaryTimedLayout=new Map(); // entry.id -> {col, totalCols}
-  for(let d=0;d<NCOL;d++){
-    const dayEvents=diaryTimedEvents.filter(x=>x.dayIdx===d).map(x=>{
-      const [hh,mm]=x.e.time.split(":").map(Number);
-      const startMin=hh*60+(mm||0);
-      let endMin=startMin+diaryDefaultDuration(x.e.type);
-      if(x.e.endTime){ const [eh,em]=x.e.endTime.split(":").map(Number); endMin=Math.max(eh*60+em,startMin+15); }
-      return {x,startMin,endMin};
-    }).sort((a,b)=>a.startMin-b.startMin||a.endMin-b.endMin);
-    let cluster=[], clusterEnd=-Infinity;
-    const flush=()=>{
-      if(!cluster.length)return;
-      const colEnds=[];
-      cluster.forEach(ev=>{
-        let ci=colEnds.findIndex(end=>end<=ev.startMin);
-        if(ci===-1){ ci=colEnds.length; colEnds.push(ev.endMin); } else colEnds[ci]=ev.endMin;
-        ev.col=ci;
-      });
-      const totalCols=colEnds.length;
-      cluster.forEach(ev=>diaryTimedLayout.set(ev.x.e.id,{col:ev.col,totalCols}));
+      cluster.forEach(ev=>timedLayout.set(ev.key,{col:ev.col,totalCols}));
       cluster=[];
     };
     dayEvents.forEach(ev=>{
@@ -5594,7 +5580,7 @@ function renderTimeline(){
         durationMins=Math.max((eh*60+em)-(hh*60+mm),15);
       }
       const heightPct=(durationMins/60)*100;
-      const{col:colIdx,totalCols}=diaryTimedLayout.get(e.id)||{col:0,totalCols:1};
+      const{col:colIdx,totalCols}=timedLayout.get(e.id)||{col:0,totalCols:1};
       const colPct=100/totalCols;
       const evt=document.createElement("div"); evt.className="cal-evt-timed";
       evt.dataset.dragSrc=e.id; evt.dataset.dragWhen=`${e.date}T${e.time}`;
