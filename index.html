@@ -2182,6 +2182,9 @@ function liftChipForDrag(el){
   const ghostEl=el.cloneNode(true);
   ghostEl.classList.add("cal-evt-ghost");
   ghostEl.classList.remove("holding");
+  // the ghost marks where the chip came from; it is not a second copy of that
+  // chip as far as the live re-pack is concerned, so it gives up its identity
+  delete ghostEl.dataset.layKey; delete ghostEl.dataset.layDay;
   el.parentNode.insertBefore(ghostEl,el);
   el.style.transition="none";   // the explicit size below replaces the pop instantly; animating "holding" away at the same time only fights it
   el.classList.remove("holding");
@@ -5071,6 +5074,41 @@ function setCalMode(mode){
 // Mutates each item with .colEnd/.track, returns the total track count.
 // Shared by month view and the week/day all-day banner, which both place a
 // multi-day item as one bar spanning several day columns.
+/* ---- side-by-side packing for timed chips ----
+   Events that mutually overlap (directly, or transitively through a chain of
+   overlaps) form a cluster and split that cluster's width into equal columns.
+   Module scope on purpose: the renderer packs the committed data with it, and
+   a live drag packs a hypothetical version of the same day with it, so what
+   you see mid-drag and what you get on drop come from one implementation
+   rather than two that can disagree. */
+function packColumns(events){
+  const out=new Map();
+  const sorted=[...events].sort((a,b)=>a.startMin-b.startMin||a.endMin-b.endMin);
+  let cluster=[], clusterEnd=-Infinity;
+  const flush=()=>{
+    if(!cluster.length)return;
+    const colEnds=[]; // colEnds[i] = end time of the last event placed in column i
+    cluster.forEach(ev=>{
+      let ci=colEnds.findIndex(end=>end<=ev.startMin);
+      if(ci===-1){ ci=colEnds.length; colEnds.push(ev.endMin); } else colEnds[ci]=ev.endMin;
+      ev.col=ci;
+    });
+    const totalCols=colEnds.length;
+    cluster.forEach(ev=>out.set(ev.key,{col:ev.col,totalCols}));
+    cluster=[];
+  };
+  sorted.forEach(ev=>{
+    if(ev.startMin>=clusterEnd){ flush(); clusterEnd=-Infinity; }
+    cluster.push(ev);
+    clusterEnd=Math.max(clusterEnd,ev.endMin);
+  });
+  flush();
+  return out;
+}
+// What the hour grid is currently showing, per day column, so a drag can
+// re-pack a day without re-deriving it from the DB: filled by renderTimeline,
+// read by beginTimedEventDrag.
+let calTimedIndex={days:[],startISO:null};
 function packDayTracks(items){
   // widest first: a multi-day bar claims its track before the single-day
   // items around it have to be routed around it, which is what keeps a
@@ -5464,6 +5502,7 @@ function renderTimeline(){
   // the other outright. Anything occupying the same space has to be packed
   // against everything else occupying it.
   const timedLayout=new Map(); // task-occurrence id / diary-entry id -> {col,totalCols}
+  calTimedIndex={days:[],startISO:isoOf(ws)};
   for(let d=0;d<NCOL;d++){
     const day=new Date(ws); day.setDate(ws.getDate()+d); day.setHours(0,0,0,0);
     const taskEvents=weekTasks.filter(t=>{
@@ -5486,27 +5525,9 @@ function renderTimeline(){
     });
     // a task-occurrence id and a diary-entry id can never collide (tk_…@when
     // vs d_…), so one map keyed by id serves both renderers below
-    const dayEvents=[...taskEvents,...diaryEvents]
-      .sort((a,b)=>a.startMin-b.startMin||a.endMin-b.endMin);
-    let cluster=[], clusterEnd=-Infinity;
-    const flush=()=>{
-      if(!cluster.length)return;
-      const colEnds=[]; // colEnds[i] = end time of the last event placed in column i
-      cluster.forEach(ev=>{
-        let ci=colEnds.findIndex(end=>end<=ev.startMin);
-        if(ci===-1){ ci=colEnds.length; colEnds.push(ev.endMin); } else colEnds[ci]=ev.endMin;
-        ev.col=ci;
-      });
-      const totalCols=colEnds.length;
-      cluster.forEach(ev=>timedLayout.set(ev.key,{col:ev.col,totalCols}));
-      cluster=[];
-    };
-    dayEvents.forEach(ev=>{
-      if(ev.startMin>=clusterEnd){ flush(); clusterEnd=-Infinity; }
-      cluster.push(ev);
-      clusterEnd=Math.max(clusterEnd,ev.endMin);
-    });
-    flush();
+    const dayEvents=[...taskEvents,...diaryEvents];
+    calTimedIndex.days.push(dayEvents);
+    packColumns(dayEvents).forEach((v,k)=>timedLayout.set(k,v));
   }
 
   // hour rows
@@ -5543,6 +5564,8 @@ function renderTimeline(){
       const colPct=100/totalCols;
       const evt=document.createElement("div"); evt.className="cal-evt-timed";
       evt.dataset.dragSrc=t.src.id; evt.dataset.dragWhen=t.deadline;
+      // identity for the live re-pack during a drag (see packColumns)
+      evt.dataset.layKey=t.id; evt.dataset.layDay=String(di);
       evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
       const timeStr=dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
       const durLabel=durationMins!==60?` (${durationMins}m)`:"";
@@ -5584,6 +5607,7 @@ function renderTimeline(){
       const colPct=100/totalCols;
       const evt=document.createElement("div"); evt.className="cal-evt-timed";
       evt.dataset.dragSrc=e.id; evt.dataset.dragWhen=`${e.date}T${e.time}`;
+      evt.dataset.layKey=e.id; evt.dataset.layDay=String(dayIdx);
       const dc=diaryColors(an,def);
       evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${dc.fill}dd;color:#fff;border-left:3px solid ${dc.fill};${edgeCSS(dc.edge)}z-index:2`;
       const timeLabel=e.endTime?`${e.time}–${e.endTime}`:e.time;
@@ -5916,8 +5940,51 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
       evtEl.style.top=(cr.top+(rawMinuteInHour/60)*cr.height)+"px";
       evtEl.classList.remove("drag-invalid");
       dropTarget={date:cell.dataset.date,hour:+cell.dataset.hour,minute:snappedMinuteInHour};
+      repackLive(cell,cr);
     } else {
       evtEl.classList.add("drag-invalid");
+    }
+  }
+  /* Re-pack the day under the pointer as if the drop happened now, and widen
+     or narrow every chip in it — including the one being dragged — to match.
+     Without this the dragged chip floated at its original full width over
+     whatever it was passing across, so a block landing beside a neighbour
+     appeared to cover it completely and then snapped to half width on
+     release: the drop looked wrong right up until it was over, and the chip
+     never ended up where it had just been shown. */
+  const layKey=t.id;
+  function applyCols(dayIdx,layout){
+    document.querySelectorAll(`.cal-evt-timed[data-lay-day="${dayIdx}"]`).forEach(el=>{
+      const k=el.dataset.layKey; if(!k||k===layKey)return;
+      const p=layout.get(k); if(!p)return;
+      const pct=100/p.totalCols;
+      el.style.left=`calc(${p.col*pct}% + 2px)`;
+      el.style.width=`calc(${pct}% - 4px)`;
+    });
+  }
+  function repackLive(cell,cr){
+    if(mode!=="move"||!calTimedIndex.days.length||!calTimedIndex.startISO)return;
+    const dayIdx=Math.round(
+      (new Date(cell.dataset.date+"T00:00:00")-new Date(calTimedIndex.startISO+"T00:00:00"))/864e5);
+    if(!calTimedIndex.days[dayIdx])return;
+    const startMin=+cell.dataset.hour*60+dropTarget.minute;
+    const endMin=startMin+Math.max(origDuration,14);
+    // Every day is re-packed each move: the one under the pointer as though
+    // the chip were already dropped into it, and all the others as though it
+    // had left — so dragging out of a crowded morning widens what it leaves
+    // behind at the same time as it narrows what it joins.
+    calTimedIndex.days.forEach((items,i)=>{
+      const without=items.filter(x=>x.key!==layKey);
+      applyCols(i, packColumns(i===dayIdx?[...without,{key:layKey,startMin,endMin}]:without));
+    });
+    // the lifted chip is fixed-positioned in pixels, so it takes its share of
+    // the day column's own box rather than a percentage of it
+    const me=packColumns([...calTimedIndex.days[dayIdx].filter(x=>x.key!==layKey),
+                          {key:layKey,startMin,endMin}]).get(layKey);
+    if(me){
+      const w=cr.width/me.totalCols;
+      evtEl.style.left=(cr.left+me.col*w+2)+"px";
+      evtEl.style.width=Math.max(w-4,12)+"px";
     }
   }
   // Dragging toward the top/bottom edge of the visible grid scrolls it toward
