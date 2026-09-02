@@ -408,7 +408,12 @@
      meant to be text-selected, so disable selection across the whole thing rather
      than just the draggable chips. */
   .cal-outer{display:flex;flex-direction:column;height:100%;overflow:hidden;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
-  .cal-nav-bar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:6;flex-shrink:0}
+  /* wraps at every width, not just on a phone — the find/quick-add row below
+     needs somewhere to go, and without wrapping it squeezed the date and the
+     Day/Week/Month switch instead of taking a line of its own */
+  .cal-nav-bar{display:flex;align-items:center;gap:10px;row-gap:8px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:6;flex-shrink:0}
+  .cal-nav-bar h2{flex:0 1 auto;white-space:nowrap}
+  .cal-nav-bar .seg{flex:0 0 auto}
   .cal-nav-bar h2{font-family:var(--disp);font-size:16px;margin:0;font-weight:600}
   .cal-nav-btn{border:1px solid var(--line2);background:var(--panel);color:var(--ink);border-radius:8px;padding:6px 13px;cursor:pointer;font-size:13px}
   .cal-nav-btn:hover{border-color:var(--gcamp)}
@@ -443,6 +448,8 @@
   /* day headers */
   .cal-day-hdr{padding:6px 4px;text-align:center;font-family:var(--mono);font-size:11px;color:var(--ink-dim);border-bottom:1px solid var(--line);border-right:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
   .cal-day-hdr.today{color:var(--gcamp)}
+  .cal-day-hdr.hdr-clickable{cursor:pointer}
+  .cal-day-hdr.hdr-clickable:hover{background:var(--panel2);color:var(--ink)}
   .cal-day-hdr .dow{font-size:10px;color:var(--ink-faint);text-transform:uppercase}
   .cal-day-hdr .dom{font-size:18px;font-family:var(--disp);font-weight:600;line-height:1.1}
   .cal-day-hdr.today .dom{background:var(--gcamp);color:#08240f;border-radius:50%;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center}
@@ -658,6 +665,55 @@
   .modal-back:hover{color:var(--ink)}
   .toast{position:absolute;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--panel2);border:1px solid var(--line2);color:var(--ink);padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;z-index:60;pointer-events:none}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast{display:flex;align-items:center;gap:12px}
+  /* ── Timeline nav tools: find, quick-add, overdue ────────────────────────── */
+  .cal-title{cursor:pointer;border-radius:6px;padding:1px 5px;margin-left:-5px;transition:.12s}
+  .cal-title:hover{background:var(--panel2);color:var(--ink)}
+  /* Its own row inside the wrapping nav bar. Sharing the row with the date,
+     the Day/Week/Month switch and the colour/filter segs left every one of
+     them fighting for space — the switch stacked into a column and the
+     inputs collapsed to a few unusable pixels. */
+  .cal-extras{display:flex;align-items:center;gap:8px;flex:1 0 100%;min-width:0;
+    padding-top:8px;border-top:1px solid var(--line)}
+  .cal-find{position:relative;flex:0 1 220px;min-width:0}
+  .cal-inp{width:100%;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);
+    border-radius:7px;padding:5px 9px;font-size:12px;font-family:inherit}
+  .cal-inp:focus{outline:none;border-color:var(--gcamp)}
+  .cal-inp::placeholder{color:var(--ink-faint)}
+  .cal-inp-add{flex:1 1 240px;min-width:0}
+  .cal-hits{position:absolute;top:calc(100% + 4px);left:0;right:0;min-width:250px;background:var(--panel);
+    border:1px solid var(--line2);border-radius:9px;box-shadow:0 10px 28px -8px #000;z-index:30;
+    max-height:280px;overflow:auto;padding:4px}
+  .cal-hit{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:transparent;
+    color:var(--ink);padding:6px 8px;border-radius:6px;cursor:pointer;font-size:12px;font-family:inherit}
+  .cal-hit:hover{background:var(--panel2)}
+  .ch-kind{flex:0 0 auto;color:var(--ink-faint);font-size:10px}
+  .ch-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ch-when{flex:0 0 auto;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
+  .cal-hit-empty{padding:8px;font-size:12px;color:var(--ink-faint)}
+  .cal-overdue{flex:0 0 auto;border:1px solid var(--overdue);background:transparent;color:var(--overdue);
+    border-radius:7px;padding:4px 10px;font-family:var(--mono);font-size:11px;cursor:pointer}
+  .cal-overdue:hover{background:var(--overdue);color:#fff}
+  .ov-list{max-height:52vh;overflow:auto}
+  .ov-row{display:flex;align-items:center;gap:10px;padding:8px 2px;border-bottom:1px solid var(--line)}
+  .ov-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+  .ov-when{flex:0 0 auto;font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+  .ov-late{flex:0 0 auto;font-family:var(--mono);font-size:10px;color:var(--overdue)}
+  .ov-today,.ov-open{flex:0 0 auto;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);
+    border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer}
+  .ov-today:hover,.ov-open:hover{color:var(--ink);border-color:var(--gcamp)}
+  @media(max-width:600px){
+    /* the 16px font these inherit (the iOS zoom-on-focus fix) makes a
+       default-padded input tall, and grid height is the scarce thing on a
+       phone — trim the padding rather than give up the row */
+    .cal-extras{gap:6px;padding-top:6px}
+    .cal-find,.cal-inp-add{flex:1 1 45%}
+    .cal-inp{padding:3px 8px}
+    .cal-overdue{padding:3px 8px}
+  }
+  .toast-act{border:1px solid var(--line2);background:var(--bg2);color:var(--gcamp);border-radius:7px;
+    padding:3px 11px;font-family:var(--mono);font-size:11.5px;cursor:pointer;flex:0 0 auto}
+  .toast-act:hover{border-color:var(--gcamp)}
   /* A new deploy used to force an unannounced window.location.reload() the
      instant its service worker took control — "a few seconds after opening,
      it resets the screen" was that reload landing mid-glance at the Timeline,
@@ -992,7 +1048,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // type the fill and the animal's home experiment a thin edge; "experiment"
   // or "project" gives that one thing the fill instead, edge gone. Tasks and
   // experiments are coloured by their own record either way.
-  calColorBy:"type",
+  calColorBy:"type", calMode:"week",
   // How an experiment's combined task+diary list is ordered and clustered.
   expTaskSort:"alpha", expTaskGroup:"none", notesSort:"updated_desc",
   // Whether the Timeline's all-day strip and the app's own top bar are
@@ -1518,6 +1574,7 @@ function migrate(){                       // backfill fields added in later vers
   animalGroup=DB.config.animalFilters.group||"all";
   animalTag=DB.config.animalFilters.tag||"all";
   animalProject=DB.config.animalFilters.project||"all";
+  calMode=DB.config.calMode||"week";
   animalOperated=DB.config.animalFilters.operated||"all";
   // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
   // may still carry — each meant ascending (earliest/oldest first) already,
@@ -1886,6 +1943,46 @@ function calDayDelta(fromISO,toISO){
 // hover-to-preview — the app already saved silently either way, but nothing
 // ever confirmed a drop actually landed, or where. Every commit path below
 // ends by handing its own (newWhen,newEnd,newDur) to this.
+/* ---- undo for schedule edits ----
+   A drag is the easiest edit in the app to make by accident and, until now,
+   the only one with no way back: the record was rewritten in place and the
+   old dates were gone. Rather than try to invert each edit (a series move
+   rewrites occurrence keys, a scoped edit can mint a whole new task), this
+   snapshots the three arrays a schedule edit can touch and puts them back
+   wholesale. They're small, this only runs at user-click speed, and it is
+   the one approach that cannot get an inverse subtly wrong.
+   Restoring replaces those arrays, so anything holding a direct reference to
+   a record across an undo would go stale — fine here, because every path
+   that snapshots also closes its modal before committing. */
+const undoStack=[];
+function calSnapshot(){
+  return JSON.stringify({
+    schedule:DB.schedule,
+    experiments:DB.experiments,
+    diaries:DB.animals.map(a=>({id:a.id,diary:a.diary||[]}))
+  });
+}
+function calRestore(json){
+  const s=JSON.parse(json);
+  DB.schedule=s.schedule; DB.experiments=s.experiments;
+  s.diaries.forEach(r=>{ const a=DB.animals.find(x=>x.id===r.id); if(a)a.diary=r.diary; });
+}
+function pushUndo(label,before){
+  undoStack.push({label,before});
+  if(undoStack.length>40)undoStack.shift();
+}
+function runUndo(){
+  const u=undoStack.pop();
+  if(!u){ toast("Nothing to undo"); return; }
+  calRestore(u.before); persist(); render();
+  toast(`Undone — ${u.label}`);
+}
+// every schedule edit ends here: remembered, announced, and reversible
+function commitUndoable(label,before){
+  pushUndo(label,before);
+  persist();
+  toast(label,{label:"Undo",fn:runUndo});
+}
 function calChangeSummary(newWhen,newEnd,newDur){
   if(newWhen!=null&&newDur!=null) return `Moved to ${fmtWhenFull(newWhen)} (${newDur} min)`;
   if(newWhen!=null) return `Moved to ${fmtWhenFull(newWhen)}`;
@@ -1895,6 +1992,8 @@ function calChangeSummary(newWhen,newEnd,newDur){
 }
 function commitCalMove(x,newWhen,newEnd,newDur){
   const src=x.src;
+  // taken before anything is written, so every path below can offer an Undo
+  const before=calSnapshot();
   // A diary entry belongs to one animal on one day. Moving it here is the same
   // edit as moving it in that animal's own diary — there is one record.
   if(x.kind==="diary"){
@@ -1919,13 +2018,13 @@ function commitCalMove(x,newWhen,newEnd,newDur){
       // an end time cannot run past midnight on a single-day entry
       e.endTime=t2>=1440?"23:59":`${p4(Math.floor(t2/60))}:${p4(t2%60)}`;
     }
-    persist(); toast(calChangeSummary(newWhen,newEnd,newDur)); return true;
+    commitUndoable(calChangeSummary(newWhen,newEnd,newDur),before); return true;
   }
   if(x.kind==="exp"){
     if(newWhen!=null)src.deadline=newWhen;
     if(newEnd!==undefined)src.endDate=newEnd;
     if(newDur!=null)src.duration=newDur;
-    persist(); toast(calChangeSummary(newWhen,newEnd,newDur)); return true;
+    commitUndoable(calChangeSummary(newWhen,newEnd,newDur),before); return true;
   }
   const rep=src.repeat&&src.repeat.every;
   // Dragging one occurrence of a repeating task is still an edit to a shared
@@ -1941,11 +2040,23 @@ function commitCalMove(x,newWhen,newEnd,newDur){
         if(newWhen!=null){
           const d=calDayDelta(x.deadline,newWhen);
           const t0=newWhen.length>10?newWhen.slice(11):null;
+          // Every occurrence-keyed list on the record is keyed by the exact
+          // when-string the rule generates, so shifting the series has to
+          // shift those keys with it. Without this, moving a repeating task
+          // silently un-ticked every occurrence already checked off (and
+          // resurrected occurrences that had been detached out of the
+          // series), because the old keys no longer matched anything the
+          // rule now produces.
+          const shiftKey=w=>{
+            const moved=d?addDaysISO(w,d):w;
+            return t0?moved.slice(0,10)+"T"+t0:moved;
+          };
+          src.doneOccurrences=(src.doneOccurrences||[]).map(shiftKey);
+          src.excludedDates=(src.excludedDates||[]).map(shiftKey);
           src.when=(d?addDaysISO(src.when,d):src.when).slice(0,10)+(t0?"T"+t0:"");
           if(src.endDate&&d)src.endDate=addDaysISO(src.endDate,d);
         }
         if(newDur!=null)src.duration=newDur;
-        persist();
       } else {
         const patch={when:newWhen!=null?newWhen:x.deadline,
           endDate:newEnd!==undefined?newEnd:x.endDate,
@@ -1953,7 +2064,7 @@ function commitCalMove(x,newWhen,newEnd,newDur){
         if(scope==="this")detachOccurrence(src,x.deadline,patch);
         else splitSeriesFrom(src,x.deadline,patch);
       }
-      toast(`${what} (${scopeLabel})`);
+      commitUndoable(`${what} (${scopeLabel})`,before);
       renderTimeline();
     });
     return true;
@@ -1961,8 +2072,7 @@ function commitCalMove(x,newWhen,newEnd,newDur){
   if(newWhen!=null){ src.when=newWhen; if(newEnd!==undefined)src.endDate=newEnd; }
   else if(newEnd!==undefined){ src.endDate=newEnd; }
   if(newDur!=null)src.duration=newDur;
-  persist();
-  toast(calChangeSummary(newWhen,newEnd,newDur));
+  commitUndoable(calChangeSummary(newWhen,newEnd,newDur),before);
   return true;
 }
 // Drag an all-day bar sideways to move it, keeping its length. Pointer events so
@@ -2452,7 +2562,22 @@ function bindTimeButton(btn, getVal, setVal, minuteStep){
     btn.innerHTML = `<span style="opacity:.55;margin-right:6px">🕐</span>${v||"set end time"}`;
     btn.classList.toggle("datebtn-empty",!v); }, minuteStep);
 }
-function toast(m){ const e=document.getElementById("toast"); e.textContent=m; e.classList.add("show"); clearTimeout(e._t); e._t=setTimeout(()=>e.classList.remove("show"),1900); }
+// A toast can carry one action ({label,fn}) — used for Undo, which needs the
+// toast to be clickable, so pointer-events (off by default, so a plain toast
+// never blocks what's underneath it) are turned back on just for that case,
+// and it lingers long enough to actually be hit.
+function toast(m,action){
+  const e=document.getElementById("toast");
+  e.innerHTML=""; e.style.pointerEvents=action?"auto":"none";
+  e.appendChild(Object.assign(document.createElement("span"),{textContent:m}));
+  if(action){
+    const b=Object.assign(document.createElement("button"),{className:"toast-act",textContent:action.label});
+    b.onclick=()=>{ e.classList.remove("show"); clearTimeout(e._t); action.fn(); };
+    e.appendChild(b);
+  }
+  e.classList.add("show"); clearTimeout(e._t);
+  e._t=setTimeout(()=>e.classList.remove("show"),action?6000:1900);
+}
 // Fires when a virus gets picked from the library for a real animal's
 // injection (not while just building/editing a procedure template — nothing's
 // actually been used yet at that point). Deliberately not a confirm() dialog:
@@ -2950,6 +3075,27 @@ function stepRepeat(iso,r,i){
   }
   return iso;
 }
+// How many whole steps of this rule fit between the task's anchor and a target
+// date. Used only to start the generator near the window being drawn — see
+// genericSteps — so it deliberately rounds down and is never trusted to be
+// exact; the generator still tests every date it produces.
+function repeatStepsUntil(t,targetISO){
+  const r=t.repeat||{};
+  const a=new Date(t.when.slice(0,10)+"T00:00:00"), b=new Date(targetISO.slice(0,10)+"T00:00:00");
+  const days=Math.round((b-a)/864e5);
+  if(days<=0)return 0;
+  const custom=r.every==="custom";
+  const iv=custom?Math.max(1,+r.interval||1):1;
+  const freq=custom?(r.freq||"week"):r.every;
+  if(freq==="day")   return Math.floor(days/iv);
+  if(freq==="week")  return Math.floor(days/(7*iv));
+  if(freq==="2week") return Math.floor(days/14);
+  const months=(b.getFullYear()-a.getFullYear())*12+(b.getMonth()-a.getMonth());
+  if(months<=0)return 0;
+  if(freq==="month") return Math.floor(months/iv);
+  if(freq==="year")  return Math.floor(months/(12*iv));
+  return 0;
+}
 // every occurrence of a task that touches [from,to], as {t,when,endDate}
 function taskOccurrences(t,fromISO,toISO){
   if(!t.when)return [];
@@ -2959,6 +3105,16 @@ function taskOccurrences(t,fromISO,toISO){
     return (end.slice(0,10)>=fromISO&&t.when.slice(0,10)<=toISO)?[{t,when:t.when,endDate:t.endDate}]:[];
   }
   const out=[]; const until=t.repeat.until||null;
+  // An occurrence's end keeps the end's own time of day, not the start's.
+  // Adding `span` days to the occurrence start (which is what this used to do)
+  // silently rewrote every repeat of a 09:00–17:00 range to end at 09:00, and
+  // dropped the end entirely for a same-day range, where span is 0.
+  const endTime=t.endDate&&t.endDate.length>10?t.endDate.slice(11):null;
+  const endFor=w=>{
+    if(!t.endDate)return null;
+    const base=addDaysISO(w,span);
+    return endTime?base.slice(0,10)+"T"+endTime:base;
+  };
   // A slot listed here was pulled out of the series to become its own
   // standalone task (see detachOccurrence/splitSeriesFrom) — these are
   // separate events now, so the rule must never regenerate them.
@@ -2970,12 +3126,21 @@ function taskOccurrences(t,fromISO,toISO){
   // instead, since neither is "the same calendar delta every time".
   function genericSteps(){
     const res=[];
-    for(let i=0;i<400;i++){
+    // Start stepping near the window rather than at the task's own first
+    // occurrence. Walking from index 0 every time meant the iteration budget
+    // was spent on dates long before `from`: a daily task simply vanished
+    // from the calendar (and from notifications and the .ics export) roughly
+    // 400 days after it started, because the loop ran out before reaching
+    // the dates actually being drawn. Backing off a couple of steps, and past
+    // the task's own span, keeps any occurrence that merely overlaps the
+    // window from being skipped by the jump.
+    const start=Math.max(0,repeatStepsUntil(t,addDays(fromISO.slice(0,10),-(span+1)))-2);
+    for(let n=0,i=start;n<400;n++,i++){
       const w=stepRepeat(t.when,t.repeat,i);
       if(until&&w.slice(0,10)>until)break;
       if(w.slice(0,10)>toISO)break;
       if(excluded.has(w))continue;
-      const e=span?addDaysISO(w,span):null;
+      const e=endFor(w);
       if((e||w).slice(0,10)>=fromISO) res.push({t,when:w,endDate:e});
     }
     return res;
@@ -3003,7 +3168,7 @@ function taskOccurrences(t,fromISO,toISO){
           if(iso>toISO)continue;
           const when=iso+(time?"T"+time:"");
           if(excluded.has(when))continue;
-          const e=span?addDaysISO(when,span):null;
+          const e=endFor(when);
           if((e||when).slice(0,10)>=fromISO) out.push({t,when,endDate:e});
         }
       }
@@ -3022,7 +3187,7 @@ function taskOccurrences(t,fromISO,toISO){
         if(until&&iso>until)continue;
         const when=iso+(time?"T"+time:"");
         if(excluded.has(when))continue;
-        const e=span?addDaysISO(when,span):null;
+        const e=endFor(when);
         if((e||when).slice(0,10)>=fromISO) out.push({t,when,endDate:e});
       }
       return out;
@@ -3338,7 +3503,10 @@ function taskEditor(t,after,occWhen,occEndDate){
     <div class="fld"><label>Notes</label><textarea id="tk_notes" rows="3">${esc(t.notes||"")}</textarea></div>
     ${t.isEvent?"":`<div class="fld"><label>Part of</label>
       <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>`}
-    <div class="drow" style="margin-top:16px"><button class="btn danger" id="tk_del">Delete task</button></div>
+    <div class="drow" style="margin-top:16px;gap:8px">
+      <button class="btn danger" id="tk_del">Delete task</button>
+      <button class="btn ghost" id="tk_dup">⧉ Duplicate</button>
+    </div>
     <div class="actions"><button class="btn accent" id="tk_save">Done</button></div>`,{wide:true});
   // The end follows the start the way it does in a calendar: an end already set
   // keeps its length, and an empty one is suggested half an hour on. Repainting
@@ -3570,9 +3738,18 @@ function taskEditor(t,after,occWhen,occEndDate){
   };
   document.getElementById("tk_del").onclick=()=>{
     if(!confirm(`Delete the task "${t.title||"(unnamed)"}"?`))return;
-    if(!wasRecurring||occWhen==null){ deleteTask(t.id); closeModal(); if(after)after(); return; }
+    // named apart from taskEditor's own `before` (the pre-edit field snapshot
+    // revert() restores) — this one is the whole-schedule undo snapshot
+    const snapBefore=calSnapshot(), name=t.title||"(unnamed)";
+    if(!wasRecurring||occWhen==null){
+      deleteTask(t.id); closeModal();
+      commitUndoable(`Deleted "${name}"`,snapBefore); if(after)after(); return;
+    }
     occurrenceScopeModal(scope=>{
-      if(scope==="all"){ deleteTask(t.id); closeModal(); if(after)after(); return; }
+      if(scope==="all"){
+        deleteTask(t.id); closeModal();
+        commitUndoable(`Deleted "${name}" (whole series)`,snapBefore); if(after)after(); return;
+      }
       revert();
       if(scope==="this"){
         t.excludedDates=[...(t.excludedDates||[]),occWhen];
@@ -3583,8 +3760,26 @@ function taskEditor(t,after,occWhen,occEndDate){
         t.excludedDates=(t.excludedDates||[]).filter(w=>w.slice(0,10)<splitDate);
         t.repeat.until=addDays(splitDate,-1);
       }
-      persist(); closeModal(); if(after)after();
+      closeModal();
+      commitUndoable(`Deleted "${name}" (${scope==="this"?"this occurrence":"this and following"})`,snapBefore);
+      if(after)after();
     });
+  };
+  document.getElementById("tk_dup").onclick=()=>{
+    // Copy what's on screen, not what was last saved, so a duplicate made
+    // mid-edit carries the edits you can actually see. The copy starts with a
+    // clean slate of occurrence history: which repeats of the original were
+    // ticked off, or pulled out of its series, says nothing about the new one.
+    const {id,created,doneOccurrences,excludedDates,...rest}=t;
+    const copy=addTask({...rest,
+      title:(document.getElementById("tk_name").value||"(unnamed)")+" (copy)",
+      notes:document.getElementById("tk_notes").value.trim(),
+      doneOccurrences:[],excludedDates:[],
+      links:(t.links||[]).map(l=>({...l})),
+      repeat:t.repeat?JSON.parse(JSON.stringify(t.repeat)):null});
+    closeModal(); if(after)after();
+    taskEditor(copy,after);
+    toast("Duplicated — you're editing the copy");
   };
 }
 // Which animals this experiment uses, and which group each is in. Its own
@@ -4556,7 +4751,7 @@ function weekStart(offset){
   return d;
 }
 
-let calMode="week";                       // "day" | "week" | "month"
+let calMode="week";                       // "day" | "week" | "month" (restored from config in migrate)
 function calSpan(){
   // day and week share one grid; only how many columns it has differs
   if(calMode==="day"){ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+calWeekOffset); return {start:d,n:1}; }
@@ -4565,6 +4760,258 @@ function calSpan(){
 function calModeSegHTML(){
   return `<div class="seg cal-mode" id="cal_mode">${["day","week","month"]
     .map(m=>`<button type="button" data-m="${m}" class="${calMode===m?"on":""}">${m[0].toUpperCase()+m.slice(1)}</button>`).join("")}</div>`;
+}
+
+/* ---- overdue triage ----
+   Something scheduled and never ticked off used to just scroll out of the
+   past, visible only if you happened to page back to the week it was in.
+   This is the one list of everything still owed, with the two things you
+   actually want to do about each: open it, or pull it to today. */
+function overdueOccurrences(){
+  const today=todayDateStr(), from=addDays(today,-365);
+  const out=[];
+  // events aren't owed — a meeting that happened is not a debt the way an
+  // unticked task is, so only real tasks count here
+  taskList().filter(t=>!t.isEvent&&t.when).forEach(t=>{
+    taskOccurrences(t,from,today).forEach(o=>{
+      if(occDone(t,o.when))return;
+      if(dueClass(o.when,"",o.endDate)!=="overdue")return;
+      out.push({t,when:o.when,endDate:o.endDate});
+    });
+  });
+  return out.sort((a,b)=>a.when.localeCompare(b.when));
+}
+function openOverdueModal(){
+  const draw=()=>{
+    const rows=overdueOccurrences();
+    document.getElementById("modal").innerHTML=`<h3>Overdue</h3>
+      ${rows.length?`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-bottom:10px">
+        ${rows.length} item${rows.length!==1?"s":""} past due and not ticked off</div>
+      <div class="ov-list">${rows.map((r,i)=>`<div class="ov-row" data-i="${i}">
+        <button type="button" class="step-dot" title="Mark done"></button>
+        <span class="ov-title">${esc(r.t.title||"(unnamed task)")}</span>
+        <span class="ov-when">${esc(fmtWhenFull(r.when))}</span>
+        <span class="ov-late">${esc(fmtDue(r.when))}</span>
+        <button type="button" class="ov-today" title="Reschedule to today">→ today</button>
+        <button type="button" class="ov-open" title="Open">open</button>
+      </div>`).join("")}</div>`
+      :`<div class="empty" style="padding:18px 0">Nothing overdue.</div>`}
+      <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`;
+    const rowsEl=document.getElementById("modal").querySelectorAll(".ov-row");
+    rowsEl.forEach(el=>{
+      const r=rows[+el.dataset.i];
+      el.querySelector(".step-dot").onclick=()=>{
+        const before=calSnapshot();
+        setOccDone(r.t,r.when,true);
+        commitUndoable(`Ticked off "${r.t.title||"(unnamed)"}"`,before);
+        draw(); renderTimeline();
+      };
+      el.querySelector(".ov-today").onclick=()=>{
+        const before=calSnapshot();
+        // keep the time of day it was set for; only the date moves
+        const t0=hasTime(r.when)?r.when.slice(11):null;
+        const target=todayDateStr()+(t0?"T"+t0:"");
+        const x={kind:"task",src:r.t,deadline:r.when,endDate:r.endDate,duration:r.t.duration};
+        // a repeating task asks its own scope question; a plain one just moves
+        if(r.t.repeat&&r.t.repeat.every){ closeModal(); commitCalMove(x,target,undefined,undefined); return; }
+        r.t.when=target;
+        if(r.t.endDate){
+          const span=Math.max(0,Math.round((new Date(r.t.endDate.slice(0,10))-new Date(r.when.slice(0,10)))/864e5));
+          r.t.endDate=addDaysISO(target,span).slice(0,10)+(r.t.endDate.length>10?"T"+r.t.endDate.slice(11):"");
+        }
+        commitUndoable(`Moved "${r.t.title||"(unnamed)"}" to today`,before);
+        draw(); renderTimeline();
+      };
+      el.querySelector(".ov-open").onclick=()=>{ closeModal(); taskEditor(r.t,()=>renderTimeline(),r.when,r.endDate); };
+    });
+  };
+  modal("",{wide:true});
+  draw();
+}
+
+/* ---- finding something on the calendar ----
+   The Timeline could only be read forward one period at a time: if you knew
+   a task existed but not which week it was in, there was nothing to ask. */
+function calSearchHits(q){
+  q=q.trim().toLowerCase();
+  if(q.length<2)return [];
+  const today=todayDateStr();
+  const hits=[];
+  taskList().forEach(t=>{
+    if(!t.when||!String(t.title||"").toLowerCase().includes(q))return;
+    // one row per task, showing the occurrence nearest to now rather than
+    // every repeat of it — a weekly task shouldn't flood the results
+    const occ=taskOccurrences(t,addDays(today,-365),addDays(today,365));
+    const next=occ.find(o=>o.when.slice(0,10)>=today)||occ[occ.length-1];
+    hits.push({kind:t.isEvent?"event":"task",title:t.title||"(unnamed)",
+      when:next?next.when:t.when,src:t});
+  });
+  DB.experiments.forEach(ex=>{
+    if(!ex.deadline||!String(ex.title||"").toLowerCase().includes(q))return;
+    hits.push({kind:"experiment",title:ex.title||"(unnamed experiment)",when:ex.deadline,src:ex});
+  });
+  return hits.sort((a,b)=>a.when.localeCompare(b.when)).slice(0,12);
+}
+let calSearchQ="";
+
+/* ---- quick add ----
+   Typing one line beats opening a modal and filling four fields for the
+   "feed the cages tomorrow at 9" kind of entry, which is most of them.
+   Deliberately forgiving: anything it can't read stays part of the title, so
+   a phrase it doesn't understand becomes a plainly-named task rather than an
+   error. Whatever it did understand is echoed back in the toast, so a
+   misreading is visible immediately (and undoable). */
+const QA_WEEKDAYS=["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+const QA_MONTHS=["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+function parseQuickAdd(text){
+  let s=" "+String(text||"").trim()+" ";
+  if(!s.trim())return null;
+  const today=todayDateStr();
+  let date=null, time=null, dur=null;
+  const eat=re=>{ const m=s.match(re); if(m){ s=s.replace(m[0]," "); } return m; };
+
+  // duration: "1h30", "1.5h", "90m", "2 hours"
+  let m=eat(/\s(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\s*(\d{1,2})?\s*(?:m|min|mins|minutes)?(?=\s)/i);
+  if(m) dur=Math.round(parseFloat(m[1])*60)+(m[2]?+m[2]:0);
+  if(dur==null){ m=eat(/\s(\d{1,3})\s*(?:m|min|mins|minute|minutes)(?=\s)/i); if(m)dur=+m[1]; }
+
+  // time: "9am", "9:30 pm", "14:00", "at 9"
+  m=eat(/\s(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?=\s)/i);
+  if(m){
+    let h=+m[1]%12; if(/pm/i.test(m[3]))h+=12;
+    time=`${String(h).padStart(2,"0")}:${m[2]||"00"}`;
+  }
+  if(!time){ m=eat(/\s(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)(?=\s)/); if(m)time=`${String(+m[1]).padStart(2,"0")}:${m[2]}`; }
+
+  // date: explicit ISO, then relative words, then weekday, then d/m and month-name forms
+  m=eat(/\s(\d{4}-\d{2}-\d{2})(?=\s)/);          if(m)date=m[1];
+  if(!date&&eat(/\stoday(?=\s)/i))               date=today;
+  if(!date&&eat(/\s(?:tomorrow|tmrw|tmr)(?=\s)/i)) date=addDays(today,1);
+  if(!date&&(m=eat(/\sin\s+(\d{1,3})\s*(?:d|days?)(?=\s)/i))) date=addDays(today,+m[1]);
+  if(!date&&(m=eat(/\s(?:in\s+(\d{1,2})\s*(?:w|weeks?)|next\s+week)(?=\s)/i)))
+    date=addDays(today,7*(m[1]?+m[1]:1));
+  if(!date&&(m=eat(new RegExp(`\\s(next\\s+)?(${QA_WEEKDAYS.join("|")}|${QA_WEEKDAYS.map(d=>d.slice(0,3)).join("|")})(?=\\s)`,"i")))){
+    const want=QA_WEEKDAYS.findIndex(d=>d.startsWith(m[2].toLowerCase().slice(0,3)));
+    const now=new Date(today+"T00:00:00");
+    let delta=(want-now.getDay()+7)%7;
+    if(delta===0||m[1])delta=delta||7;          // "monday" on a Monday means next Monday
+    date=addDays(today,delta);
+  }
+  if(!date&&(m=eat(new RegExp(`\\s(?:(\\d{1,2})\\s*(${QA_MONTHS.join("|")})|(${QA_MONTHS.join("|")})\\s*(\\d{1,2}))(?=\\s)`,"i")))){
+    const day=+(m[1]||m[4]), mon=QA_MONTHS.indexOf((m[2]||m[3]).toLowerCase());
+    const now=new Date(today+"T00:00:00");
+    let y=now.getFullYear();
+    const p2=x=>String(x).padStart(2,"0");
+    let iso=`${y}-${p2(mon+1)}-${p2(day)}`;
+    if(iso<today)iso=`${y+1}-${p2(mon+1)}-${p2(day)}`;   // a bare month/day already past means next year
+    date=iso;
+  }
+  if(!date&&(m=eat(/\s(\d{1,2})\/(\d{1,2})(?=\s)/))){
+    const now=new Date(today+"T00:00:00"), p2=x=>String(x).padStart(2,"0");
+    let iso=`${now.getFullYear()}-${p2(+m[2])}-${p2(+m[1])}`;  // d/m, matching the app's non-US date wording
+    if(iso<today)iso=`${now.getFullYear()+1}-${p2(+m[2])}-${p2(+m[1])}`;
+    date=iso;
+  }
+
+  const title=s.replace(/\s+/g," ").trim();
+  if(!title)return null;
+  const when=(date||today)+(time?"T"+time:"");
+  return {title,when,duration:time?(dur||null):null,
+          parsed:{date:!!date,time:!!time,duration:dur!=null}};
+}
+// The search / quick-add / overdue row, shared by the hour-grid and month
+// renderers so both get the same tools rather than only whichever was edited.
+function calNavExtrasHTML(){
+  const n=overdueOccurrences().length;
+  return `<div class="cal-extras">
+    <div class="cal-find">
+      <input type="text" id="cal_search" class="cal-inp" placeholder="Find…  /" value="${escAttr(calSearchQ)}" autocomplete="off">
+      <div class="cal-hits" id="cal_hits" hidden></div>
+    </div>
+    <input type="text" id="cal_quickadd" class="cal-inp cal-inp-add" placeholder="＋ Quick add:  feed cages tomorrow 9am 30m" autocomplete="off">
+    ${n?`<button type="button" class="cal-overdue" id="cal_overdue" title="Everything past due">${n} overdue</button>`:""}
+  </div>`;
+}
+function wireCalNavExtras(nav,currentISO){
+  const title=nav.querySelector("#cal_title");
+  if(title) title.onclick=()=>openCalendar(title,currentISO,iso=>calGoToDate(iso),undefined,true);
+  const ov=nav.querySelector("#cal_overdue");
+  if(ov) ov.onclick=openOverdueModal;
+
+  const add=nav.querySelector("#cal_quickadd");
+  if(add) add.addEventListener("keydown",e=>{
+    if(e.key!=="Enter")return;
+    const t=runQuickAdd(add.value);
+    if(!t)return;
+    add.value="";
+    calGoToDate(t.when);          // land on whatever day it was just put on
+  });
+
+  const box=nav.querySelector("#cal_search"), hits=nav.querySelector("#cal_hits");
+  if(!box||!hits)return;
+  const draw=()=>{
+    const rows=calSearchHits(calSearchQ);
+    if(!calSearchQ.trim()||calSearchQ.trim().length<2){ hits.hidden=true; hits.innerHTML=""; return; }
+    hits.hidden=false;
+    hits.innerHTML=rows.length?rows.map((r,i)=>`<button type="button" class="cal-hit" data-i="${i}">
+        <span class="ch-kind">${r.kind==="experiment"?"⚗":r.kind==="event"?"◆":"◻"}</span>
+        <span class="ch-title">${esc(r.title)}</span>
+        <span class="ch-when">${esc(fmtWhenFull(r.when))}</span>
+      </button>`).join(""):`<div class="cal-hit-empty">No match</div>`;
+    hits.querySelectorAll(".cal-hit").forEach(b=>b.onclick=()=>{
+      const r=rows[+b.dataset.i];
+      calSearchQ=""; calGoToDate(r.when);
+    });
+  };
+  box.addEventListener("input",e=>{ calSearchQ=e.target.value; draw(); });
+  box.addEventListener("keydown",e=>{
+    if(e.key==="Escape"){ e.stopPropagation(); calSearchQ=""; box.value=""; draw(); box.blur(); }
+    if(e.key==="Enter"){ const first=hits.querySelector(".cal-hit"); if(first)first.click(); }
+  });
+  if(calSearchQ) draw();
+}
+function runQuickAdd(text){
+  const p=parseQuickAdd(text);
+  if(!p){ toast("Nothing to add"); return null; }
+  const before=calSnapshot();
+  const t=addTask({title:p.title,when:p.when,duration:p.duration});
+  commitUndoable(`Added "${t.title}" — ${fmtWhenFull(t.when)}${p.duration?` (${p.duration} min)`:""}`,before);
+  return t;
+}
+/* ---- getting somewhere on the calendar ----
+   calWeekOffset counts periods from today, and what a "period" is depends on
+   the mode, so jumping to a date means converting that date into the right
+   count for whichever mode is showing. Without this the only way to reach a
+   date months out was to click › that many times. */
+function calGoToDate(iso){
+  if(!iso)return;
+  const target=new Date(iso.slice(0,10)+"T00:00:00");
+  if(calMode==="day"){
+    const t0=new Date(); t0.setHours(0,0,0,0);
+    calWeekOffset=Math.round((target-t0)/864e5);
+  } else if(calMode==="month"){
+    const now=new Date();
+    calWeekOffset=(target.getFullYear()-now.getFullYear())*12+(target.getMonth()-now.getMonth());
+  } else {
+    const tws=new Date(target); tws.setDate(target.getDate()-target.getDay()); tws.setHours(0,0,0,0);
+    calWeekOffset=Math.round((tws-weekStart(0))/(7*864e5));
+  }
+  renderTimeline();
+}
+// The dates a given mode is currently showing, as [fromISO,toISO] — used by
+// search and the overdue list to say whether a hit is already on screen.
+function calVisibleRange(){
+  const p2=x=>String(x).padStart(2,"0");
+  const k=d=>`${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
+  if(calMode==="month"){
+    const b=new Date(); b.setDate(1); b.setHours(0,0,0,0); b.setMonth(b.getMonth()+calWeekOffset);
+    const gridStart=new Date(b); gridStart.setDate(1-b.getDay());
+    const gridEnd=new Date(gridStart); gridEnd.setDate(gridStart.getDate()+41);
+    return [k(gridStart),k(gridEnd)];
+  }
+  const {start,n}=calSpan();
+  const end=new Date(start); end.setDate(start.getDate()+n-1);
+  return [k(start),k(end)];
 }
 function calColourSegHTML(){
   const m=DB.config.calColorBy||"type";
@@ -4605,7 +5052,15 @@ function wireCalModeSeg(root){
   const seg=root.querySelector("#cal_mode"); if(!seg)return;
   seg.addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
     if(b.dataset.m===calMode)return;
-    calMode=b.dataset.m; calWeekOffset=0; renderTimeline(); });
+    setCalMode(b.dataset.m); });
+}
+// Changing zoom used to also jump back to today, so checking "what does this
+// week look like as a month" lost your place. Keep the day already on screen
+// and remember the choice, so the Timeline opens where it was left.
+function setCalMode(mode){
+  const [from]=calVisibleRange();
+  calMode=mode; DB.config.calMode=mode; persist();
+  calGoToDate(from);
 }
 // Month is its own renderer: an hour grid makes no sense at this zoom, so it is
 // a plain day matrix with the diary entries listed in each cell.
@@ -4640,12 +5095,14 @@ function renderMonthView(host){
   nav.innerHTML=`<button class="cal-nav-btn" id="cal_prev">‹</button>
     <button class="cal-nav-btn today" id="cal_today">Today</button>
     <button class="cal-nav-btn" id="cal_next">›</button>
-    <h2>${base.toLocaleDateString(undefined,{month:"long",year:"numeric"})}</h2>
-    ${calModeSegHTML()}${calColourSegHTML()}${calFilterSegHTML()}`;
+    <h2 class="cal-title" id="cal_title" title="Jump to a date">${base.toLocaleDateString(undefined,{month:"long",year:"numeric"})}</h2>
+    ${calModeSegHTML()}${calColourSegHTML()}${calFilterSegHTML()}
+    ${calNavExtrasHTML()}`;
   nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
   nav.querySelector("#cal_next").onclick=()=>{calWeekOffset++;renderTimeline();};
   nav.querySelector("#cal_today").onclick=()=>{calWeekOffset=0;renderTimeline();};
   wireCalModeSeg(nav); wireCalColourSeg(nav); wireCalFilterSeg(nav);
+  wireCalNavExtras(nav,calVisibleRange()[0]);
 
   const gridStart=new Date(base); gridStart.setDate(1-base.getDay());
   const DAYS=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -4783,10 +5240,12 @@ function renderTimeline(){
   nav.innerHTML=`<button class="cal-nav-btn" id="cal_prev">‹</button>
     <button class="cal-nav-btn today" id="cal_today">Today</button>
     <button class="cal-nav-btn" id="cal_next">›</button>
-    <h2>${NCOL===1?ws.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric",year:"numeric"})
+    <h2 class="cal-title" id="cal_title" title="Jump to a date">${NCOL===1?ws.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric",year:"numeric"})
                   :`${fmt(ws)} – ${fmt(we)}, ${fmtY(we)}`}</h2>
-    ${calModeSegHTML()}${calColourSegHTML()}${calFilterSegHTML()}`;
+    ${calModeSegHTML()}${calColourSegHTML()}${calFilterSegHTML()}
+    ${calNavExtrasHTML()}`;
   wireCalModeSeg(nav); wireCalColourSeg(nav); wireCalFilterSeg(nav);
+  wireCalNavExtras(nav,calVisibleRange()[0]);
   nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
   nav.querySelector("#cal_next").onclick=()=>{calWeekOffset++;renderTimeline();};
   nav.querySelector("#cal_today").onclick=()=>{calWeekOffset=0;renderTimeline();};
@@ -4850,6 +5309,15 @@ function renderTimeline(){
     // weekday; in day view NCOL is 1 and d is always 0 regardless of which
     // actual day is showing, which is why every day read "Sun" at the top.
     hdr.innerHTML=`<div class="dow">${DAYS[day.getDay()]}</div><div class="dom">${day.getDate()}</div>`;
+    // clicking a day's header zooms into just that day, the way every other
+    // calendar behaves — previously the only route was the Day button, which
+    // always landed on today and left you paging to the day you wanted
+    if(NCOL>1){
+      hdr.classList.add("hdr-clickable");
+      hdr.title="Open this day";
+      const iso=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,"0")}-${String(day.getDate()).padStart(2,"0")}`;
+      hdr.onclick=()=>{ calMode="day"; DB.config.calMode="day"; persist(); calGoToDate(iso); };
+    }
     alldayGrid.appendChild(hdr);
   }
   // all-day row in the sticky zone
@@ -5176,11 +5644,24 @@ function renderTimeline(){
     }
   }
 
-  // put the grid back where it was, or start the day at 8am if it is new
+  // Put the grid back where it was, or — on a fresh open — show the part of
+  // the day you're actually in: the current hour when today is on screen,
+  // otherwise the start of the working day.
+  // offsetTop was the wrong measure here and opened the Timeline at roughly
+  // 1pm: an hour cell's offsetParent is an ancestor *outside* the scrolling
+  // wrap, so its offsetTop included everything above the calendar as well.
+  // Measuring the gap between the two elements' own boxes is right wherever
+  // either of them happens to sit.
   requestAnimationFrame(()=>{
     if(keepScroll!=null){ wrap.scrollTop=keepScroll; return; }
-    const h8=wrap.querySelector("[data-hour='8']");
-    if(h8) wrap.scrollTop=h8.offsetTop;
+    const now=new Date();
+    const todayShown=(()=>{ const t0=new Date(); t0.setHours(0,0,0,0);
+      const end=new Date(ws); end.setDate(ws.getDate()+NCOL-1);
+      return t0>=ws&&t0<=end; })();
+    const hour=todayShown?Math.max(0,now.getHours()-1):8;
+    const cell=wrap.querySelector(`[data-hour='${hour}']`);
+    if(!cell)return;
+    wrap.scrollTop=cell.getBoundingClientRect().top-wrap.getBoundingClientRect().top+wrap.scrollTop;
   });
 }
 
@@ -8958,10 +9439,30 @@ document.addEventListener("focusin",e=>{
   el.setAttribute("autocapitalize","off");
 });
 document.addEventListener("keydown",e=>{
-  if(e.key!=="Escape")return;
-  // a modal sits above the detail panel, so it gets the key first
-  if(document.getElementById("scrim").classList.contains("open")){ closeModal(); return; }
-  if(document.getElementById("detail").classList.contains("open")) closeDetail();
+  if(e.key==="Escape"){
+    // a modal sits above the detail panel, so it gets the key first
+    if(document.getElementById("scrim").classList.contains("open")){ closeModal(); return; }
+    if(document.getElementById("detail").classList.contains("open")) closeDetail();
+    return;
+  }
+  // Everything below is a bare-key shortcut, so it must never fire while the
+  // user is actually typing, or inside a modal that has its own keys.
+  const el=document.activeElement;
+  if(el&&(/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)||el.isContentEditable))return;
+  if(document.getElementById("scrim").classList.contains("open"))return;
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="z"){ e.preventDefault(); runUndo(); return; }
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  if(currentView!=="timeline")return;
+  const k=e.key.toLowerCase();
+  if(e.key==="ArrowLeft"){ e.preventDefault(); calWeekOffset--; renderTimeline(); }
+  else if(e.key==="ArrowRight"){ e.preventDefault(); calWeekOffset++; renderTimeline(); }
+  else if(k==="t"){ e.preventDefault(); calWeekOffset=0; renderTimeline(); }
+  else if(k==="d"||k==="w"||k==="m"){
+    e.preventDefault();
+    const mode=k==="d"?"day":k==="w"?"week":"month";
+    if(calMode!==mode) setCalMode(mode);
+  }
+  else if(k==="/"){ e.preventDefault(); const s=document.getElementById("cal_search"); if(s)s.focus(); }
 });
 // mobile: swipe down on detail panel header to close (when scrolled to top)
 (()=>{ const det=document.getElementById("detail"); let sy=0;
@@ -9330,9 +9831,15 @@ document.getElementById("expCal").addEventListener("click",()=>{
   const today0=todayDateStr();
   const due=[
     ...allSteps().filter(x=>x.deadline&&!stepDone(x)),
-    // export the next year of a repeating task rather than one row for the rule
+    // export the next year of a repeating task rather than one row for the rule.
+    // Each occurrence needs its own id: UID is what a calendar app dedupes on,
+    // and every row used to carry the same (undefined) one, so an import
+    // collapsed the whole schedule into a single event. duration/notes have to
+    // ride along too — they were dropped here, so a 30-minute task exported as
+    // an hour and no description ever made it out.
     ...taskList().flatMap(t=>taskOccurrences(t,today0,addDays(today0,365))
-      .map(o=>({title:t.title,deadline:o.when,endDate:o.endDate})))
+      .map(o=>({id:`${t.id}-${o.when}`,title:t.title,deadline:o.when,endDate:o.endDate,
+                duration:t.duration,notes:t.notes,status:t.status})))
   ];
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
   const diaryEvents=[];
@@ -9346,7 +9853,11 @@ document.getElementById("expCal").addEventListener("click",()=>{
     let se;
     if(hasTime(t.deadline)){
       const s=whenDate(t.deadline);
-      const en=t.endDate?whenDate(t.endDate):new Date(s.getTime()+60*60000); // 1hr default
+      // an explicit end wins; failing that the task's own length, and only
+      // then a flat hour — exporting every unended task as an hour regardless
+      // of the duration it was actually given is what it used to do
+      const en=t.endDate?whenDate(t.endDate)
+        :new Date(s.getTime()+(t.duration||60)*60000);
       se=`DTSTART:${local(s)}\r\nDTEND:${local(en)}`;
     } else {
       const d=t.deadline.slice(0,10).replace(/-/g,"");
@@ -9354,7 +9865,7 @@ document.getElementById("expCal").addEventListener("click",()=>{
       se=`DTSTART;VALUE=DATE:${d}\r\nDTEND;VALUE=DATE:${t.endDate?mkEnd(t.endDate.slice(0,10)):mkEnd(t.deadline.slice(0,10))}`;
     }
     const overdueTag=dueClass(t.deadline,t.status,t.endDate)==="overdue"?" [OVERDUE]":"";
-    ics+=`BEGIN:VEVENT\r\nUID:${t.id}@arbor\r\nDTSTAMP:${stamp}\r\n${se}\r\nSUMMARY:${esc2(t.title+overdueTag)}\r\n`;
+    ics+=`BEGIN:VEVENT\r\nUID:${String(t.id).replace(/[^A-Za-z0-9_-]/g,"")}@arbor\r\nDTSTAMP:${stamp}\r\n${se}\r\nSUMMARY:${esc2(t.title+overdueTag)}\r\n`;
     if(t.notes) ics+=`DESCRIPTION:${esc2(t.notes)}\r\n`;
     ics+="END:VEVENT\r\n";
   });
