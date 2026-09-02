@@ -5736,13 +5736,12 @@ function wireHourCellCreate(cell,day,h0,gridWrap,slideEl){
     // on unless this handler drives .cal-grid-wrap's scrollTop itself, which
     // is what the "scrolling" branch below does.
     const startScrollTop=isTouch&&gridWrap?gridWrap.scrollTop:0;
-    // 5-minute snap, not 15 — at a typical row height, 15 minutes of screen
-    // space is only a handful of pixels, so the old grid made the preview sit
-    // dead still through most of a drag and then lurch a visible chunk once a
-    // boundary finally cleared: sensitive to overshoot, unresponsive short of
-    // it. Finer steps track the pointer closely enough that motion reads as
-    // continuous instead of a sequence of jumps.
-    const CREATE_SNAP_MIN=5;
+    // Dragging lands on the quarter-hour grid — :00, :15, :30, :45 — and
+    // nothing finer. A finer grid was tried and it only made drops land on
+    // untidy times like 1:05pm or 2:50pm, which is not something anyone
+    // aims for with a pointer; an exact odd time is a thing you mean, so it
+    // belongs to the editor's own time field, not to a drag.
+    const CREATE_SNAP_MIN=15;
     const wholeAt=clientY=>{
       const minsFromCellTop=((clientY-cr.top)/rowH)*60;
       const totalMin=Math.min(Math.max(Math.round((h0*60+minsFromCellTop)/CREATE_SNAP_MIN)*CREATE_SNAP_MIN,0),24*60-CREATE_SNAP_MIN);
@@ -5878,10 +5877,9 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
   // height (see the mobile media query) can never fall out of step with what
   // a drag actually computes — a duplicated number here would silently
   // miscalibrate every drag the moment the two diverged.
-  // 5-minute snap, not 15 — see the create-drag's own CREATE_SNAP_MIN comment;
-  // same reasoning here, so a moved/resized chip lands close to wherever it
-  // visually looked like it was released instead of rounding away from it.
-  const pxPerMin=(parseFloat(getComputedStyle(evtEl).getPropertyValue("--cal-hour-h"))||52)/60, MIN_DUR=15, SNAP_MIN=5;
+  // Quarter-hour grid for moves and resizes, same as the create-drag's own
+  // CREATE_SNAP_MIN — a dragged chip should land on a slot, never on 2:50pm.
+  const pxPerMin=(parseFloat(getComputedStyle(evtEl).getPropertyValue("--cal-hour-h"))||52)/60, MIN_DUR=15, SNAP_MIN=15;
   const origStart=whenDate(t.deadline);
   const origDuration=t.duration||(t.endDate?Math.max((whenDate(t.endDate)-origStart)/60000,MIN_DUR):60);
   const pad4=n=>String(n).padStart(2,"0");
