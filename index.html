@@ -3597,35 +3597,10 @@ function taskEditor(t,after,occWhen,occEndDate){
   // belongs to at opposite ends of the menu, so choosing between "this
   // project" and "one experiment in it" — which is the choice you are
   // usually making — meant hunting in two places.
-  const sel=taskTargetValue(t);
-  // indented with spaces rather than an arrow glyph: a collapsed <select>
-  // shows only the option's own text, so a marker would ride along into the
-  // closed field and read as part of the name
-  const opt=(value,label,indent)=>
-    `<option value="${value}" ${sel===value?"selected":""}>${indent?"&nbsp;&nbsp;&nbsp;&nbsp;":""}${esc(label)}</option>`;
-  // No group heading per project: the heading was the project's own name, and
-  // the very next line was that same name as the option you actually pick —
-  // the same text twice, the first copy greyed out and unclickable. The
-  // project is simply the top line of its own block, with its experiments
-  // indented under it, so every row in the menu is something you can choose.
-  const byTitle=(a,b)=>String(a.title||"").localeCompare(String(b.title||""));
-  const blocks=[...DB.projects]
-    .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")))
-    .map(pr=>
-      opt("p:"+pr.id,pr.name||"(unnamed project)",false)
-      +DB.experiments.filter(ex=>ex.projectId===pr.id).sort(byTitle)
-        .map(ex=>opt("e:"+ex.id,ex.title||"(unnamed experiment)",true)).join("")
-    ).join("");
-  // The one heading that stays, because nothing clickable says the same thing:
-  // it separates experiments that sit under no project from the blocks above,
-  // which would otherwise be indistinguishable from projects at that indent.
-  const loose=DB.experiments.filter(ex=>!ex.projectId).sort(byTitle);
-  const opts=blocks
-    +(loose.length?(DB.projects.length
-        ?`<optgroup label="Not in a project">`
-          +loose.map(ex=>opt("e:"+ex.id,ex.title||"(unnamed experiment)",false)).join("")+`</optgroup>`
-        :loose.map(ex=>opt("e:"+ex.id,ex.title||"(unnamed experiment)",false)).join())
-      :"");
+  const opts=partOfOptionsHTML({
+    valueOf:(kind,id)=>kind+":"+id,
+    selected:taskTargetValue(t)
+  });
   modal(`<h3>${t.isEvent?"Event":"Task"}</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
     ${wasDetached?`<p style="color:var(--ink-dim);font-size:12px;line-height:1.5;margin:-6px 0 14px;background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:8px 10px">
@@ -4219,13 +4194,44 @@ function mountPendingExperiments(host,pending){
 // A flat <select> split into two <optgroup>s rather than the old p:/e: string-
 // prefix scheme — ids are already globally distinct, so no prefix is needed,
 // and an empty side (e.g. no projects yet) is simply omitted.
+/* One builder for every "which project or experiment does this belong to"
+   menu: the task editor's Part of, and the attach pickers on notes and
+   library records. They had drifted into two different shapes — this one
+   nests each project's experiments underneath it, the other listed every
+   experiment in one block and every project in another — so the same
+   question looked like two different questions depending on where you were
+   asked it. valueOf decides how an option encodes its answer, which is the
+   only thing that actually differs: a task stores an experiment and a
+   project in separate fields and needs the kind spelled out, while an
+   attachment just needs the id. */
+function partOfOptionsHTML({valueOf,selected,exclude}){
+  const skip=id=>!!exclude&&exclude.includes(id);
+  const mark=v=>selected===v?" selected":"";
+  // deep enough that a nested experiment reads as belonging to the line
+  // above it rather than merely being near it
+  const IND="&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;";
+  const byTitle=(a,b)=>String(a.title||"").localeCompare(String(b.title||""));
+  const expOpt=(e,indent)=>{ const v=valueOf("e",e.id);
+    return `<option value="${v}"${mark(v)}>${indent?IND:""}${esc(e.title||"(unnamed experiment)")}</option>`; };
+  let html=[...DB.projects]
+    .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")))
+    .map(pr=>{
+      const kids=DB.experiments.filter(e=>e.projectId===pr.id&&!skip(e.id)).sort(byTitle);
+      const pv=valueOf("p",pr.id);
+      const head=skip(pr.id)?"":`<option value="${pv}"${mark(pv)}>${esc(pr.name||"(unnamed project)")}</option>`;
+      return (head||kids.length)?head+kids.map(e=>expOpt(e,true)).join(""):"";
+    }).join("");
+  // the one heading that stays: nothing clickable says the same thing, and
+  // without it these would sit at the same indent as the projects above
+  const loose=DB.experiments.filter(e=>!e.projectId&&!skip(e.id)).sort(byTitle);
+  if(loose.length){
+    const opts=loose.map(e=>expOpt(e,false)).join("");
+    html+=DB.projects.length?`<optgroup label="Not in a project">${opts}</optgroup>`:opts;
+  }
+  return html;
+}
 function expProjOptionsHTML(exclude){
-  const exps=DB.experiments.filter(e=>!exclude.includes(e.id));
-  const projs=DB.projects.filter(p=>!exclude.includes(p.id));
-  return (exps.length?`<optgroup label="Experiments">${exps.map(e=>
-      `<option value="${e.id}">${esc(entityLabel(e))}</option>`).join("")}</optgroup>`:"")
-    +(projs.length?`<optgroup label="Projects">${projs.map(p=>
-      `<option value="${p.id}">${esc(entityLabel(p))}</option>`).join("")}</optgroup>`:"");
+  return partOfOptionsHTML({valueOf:(kind,id)=>id,exclude});
 }
 function mountPendingLinks(host,pending){
   const draw=()=>{
@@ -5141,9 +5147,15 @@ function wireCalModeSeg(root){
 // week look like as a month" lost your place. Keep the day already on screen
 // and remember the choice, so the Timeline opens where it was left.
 function setCalMode(mode){
-  const [from]=calVisibleRange();
+  // Keep your place when changing zoom — but if today is somewhere in what
+  // you're already looking at, today IS your place. Landing on the Sunday of
+  // the week you had open just because that's where the range starts is never
+  // what you meant by "show me the day".
+  const [from,to]=calVisibleRange();
+  const today=todayDateStr();
+  const target=(today>=from&&today<=to)?today:from;
   calMode=mode; DB.config.calMode=mode; persist();
-  calGoToDate(from);
+  calGoToDate(target);
 }
 // Month is its own renderer: an hour grid makes no sense at this zoom, so it is
 // a plain day matrix with the diary entries listed in each cell.
