@@ -945,13 +945,11 @@
         <button class="mat-stab" data-ms="inventory">Inventory</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
         <button class="mat-stab" data-ms="viruses">Viruses</button>
-        <button class="mat-stab" data-ms="tags">Tags</button>
       </div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview hidden" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-procedures"></div>
-      <div class="wrap mat-subview hidden" id="ms-tags"></div>
       <div class="wrap mat-subview" id="ms-diarytypes"></div>
     </div>
     <div class="view hidden wrap" id="library"></div>
@@ -1090,7 +1088,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
-  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",operated:"all",search:"",sort:"name"},
+  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",operated:"all",entry:"all",search:"",sort:"name"},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // Named, colour-coded event categories — tasks already get an implicit
   // colour from whatever project they're attached to, but an event (isEvent:
@@ -1637,6 +1635,7 @@ function migrate(){                       // backfill fields added in later vers
   animalProject=DB.config.animalFilters.project||"all";
   calMode=DB.config.calMode||"week";
   animalOperated=DB.config.animalFilters.operated||"all";
+  animalEntry=DB.config.animalFilters.entry||"all";
   // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
   // may still carry — each meant ascending (earliest/oldest first) already,
   // so map them onto their explicit _asc equivalent rather than losing the
@@ -6290,7 +6289,6 @@ function renderMatSubTab(){
   else if(matSubTab === "sites")    renderSiteLib();
   else if(matSubTab === "procedures") renderProcedureLib();
   else if(matSubTab === "diarytypes") renderDiaryTypesLib();
-  else if(matSubTab === "tags") renderTagsLib();
 }
 
 /* ── INVENTORY ─────────────────────────────────────────────────────────────── */
@@ -6803,8 +6801,12 @@ function procedureModal(id,draft){
    every animal on the old name; deleting has to decide what happens to
    animals still on it, since the name is the only link — there's no
    id-based reference to clean up automatically. */
-function renderTagsLib(){
-  const host = document.getElementById("ms-tags"); host.innerHTML = "";
+// Renders into whatever host it is given: the Animals page opens it in a
+// modal, since a tag is a fact about animals and belongs beside them rather
+// than filed under Materials with the reagents and injection sites.
+function renderTagsLib(host){
+  host = host || document.getElementById("ms-tags"); if(!host) return;
+  host.innerHTML = "";
   const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
 
   const hdr = document.createElement("div");
@@ -7683,7 +7685,7 @@ function noteModal(id,over){
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
-let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalStatus="all", animalOperated="all", animalSearch="", animalSort="name";
+let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalStatus="all", animalOperated="all", animalEntry="all", animalSearch="", animalSort="name";
 // Which animal cards have their detail panel open — tracked here rather than
 // as pure per-card DOM state, so a full renderAnimals() (needed whenever a
 // quick-edit might change which animals a status filter or a dob/sacrificed
@@ -7894,6 +7896,7 @@ function renderAnimals(){
           ["sac_asc","Sacrificed (earliest)"],["sac_desc","Sacrificed (latest)"]]
           .map(o=>`<option value="${o[0]}" ${animalSort===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select></div>
       <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <button class="btn ghost" id="a_tags">🏷 Tags</button>
         <button class="btn ghost" id="a_eventlog">📋 Event log</button>
         <button class="btn accent" id="a_add">＋ Animal</button>
       </div>
@@ -7905,6 +7908,8 @@ function renderAnimals(){
       ${groupNames.length?col("Group","a_group",animalGroup,[["all","All groups"],...groupNames.map(g=>[g,g])]):""}
       ${col("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
       ${col("Operated","a_operated",animalOperated,[["all","All"],["yes","Operated"],["no","Not operated"]])}
+      ${col("Has entry","a_entry",animalEntry,[["all","Any entry"],["none","No entries"],
+        ...diaryTypeDefs().map(d=>[d.key,`${d.icon||""} ${d.label}`.trim()])])}
     </div>
 `;
   host.appendChild(bar);
@@ -7916,6 +7921,7 @@ function renderAnimals(){
   onPick("a_sort",v=>{ animalSort=v; DB.config.animalFilters.sort=v; persist(); renderAnimals(); });
   onPick("a_status",v=>{ animalStatus=v; DB.config.animalFilters.status=v; persist(); renderAnimals(); });
   onPick("a_operated",v=>{ animalOperated=v; DB.config.animalFilters.operated=v; persist(); renderAnimals(); });
+  onPick("a_entry",v=>{ animalEntry=v; DB.config.animalFilters.entry=v; persist(); renderAnimals(); });
   bar.querySelector("#a_search").addEventListener("input",e=>{
     const pos=e.target.selectionStart;
     animalSearch=e.target.value;
@@ -7926,6 +7932,13 @@ function renderAnimals(){
   });
   bar.querySelector("#a_add").onclick=()=>animalModal(null);
   bar.querySelector("#a_eventlog").onclick=()=>openEventLogModal(null);
+  bar.querySelector("#a_tags").onclick=()=>{
+    modal(`<h3>Tags</h3><div id="tags_host"></div>
+      <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+    renderTagsLib(document.getElementById("tags_host"));
+    // the list on the page behind reflects renames/deletes once this closes
+    document.getElementById("scrim").addEventListener("click",()=>renderAnimals(),{once:true});
+  };
 
 
   const q=animalSearch.trim().toLowerCase();
@@ -7936,9 +7949,25 @@ function renderAnimals(){
     // a.comments can be rich HTML now — search the text it actually reads as,
     // not the raw markup (a stray tag shouldn't matter, and shouldn't need
     // to appear in the search term to find a match either)
-    return [a.name,a.cage,a.strain,a.tag,richTextPlain(richBodyHTML(a.comments,a.commentsRich)),...where].some(v=>v && String(v).toLowerCase().includes(q));
+    // the diary is most of what is actually known about an animal, so the
+    // search reads it too: each entry's type, its note, and the values of
+    // whatever fields that type defines — including types added later, since
+    // this walks the entry's own data rather than any fixed list of keys
+    const diary=[];
+    (a.diary||[]).forEach(e=>{
+      const def=diaryTypeDef(e.type);
+      diary.push(def&&def.label, diaryNoteOf(e.data||{}));
+      Object.values(e.data||{}).forEach(v=>{ if(v!=null&&typeof v!=="object") diary.push(v); });
+    });
+    return [a.name,a.cage,a.strain,a.tag,richTextPlain(richBodyHTML(a.comments,a.commentsRich)),...where,...diary]
+      .some(v=>v && String(v).toLowerCase().includes(q));
   }
   const inTag=(a,name)=>name==="all"||(name==="none"?!a.tag:a.tag===name);
+  // "has an entry of this type" — the options come from diaryTypeDefs(), so a
+  // type you add yourself is filterable the moment it exists
+  const inEntry=(a,key)=>key==="all"||(key==="none"
+    ? !(a.diary||[]).length
+    : (a.diary||[]).some(e=>e.type===key));
   // in an experiment = linked to it, or assigned to one of its groups
   const inExperiment=(a,sid)=>{
     if(sid==="all")return true;
@@ -7963,6 +7992,7 @@ function renderAnimals(){
     inTag(a,animalTag) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
     (animalStatus==="all"||a.termination===animalStatus) &&
     inOperated(a,animalOperated) &&
+    inEntry(a,animalEntry) &&
     searchMatch(a));
   // Missing dates sort last whichever way round, so a half-filled column never
   // buries the animals that do have one.
