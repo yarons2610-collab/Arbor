@@ -6009,14 +6009,15 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
     const topY=clientY-grabOffsetY;
     const under=document.elementFromPoint(clientX,topY);
     const cell=under&&under.closest&&under.closest(".cal-hour-cell");
-    // Horizontal gets the same continuous treatment vertical already had —
-    // it used to snap straight to whichever day column's exact left/width
-    // the pointer happened to be over, so a week-view drag between days
-    // visibly jumped column-to-column instead of sliding. rect is the chip's
-    // own lifted box; startX is the drag's own origin — same "every pixel
-    // shows, only the commit snaps" idea, just on the other axis now too.
-    evtEl.style.left=(rect.left+(clientX-startX))+"px";
-    evtEl.style.width=rect.width+"px";
+    // Horizontal position comes from the column the chip will actually land
+    // in — never from the raw pointer. It used to be written twice per move:
+    // first to follow the pointer at the chip's original width, then, if the
+    // hit-test below happened to find a cell, immediately overridden by the
+    // packed column. Any move where that hit-test missed — over the all-day
+    // strip, a gap between cells, past the edge of the grid — left the first
+    // write standing, and the next move put it back: a constant left-right
+    // jitter through the whole drag. A resize had the same write applied for
+    // no reason at all, so drifting the pointer sideways slid the block.
     if(cell){
       const cr=cell.getBoundingClientRect();
       const rawMinuteInHour=Math.min(Math.max(((topY-cr.top)/cr.height)*60,0),59.999);
@@ -6024,10 +6025,21 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
       evtEl.style.top=(cr.top+(rawMinuteInHour/60)*cr.height)+"px";
       evtEl.classList.remove("drag-invalid");
       dropTarget={date:cell.dataset.date,hour:+cell.dataset.hour,minute:snappedMinuteInHour};
-      repackLive(cell,cr);
+      if(mode==="move"){
+        const me=repackLive(cell,cr);
+        const cols=me?me.totalCols:1, ci=me?me.col:0;
+        const w=cr.width/cols;
+        place(cr.left+ci*w+2, Math.max(w-4,12));
+      }
     } else {
       evtEl.classList.add("drag-invalid");
     }
+  }
+  // The chip's current horizontal box, so a move that resolves no column
+  // keeps the last one it had rather than jumping somewhere else.
+  function place(left,width){
+    evtEl.style.left=left+"px";
+    evtEl.style.width=width+"px";
   }
   /* Re-pack the day under the pointer as if the drop happened now, and widen
      or narrow every chip in it — including the one being dragged — to match.
@@ -6047,10 +6059,10 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
     });
   }
   function repackLive(cell,cr){
-    if(mode!=="move"||!calTimedIndex.days.length||!calTimedIndex.startISO)return;
+    if(mode!=="move"||!calTimedIndex.days.length||!calTimedIndex.startISO)return null;
     const dayIdx=Math.round(
       (new Date(cell.dataset.date+"T00:00:00")-new Date(calTimedIndex.startISO+"T00:00:00"))/864e5);
-    if(!calTimedIndex.days[dayIdx])return;
+    if(!calTimedIndex.days[dayIdx])return null;
     const startMin=+cell.dataset.hour*60+dropTarget.minute;
     const endMin=startMin+Math.max(origDuration,14);
     // Every day is re-packed each move: the one under the pointer as though
@@ -6061,15 +6073,11 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
       const without=items.filter(x=>x.key!==layKey);
       applyCols(i, packColumns(i===dayIdx?[...without,{key:layKey,startMin,endMin}]:without));
     });
-    // the lifted chip is fixed-positioned in pixels, so it takes its share of
-    // the day column's own box rather than a percentage of it
-    const me=packColumns([...calTimedIndex.days[dayIdx].filter(x=>x.key!==layKey),
-                          {key:layKey,startMin,endMin}]).get(layKey);
-    if(me){
-      const w=cr.width/me.totalCols;
-      evtEl.style.left=(cr.left+me.col*w+2)+"px";
-      evtEl.style.width=Math.max(w-4,12)+"px";
-    }
+    // hand back the dragged chip's own column so the caller can place it —
+    // one place decides where the chip sits, rather than two writing over
+    // each other
+    return packColumns([...calTimedIndex.days[dayIdx].filter(x=>x.key!==layKey),
+                        {key:layKey,startMin,endMin}]).get(layKey)||null;
   }
   // Dragging toward the top/bottom edge of the visible grid scrolls it toward
   // more room, same as Google Calendar — otherwise a task could only ever be
