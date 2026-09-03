@@ -3590,15 +3590,34 @@ function taskEditor(t,after,occWhen,occEndDate){
   const seeded=JSON.parse(JSON.stringify(t));   // what the form actually opened showing
   // A flat, sorted list — an experiment IS the top-level thing now, so
   // there's only one thing left to pick.
-  // Experiments and projects are both offered, in their own groups — a task
-  // can belong straight to a project without an experiment standing in for it.
+  // Grouped the way the work is actually organised: each project, then the
+  // experiments inside it, indented beneath. Listing all experiments in one
+  // block and all projects in another put an experiment and the project it
+  // belongs to at opposite ends of the menu, so choosing between "this
+  // project" and "one experiment in it" — which is the choice you are
+  // usually making — meant hunting in two places.
   const sel=taskTargetValue(t);
-  const expOpts=[...DB.experiments].sort((a,b)=>String(a.title||"").localeCompare(String(b.title||"")))
-    .map(ex=>`<option value="e:${ex.id}" ${sel==="e:"+ex.id?"selected":""}>${esc(ex.title||"(unnamed experiment)")}</option>`).join("");
-  const projOpts=[...DB.projects].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")))
-    .map(pr=>`<option value="p:${pr.id}" ${sel==="p:"+pr.id?"selected":""}>${esc(pr.name||"(unnamed project)")}</option>`).join("");
-  const opts=(expOpts?`<optgroup label="Experiments">${expOpts}</optgroup>`:"")
-            +(projOpts?`<optgroup label="Projects">${projOpts}</optgroup>`:"");
+  // indented with spaces rather than an arrow glyph: a collapsed <select>
+  // shows only the option's own text, so a marker would ride along into the
+  // closed field and read as part of the name
+  const opt=(value,label,indent)=>
+    `<option value="${value}" ${sel===value?"selected":""}>${indent?"&nbsp;&nbsp;&nbsp;&nbsp;":""}${esc(label)}</option>`;
+  const byTitle=(a,b)=>String(a.title||"").localeCompare(String(b.title||""));
+  const groups=[...DB.projects]
+    .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")))
+    .map(pr=>{
+      const name=pr.name||"(unnamed project)";
+      const kids=DB.experiments.filter(ex=>ex.projectId===pr.id).sort(byTitle);
+      return `<optgroup label="${escAttr(name)}">`
+        +opt("p:"+pr.id,name,false)
+        +kids.map(ex=>opt("e:"+ex.id,ex.title||"(unnamed experiment)",true)).join("")
+        +`</optgroup>`;
+    }).join("");
+  // experiments that belong to no project keep a group of their own at the end
+  const loose=DB.experiments.filter(ex=>!ex.projectId).sort(byTitle);
+  const opts=groups
+    +(loose.length?`<optgroup label="${DB.projects.length?"Not in a project":"Experiments"}">`
+      +loose.map(ex=>opt("e:"+ex.id,ex.title||"(unnamed experiment)",false)).join("")+`</optgroup>`:"");
   modal(`<h3>${t.isEvent?"Event":"Task"}</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
     ${wasDetached?`<p style="color:var(--ink-dim);font-size:12px;line-height:1.5;margin:-6px 0 14px;background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:8px 10px">
