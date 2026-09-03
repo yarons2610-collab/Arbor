@@ -1287,7 +1287,7 @@ async function loadDB(){
   if(gistToken()){
     try{
       const remote=await gistLoad();
-      if(remote&&remote.domains){DB=remote;migrate();lastSyncedRemoteVersion=remote.__gistVersion;return "gist";}
+      if(remote&&remote.domains){DB=remote;migrate();lastSyncedRemoteVersion=remote.__gistVersion;lastSyncedIds=snapshotIds(DB);return "gist";}
     }catch(e){console.warn("Gist load failed, falling back to local",e);}
   }
   // No authoritative remote read to anchor on (no token, or the read above
@@ -1417,18 +1417,17 @@ function setSaveState(s,detail){
     failed:   ["⚠ save failed — export JSON backup","var(--overdue)"],
     syncwarn: ["⚠ showing local copy, not synced — export JSON backup","var(--amber)"],
     throttled:["⏳ sync paused by GitHub — saved on this device","var(--amber)"],
-    conflict: ["⚠ synced newer changes from elsewhere — check your last edit","var(--amber)"],
   };
   const m=states[s]||states.saved; el.textContent=m[0]+(detail?" ("+detail+")":""); el.style.color=m[1]; el.dataset.state=s;
   el.title=detail||"";
-  el.style.cursor=(s==="failed"||s==="syncwarn"||s==="throttled"||s==="conflict")?"pointer":"default";
+  el.style.cursor=(s==="failed"||s==="syncwarn"||s==="throttled")?"pointer":"default";
 }
 
 // Writing to disk is cheap and wants to happen almost immediately. Pushing the
 // whole workspace to a Gist is a network write to one resource, and GitHub
 // applies a secondary rate limit to rapid successive writes — so it waits for a
 // real pause in typing, and never fires more often than SYNC_MIN_GAP.
-const SYNC_IDLE=6000, SYNC_MIN_GAP=20000;
+const SYNC_IDLE=2500, SYNC_MIN_GAP=8000;
 let syncTimer=null, lastSyncAt=0, syncInFlight=false, syncPending=false, syncBackoffUntil=0;
 // true from the moment any local edit is queued until it's actually landed on
 // the Gist — autoPull() below must never overwrite DB while this is true, or
@@ -1446,6 +1445,46 @@ let localDirty=false;
 // The Gist revision this device is known to be in step with. null = "we have
 // not read the Gist yet", which reads as "anything there is news to us".
 let lastSyncedRemoteVersion=null;
+/* What this device had in the copy it last agreed with the Gist on. It is the
+   difference between "I made this since we last spoke" and "this was deleted
+   somewhere else" — two things that look identical if you only compare the
+   local copy against the remote one, and getting them confused either loses
+   new work or resurrects deleted work. Kept in memory only; a fresh load has
+   nothing unpushed to reconcile anyway. */
+const MERGE_KEYS=["domains","tasks","spines","projects","experiments","schedule",
+                  "readings","protocols","other","notes","animals","tags"];
+let lastSyncedIds=null;
+function snapshotIds(db){
+  const out={diary:new Set()};
+  MERGE_KEYS.forEach(k=>{ out[k]=new Set((db[k]||[]).map(x=>x&&x.id).filter(Boolean)); });
+  (db.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) out.diary.add(e.id); }));
+  return out;
+}
+/* A pull used to replace the workspace outright, so anything added here and
+   not yet pushed was simply gone — which is why it had to interrupt with
+   "your last change wasn't saved, please redo it". Carry those additions
+   across instead and there is nothing to announce.
+   Only records created since the last agreed copy come over. One that was in
+   that copy and is missing from the remote was deleted on another device, and
+   must stay deleted rather than being resurrected by its absence. */
+function mergeLocalAdditions(remote,local){
+  const known=lastSyncedIds;
+  const isNew=(k,id)=>!known||!known[k]||!known[k].has(id);
+  MERGE_KEYS.forEach(k=>{
+    if(!Array.isArray(remote[k])||!Array.isArray(local[k]))return;
+    const have=new Set(remote[k].map(x=>x&&x.id));
+    local[k].forEach(x=>{ if(x&&x.id&&!have.has(x.id)&&isNew(k,x.id)) remote[k].push(x); });
+  });
+  // diary entries hang off their animal, so they need the same test a level down
+  const byId=new Map((remote.animals||[]).map(a=>[a.id,a]));
+  (local.animals||[]).forEach(la=>{
+    const ra=byId.get(la.id); if(!ra||!Array.isArray(la.diary))return;
+    ra.diary=ra.diary||[];
+    const have=new Set(ra.diary.map(e=>e&&e.id));
+    la.diary.forEach(e=>{ if(e&&e.id&&!have.has(e.id)&&isNew("diary",e.id)) ra.diary.push(e); });
+  });
+  return remote;
+}
 
 async function doWrite(){
   setSaveState("saving");
@@ -1487,20 +1526,22 @@ async function runSync(){
         syncPending=true; setSaveState(storageOK?"saved":"failed");
         return;
       }
-      DB=remote; migrate(); lastSyncedRemoteVersion=remote.__gistVersion;
-      undoStack.length=0;   // those entries describe records this pull just replaced
-      // The queued local edit is superseded by what actually landed on the
-      // Gist — surfaced via the toast below rather than silently retried,
-      // since silently retrying is exactly the bug this guard exists to stop.
-      localDirty=false;
+      // Take what landed on the Gist, keeping anything created here that has
+      // not been pushed yet. Nothing is lost, so nothing needs saying: the
+      // merged result is simply queued to push on the next pass.
+      DB=mergeLocalAdditions(remote,DB); migrate();
+      lastSyncedRemoteVersion=remote.__gistVersion;
+      lastSyncedIds=snapshotIds(DB);
+      undoStack.length=0;   // those entries describe records this pull replaced
+      localDirty=true; syncPending=true;
       try{ await window.arbor.save(DB); }catch(e){}
       render(); syncTopCollapsed();
-      setSaveState("conflict");
-      toast("Synced newer changes from another device — your last change here wasn't saved, please redo it");
+      setSaveState(storageOK?"saved":"failed");
       return;
     }
     const pushedVersion=await gistSave(JSON.stringify(DB));
     if(pushedVersion) lastSyncedRemoteVersion=pushedVersion;
+    lastSyncedIds=snapshotIds(DB);
     lastSyncAt=Date.now(); syncBackoffUntil=0; localDirty=false; setSaveState("synced");
   }catch(e){
     lastSyncAt=Date.now();
@@ -1545,7 +1586,13 @@ async function flushSave(){ clearTimeout(saveTimer); try{ window.arbor.saveSync(
    swaps DB out from under someone mid-type — a modal open, or focus sitting
    in any input/textarea/select/contenteditable, defers the pull to the next
    tick rather than yanking the DOM out from under them. */
-const PULL_INTERVAL=15000;
+/* Polling only runs while the tab is actually being looked at — a hidden tab
+   catches up the instant it is focused (see the visibilitychange handler
+   below), so polling it in the background buys nothing and spends GitHub
+   request quota that a fast foreground interval wants. That trade is what
+   makes 8s affordable: two devices in use is ~900 requests an hour against a
+   5,000/hour limit, where polling around the clock at this rate would not be. */
+const PULL_INTERVAL=8000;
 let pullTimer=null;
 function editingInProgress(){
   const scrim=document.getElementById("scrim");
@@ -1554,12 +1601,17 @@ function editingInProgress(){
   return !!ae&&(["INPUT","TEXTAREA","SELECT"].includes(ae.tagName)||ae.isContentEditable);
 }
 async function autoPull(){
+  if(document.hidden)return;   // focusing the tab pulls immediately; see below
   if(!gistToken()||localDirty||syncInFlight||syncPending||editingInProgress())return;
   try{
     const remote=await gistLoad();
     if(!remote||!remote.domains)return;
     if(remote.__gistVersion===lastSyncedRemoteVersion)return;   // the Gist has not moved since we last synced
+    // No merge here on purpose: this only runs with nothing unpushed, so the
+    // local copy is exactly what we last agreed on, and anything the remote
+    // no longer has was deleted elsewhere and should stay that way.
     DB=remote; migrate(); lastSyncedRemoteVersion=remote.__gistVersion;
+    lastSyncedIds=snapshotIds(DB);
     undoStack.length=0;   // those entries describe records this pull just replaced
     try{ await window.arbor.save(DB); }catch(e){}          // keep the local disk copy in step too
     render(); syncTopCollapsed();
@@ -9719,7 +9771,7 @@ function showGistSetup(){
 document.getElementById("syncBtn").addEventListener("click",()=>showGistSetup());
 document.getElementById("saveState").addEventListener("click",()=>{
   const st=document.getElementById("saveState").dataset.state;
-  if(st==="failed"||st==="noapi"||st==="off"||st==="syncwarn"||st==="throttled"||st==="conflict"){
+  if(st==="failed"||st==="noapi"||st==="off"||st==="syncwarn"||st==="throttled"){
     download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");
     toast("JSON backup downloaded — import this via ⋯ to restore"); }
 });
@@ -10397,8 +10449,9 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
     if(gistToken()){
       if(src==="gist") setSaveState("synced");
       else{
+        // the status pill says this, and stays there to be clicked — a popup
+        // on every launch that couldn't reach GitHub is just noise
         setSaveState("syncwarn");
-        toast("Couldn't reach your synced data — showing this device's local copy instead. Editing anything will overwrite the Gist with it.");
       }
     } else {
       setSaveState(storageOK2?"saved":"failed");
