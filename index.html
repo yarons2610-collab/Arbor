@@ -1088,7 +1088,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
-  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",operated:"all",entry:"all",search:"",sort:"name"},
+  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",search:"",sort:"name"},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // Named, colour-coded event categories — tasks already get an implicit
   // colour from whatever project they're attached to, but an event (isEvent:
@@ -1287,7 +1287,30 @@ async function loadDB(){
   if(gistToken()){
     try{
       const remote=await gistLoad();
-      if(remote&&remote.domains){DB=remote;migrate();lastSyncedRemoteVersion=remote.__gistVersion;lastSyncedIds=snapshotIds(DB);return "gist";}
+      if(remote&&remote.domains){
+        const version=remote.__gistVersion;
+        // Whatever this device last wrote to its own disk. Boot used to ignore
+        // it entirely and take the Gist copy outright, so an edit saved here
+        // but never pushed — the app closed, or a phone killed in the
+        // background before the push finished — was gone on next launch, with
+        // nothing said. Reconcile the two the same way a mid-session pull
+        // does, against the marker of what this device last agreed on.
+        restoreSyncMark();
+        let localCopy=null;
+        try{ localCopy=await window.arbor.load(); }catch(e){}
+        const agreed=snapshotIds(remote);   // what the Gist actually holds
+        const before=JSON.stringify(remote.schedule||[]).length;
+        DB=(localCopy&&localCopy.domains)?mergeLocalAdditions(remote,localCopy):remote;
+        migrate();
+        lastSyncedRemoteVersion=version;
+        const carried=JSON.stringify(DB.schedule||[]).length!==before;
+        // same reasoning as the mid-session merge: agreement is with the Gist,
+        // not with whatever this boot reconciled into place
+        lastSyncedIds=agreed; saveSyncMark();
+        // anything carried over still owes the Gist a push
+        if(carried){ localDirty=true; syncPending=true; }
+        return "gist";
+      }
     }catch(e){console.warn("Gist load failed, falling back to local",e);}
   }
   // No authoritative remote read to anchor on (no token, or the read above
@@ -1454,6 +1477,26 @@ let lastSyncedRemoteVersion=null;
 const MERGE_KEYS=["domains","tasks","spines","projects","experiments","schedule",
                   "readings","protocols","other","notes","animals","tags"];
 let lastSyncedIds=null;
+const SYNC_MARK_KEY="arbor_sync_mark";
+/* The agreed-copy marker has to outlive the tab. A phone killed in the
+   background saves to disk (that part is synchronous and reliable) but may
+   never finish its push, so the next launch has to be able to tell that
+   device's unpushed additions apart from records deleted on another device.
+   Held in memory alone, that knowledge died with the page and the next boot
+   had no way to reason about it. */
+function saveSyncMark(){
+  try{
+    const ids={}; Object.keys(lastSyncedIds||{}).forEach(k=>ids[k]=[...lastSyncedIds[k]]);
+    localStorage.setItem(SYNC_MARK_KEY,JSON.stringify({v:lastSyncedRemoteVersion,ids}));
+  }catch(e){}
+}
+function restoreSyncMark(){
+  try{
+    const m=JSON.parse(localStorage.getItem(SYNC_MARK_KEY)||"null"); if(!m)return;
+    const ids={}; Object.keys(m.ids||{}).forEach(k=>ids[k]=new Set(m.ids[k]));
+    lastSyncedIds=ids;
+  }catch(e){}
+}
 function snapshotIds(db){
   const out={diary:new Set()};
   MERGE_KEYS.forEach(k=>{ out[k]=new Set((db[k]||[]).map(x=>x&&x.id).filter(Boolean)); });
@@ -1470,12 +1513,27 @@ function snapshotIds(db){
 function mergeLocalAdditions(remote,local){
   const known=lastSyncedIds;
   const isNew=(k,id)=>!known||!known[k]||!known[k].has(id);
+  // Deletions made here since that agreed copy, and not yet pushed. The merge
+  // starts from the remote, which still has them, so without replaying them a
+  // conflict quietly undid every delete this device had made — the mirror of
+  // the lost-additions bug, and just as invisible.
+  const deletedHere=(k,liveIds)=>(!known||!known[k])?new Set()
+    :new Set([...known[k]].filter(id=>!liveIds.has(id)));
   MERGE_KEYS.forEach(k=>{
     if(!Array.isArray(remote[k])||!Array.isArray(local[k]))return;
+    const liveIds=new Set(local[k].map(x=>x&&x.id).filter(Boolean));
+    const gone=deletedHere(k,liveIds);
+    if(gone.size) remote[k]=remote[k].filter(x=>!(x&&gone.has(x.id)));
     const have=new Set(remote[k].map(x=>x&&x.id));
     local[k].forEach(x=>{ if(x&&x.id&&!have.has(x.id)&&isNew(k,x.id)) remote[k].push(x); });
   });
   // diary entries hang off their animal, so they need the same test a level down
+  const liveDiary=new Set();
+  (local.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) liveDiary.add(e.id); }));
+  const diaryGone=deletedHere("diary",liveDiary);
+  if(diaryGone.size) (remote.animals||[]).forEach(a=>{
+    if(Array.isArray(a.diary)) a.diary=a.diary.filter(e=>!(e&&diaryGone.has(e.id)));
+  });
   const byId=new Map((remote.animals||[]).map(a=>[a.id,a]));
   (local.animals||[]).forEach(la=>{
     const ra=byId.get(la.id); if(!ra||!Array.isArray(la.diary))return;
@@ -1529,9 +1587,15 @@ async function runSync(){
       // Take what landed on the Gist, keeping anything created here that has
       // not been pushed yet. Nothing is lost, so nothing needs saying: the
       // merged result is simply queued to push on the next pass.
+      // Snapshot the Gist's own contents BEFORE merging: that, not the merged
+      // result, is what the two sides actually agree on right now. Marking the
+      // merged state as agreed was a quiet lie — the additions carried over
+      // had never reached the Gist, so the next conflict read their absence
+      // there as "deleted on another device" and dropped them for good.
+      const agreed=snapshotIds(remote);
       DB=mergeLocalAdditions(remote,DB); migrate();
       lastSyncedRemoteVersion=remote.__gistVersion;
-      lastSyncedIds=snapshotIds(DB);
+      lastSyncedIds=agreed; saveSyncMark();
       undoStack.length=0;   // those entries describe records this pull replaced
       localDirty=true; syncPending=true;
       try{ await window.arbor.save(DB); }catch(e){}
@@ -1541,7 +1605,7 @@ async function runSync(){
     }
     const pushedVersion=await gistSave(JSON.stringify(DB));
     if(pushedVersion) lastSyncedRemoteVersion=pushedVersion;
-    lastSyncedIds=snapshotIds(DB);
+    lastSyncedIds=snapshotIds(DB); saveSyncMark();
     lastSyncAt=Date.now(); syncBackoffUntil=0; localDirty=false; setSaveState("synced");
   }catch(e){
     lastSyncAt=Date.now();
@@ -1611,7 +1675,7 @@ async function autoPull(){
     // local copy is exactly what we last agreed on, and anything the remote
     // no longer has was deleted elsewhere and should stay that way.
     DB=remote; migrate(); lastSyncedRemoteVersion=remote.__gistVersion;
-    lastSyncedIds=snapshotIds(DB);
+    lastSyncedIds=snapshotIds(DB); saveSyncMark();
     undoStack.length=0;   // those entries describe records this pull just replaced
     try{ await window.arbor.save(DB); }catch(e){}          // keep the local disk copy in step too
     render(); syncTopCollapsed();
@@ -1686,7 +1750,6 @@ function migrate(){                       // backfill fields added in later vers
   animalTag=DB.config.animalFilters.tag||"all";
   animalProject=DB.config.animalFilters.project||"all";
   calMode=DB.config.calMode||"week";
-  animalOperated=DB.config.animalFilters.operated||"all";
   animalEntry=DB.config.animalFilters.entry||"all";
   // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
   // may still carry — each meant ascending (earliest/oldest first) already,
@@ -7749,7 +7812,7 @@ function noteModal(id,over){
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
-let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalStatus="all", animalOperated="all", animalEntry="all", animalSearch="", animalSort="name";
+let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name";
 // Which animal cards have their detail panel open — tracked here rather than
 // as pure per-card DOM state, so a full renderAnimals() (needed whenever a
 // quick-edit might change which animals a status filter or a dob/sacrificed
@@ -7971,8 +8034,7 @@ function renderAnimals(){
       ${DB.projects.length?col("Project","a_project",animalProject,[["all","All projects"],["none","No project"],...DB.projects.map(p=>[p.id,p.name||"(unnamed project)"])]):""}
       ${groupNames.length?col("Group","a_group",animalGroup,[["all","All groups"],...groupNames.map(g=>[g,g])]):""}
       ${col("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
-      ${col("Operated","a_operated",animalOperated,[["all","All"],["yes","Operated"],["no","Not operated"]])}
-      ${col("Has entry","a_entry",animalEntry,[["all","Any entry"],["none","No entries"],
+      ${col("Entry","a_entry",animalEntry,[["all","Any entry"],["none","No entries"],
         ...diaryTypeDefs().map(d=>[d.key,`${d.icon||""} ${d.label}`.trim()])])}
     </div>
 `;
@@ -7984,7 +8046,6 @@ function renderAnimals(){
   onPick("a_group",v=>{ animalGroup=v; DB.config.animalFilters.group=v; persist(); renderAnimals(); });
   onPick("a_sort",v=>{ animalSort=v; DB.config.animalFilters.sort=v; persist(); renderAnimals(); });
   onPick("a_status",v=>{ animalStatus=v; DB.config.animalFilters.status=v; persist(); renderAnimals(); });
-  onPick("a_operated",v=>{ animalOperated=v; DB.config.animalFilters.operated=v; persist(); renderAnimals(); });
   onPick("a_entry",v=>{ animalEntry=v; DB.config.animalFilters.entry=v; persist(); renderAnimals(); });
   bar.querySelector("#a_search").addEventListener("input",e=>{
     const pos=e.target.selectionStart;
@@ -8044,7 +8105,6 @@ function renderAnimals(){
     return animalGroups(a.id).some(x=>x.g.name===name
       &&(animalExperiment==="all"||x.st.id===animalExperiment));
   };
-  const inOperated=(a,v)=>v==="all"||(v==="yes"?!!surgeryDate(a):!surgeryDate(a));
   // independent of the Experiment filter, deliberately — not a cascading
   // two-level picker (that was the old animalCohort naming/design bug)
   const inProject=(a,pid)=>{
@@ -8055,7 +8115,6 @@ function renderAnimals(){
   let list=DB.animals.filter(a=>
     inTag(a,animalTag) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
     (animalStatus==="all"||a.termination===animalStatus) &&
-    inOperated(a,animalOperated) &&
     inEntry(a,animalEntry) &&
     searchMatch(a));
   // Missing dates sort last whichever way round, so a half-filled column never
