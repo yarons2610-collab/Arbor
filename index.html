@@ -7352,9 +7352,9 @@ function renderLibrary(){
     const attachLbl=attachLabel(attachmentsOf({kind,id:r.id}));
     row.innerHTML=`<span title="${esc(cfg.Noun)}" style="flex:0 0 auto">${LIB_ICON[kind]}</span>
       <div class="lit-main">
-        <div class="lit-title">${esc(r.title||"(untitled)")}</div>
-        ${meta?`<div class="lit-link">${esc(meta)}</div>`:""}
-        ${sub?`<div class="lit-link">${esc(sub)}</div>`:""}
+        <div class="lit-title" dir="auto">${esc(r.title||"(untitled)")}</div>
+        ${meta?`<div class="lit-link" dir="auto">${esc(meta)}</div>`:""}
+        ${sub?`<div class="lit-link" dir="auto">${esc(sub)}</div>`:""}
       </div>
       ${attachLbl?`<span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);border:1px solid var(--line2);border-radius:5px;padding:1px 6px;flex:0 0 auto">${esc(attachLbl)}</span>`:""}
       ${r.fileName?`<a class="lit-file" role="button" title="Open the file on this computer">📄</a>`:""}
@@ -7473,9 +7473,9 @@ function renderNotes(){
     row.innerHTML=`<button class="note-expand" title="${open?"Collapse":"View"}" style="border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:11px;flex:0 0 auto;padding:2px 4px">${open?"▾":"▸"}</button>
       <div class="lit-main" style="cursor:pointer;display:flex;align-items:center;gap:8px">
         ${n.drawing?`<img src="${n.drawing}" style="width:28px;height:28px;object-fit:cover;border-radius:5px;border:1px solid var(--line2);flex:0 0 auto;background:#fff">`:""}
-        <div style="min-width:0" dir="auto">
-          <div class="lit-title">${esc(n.title||"(untitled)")}</div>
-          ${preview?`<div class="lit-link">${esc(preview.slice(0,140))}</div>`:""}
+        <div style="flex:1;min-width:0">
+          <div class="lit-title" dir="auto">${esc(n.title||"(untitled)")}</div>
+          ${preview?`<div class="lit-link" dir="auto">${esc(preview.slice(0,140))}</div>`:""}
         </div>
       </div>
       <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto;white-space:nowrap">${n.updated?new Date(n.updated).toLocaleDateString():""}</span>
