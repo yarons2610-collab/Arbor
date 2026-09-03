@@ -481,7 +481,7 @@
   /* same pale rim as the timed chips — the all-day banners and the month
      grid's rows sit directly against each other, so they need it most */
   .cal-evt{border-radius:5px;padding:2px 5px;font-size:11px;line-height:1.3;cursor:pointer;overflow:hidden;position:relative;transition:.1s;
-    border:1px solid rgba(255,255,255,.34);box-shadow:0 1px 3px rgba(0,0,0,.5)}
+    border:2px solid rgba(255,255,255,.78);box-shadow:0 1px 3px rgba(0,0,0,.55)}
   /* body.cal-dragging (not just this chip) — a lifted chip is pointer-events:none
      so the real cursor's own natural micro-jitter hits whatever ordinary chip
      sits underneath it instead, flickering *that* chip's hover in and out
@@ -509,7 +509,7 @@
      looks like empty space between them. A pale rim reads as the edge of
      the block itself, and the shadow under it does the separating. */
   .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:none;
-    border:1px solid rgba(255,255,255,.34);box-shadow:0 1px 3px rgba(0,0,0,.55)}
+    border:2px solid rgba(255,255,255,.78);box-shadow:0 1px 3px rgba(0,0,0,.6)}
   /* the chip a search result just jumped to, so it can be picked out of a
      busy day instead of leaving you hunting for what you searched for */
   .cal-evt-found{animation:calFound 2.4s ease-out 1}
