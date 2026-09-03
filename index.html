@@ -478,7 +478,10 @@
   .cal-hour-cell.today{background:rgba(84,224,138,.025)}
   .cal-hour-cell:last-child{border-right:0}
   /* event chips */
-  .cal-evt{border-radius:5px;padding:2px 5px;font-size:11px;line-height:1.3;cursor:pointer;overflow:hidden;position:relative;transition:.1s}
+  /* same hard outline as the timed chips — the all-day banners and the month
+     grid's rows sit directly against each other, so they need it most */
+  .cal-evt{border-radius:5px;padding:2px 5px;font-size:11px;line-height:1.3;cursor:pointer;overflow:hidden;position:relative;transition:.1s;
+    border:1px solid #000;box-shadow:0 1px 2px rgba(0,0,0,.4)}
   /* body.cal-dragging (not just this chip) — a lifted chip is pointer-events:none
      so the real cursor's own natural micro-jitter hits whatever ordinary chip
      sits underneath it instead, flickering *that* chip's hover in and out
@@ -500,7 +503,18 @@
   .cal-evt-ck.on{background:currentColor}
   .cal-evt-evicon{font-size:9px;margin-right:2px}
   .cal-evt .es{font-family:var(--mono);font-size:9px;opacity:.8}
-  .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:none}
+  /* Every chip carries a hard dark outline. Without one, two blocks of
+     similar colour sitting against each other read as a single mass — the
+     edge between them is the only thing saying where one ends. */
+  .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:none;
+    border:1px solid #000;box-shadow:0 1px 2px rgba(0,0,0,.45)}
+  /* the chip a search result just jumped to, so it can be picked out of a
+     busy day instead of leaving you hunting for what you searched for */
+  .cal-evt-found{animation:calFound 2.4s ease-out 1}
+  @keyframes calFound{
+    0%,55%{box-shadow:0 0 0 3px var(--gcamp),0 1px 2px rgba(0,0,0,.45)}
+    100%{box-shadow:0 0 0 0 transparent,0 1px 2px rgba(0,0,0,.45)}
+  }
   body:not(.cal-dragging) .cal-evt-timed:hover{filter:brightness(1.18)}
   /* full colour, not faded — Google Calendar's own dragged block stays fully
      vivid the whole time; a translucent copy is what's left behind at the
@@ -1193,16 +1207,25 @@ async function gistRequest(method,path,body){
   }
   return r.status===204?null:r.json();
 }
+/* Every Gist revision has a server-assigned version (a commit sha). That, not
+   any clock, is what tells this device whether the Gist changed since it last
+   looked — see runSync. Both save and load report it. */
+function gistVersionOf(g){
+  return (g&&g.history&&g.history[0]&&g.history[0].version)||(g&&g.updated_at)||null;
+}
 async function gistSave(jsonStr){
   const token=gistToken(); if(!token)return false;
   const id=gistId();
-  if(id){ await gistRequest("PATCH","/gists/"+id,{files:{[GIST_FILENAME]:{content:jsonStr}}}); }
+  let g;
+  if(id){ g=await gistRequest("PATCH","/gists/"+id,{files:{[GIST_FILENAME]:{content:jsonStr}}}); }
   else{
-    const g=await gistRequest("POST","/gists",{description:"Arbor workspace",public:false,
+    g=await gistRequest("POST","/gists",{description:"Arbor workspace",public:false,
       files:{[GIST_FILENAME]:{content:jsonStr}}});
     localStorage.setItem(GIST_ID_KEY,g.id);
   }
-  return true;
+  // the revision this device just created — so its own push isn't mistaken for
+  // somebody else's change the next time it reads
+  return gistVersionOf(g);
 }
 async function gistLoad(){
   const token=gistToken(); if(!token)return null;
@@ -1215,7 +1238,11 @@ async function gistLoad(){
   }
   const g=await gistRequest("GET","/gists/"+id);
   const raw=g&&g.files&&g.files[GIST_FILENAME]&&g.files[GIST_FILENAME].content;
-  return raw?JSON.parse(raw):null;
+  if(!raw)return null;
+  const data=JSON.parse(raw);
+  // non-enumerable so it never rides along into DB, a save, or an export
+  Object.defineProperty(data,"__gistVersion",{value:gistVersionOf(g),enumerable:false});
+  return data;
 }
 async function gistVerifyToken(token){
   const r=await fetch("https://api.github.com/user",{
@@ -1240,7 +1267,7 @@ async function loadDB(){
   if(gistToken()){
     try{
       const remote=await gistLoad();
-      if(remote&&remote.domains){DB=remote;migrate();lastSyncedRemoteUpdatedAt=remote.updatedAt||0;return "gist";}
+      if(remote&&remote.domains){DB=remote;migrate();lastSyncedRemoteVersion=remote.__gistVersion;return "gist";}
     }catch(e){console.warn("Gist load failed, falling back to local",e);}
   }
   // No authoritative remote read to anchor on (no token, or the read above
@@ -1248,7 +1275,7 @@ async function loadDB(){
   // device already knows about," so runSync()'s conflict check has a real
   // baseline instead of treating the Gist's very first read as an instant
   // conflict.
-  try{ const data=await window.arbor.load(); if(data&&data.domains){DB=data;migrate();lastSyncedRemoteUpdatedAt=DB.updatedAt||0;return "local";} }
+  try{ const data=await window.arbor.load(); if(data&&data.domains){DB=data;migrate();lastSyncedRemoteVersion=null;return "local";} }
   catch(e){}
   return "none";
 }
@@ -1396,7 +1423,9 @@ let localDirty=false;
 // over it would silently discard that — confirmed live when a stale device's
 // otherwise-unrelated edit clobbered a same-minute note edit and a newly
 // created task purely because its own push landed a few seconds later.
-let lastSyncedRemoteUpdatedAt=0;
+// The Gist revision this device is known to be in step with. null = "we have
+// not read the Gist yet", which reads as "anything there is news to us".
+let lastSyncedRemoteVersion=null;
 
 async function doWrite(){
   setSaveState("saving");
@@ -1423,14 +1452,23 @@ async function runSync(){
     // Gist with no merge, so pushing blind risks silently discarding whatever
     // another device already landed there since this device last looked.
     const remote=await gistLoad();
-    if(remote&&remote.domains&&(remote.updatedAt||0)>lastSyncedRemoteUpdatedAt){
+    // "Has the Gist moved since this device last synced?" — an identity check on
+    // the server's own revision, NOT a comparison of updatedAt stamps. Those
+    // stamps come from whichever machine happened to write them, so any clock
+    // skew between two devices broke the comparison outright: a laptop running a
+    // minute ahead of a phone would see the phone's newer push as "older",
+    // decline to adopt it, and then overwrite it on its next push — silently,
+    // with no conflict toast, because as far as the laptop could tell nothing
+    // had changed. That is a real way to lose an entry made on the other device.
+    if(remote&&remote.domains&&remote.__gistVersion!==lastSyncedRemoteVersion){
       if(editingInProgress()){
         // don't yank the DOM out from under an active edit — this device's
         // own change stays queued (localDirty untouched) and retries shortly
         syncPending=true; setSaveState(storageOK?"saved":"failed");
         return;
       }
-      DB=remote; migrate(); lastSyncedRemoteUpdatedAt=remote.updatedAt||0;
+      DB=remote; migrate(); lastSyncedRemoteVersion=remote.__gistVersion;
+      undoStack.length=0;   // those entries describe records this pull just replaced
       // The queued local edit is superseded by what actually landed on the
       // Gist — surfaced via the toast below rather than silently retried,
       // since silently retrying is exactly the bug this guard exists to stop.
@@ -1441,8 +1479,8 @@ async function runSync(){
       toast("Synced newer changes from another device — your last change here wasn't saved, please redo it");
       return;
     }
-    await gistSave(JSON.stringify(DB));
-    lastSyncedRemoteUpdatedAt=DB.updatedAt||0;
+    const pushedVersion=await gistSave(JSON.stringify(DB));
+    if(pushedVersion) lastSyncedRemoteVersion=pushedVersion;
     lastSyncAt=Date.now(); syncBackoffUntil=0; localDirty=false; setSaveState("synced");
   }catch(e){
     lastSyncAt=Date.now();
@@ -1500,8 +1538,9 @@ async function autoPull(){
   try{
     const remote=await gistLoad();
     if(!remote||!remote.domains)return;
-    if((remote.updatedAt||0)<=(DB.updatedAt||0))return;   // nothing newer than what we already have
-    DB=remote; migrate(); lastSyncedRemoteUpdatedAt=remote.updatedAt||0;
+    if(remote.__gistVersion===lastSyncedRemoteVersion)return;   // the Gist has not moved since we last synced
+    DB=remote; migrate(); lastSyncedRemoteVersion=remote.__gistVersion;
+    undoStack.length=0;   // those entries describe records this pull just replaced
     try{ await window.arbor.save(DB); }catch(e){}          // keep the local disk copy in step too
     render(); syncTopCollapsed();
     setSaveState("synced");
@@ -1955,31 +1994,70 @@ function calDayDelta(fromISO,toISO){
    a record across an undo would go stale — fine here, because every path
    that snapshots also closes its modal before committing. */
 const undoStack=[];
-function calSnapshot(){
-  return JSON.stringify({
-    schedule:DB.schedule,
-    experiments:DB.experiments,
-    diaries:DB.animals.map(a=>({id:a.id,diary:a.diary||[]}))
-  });
+/* Undo restores ONLY the records the action actually touched, located by id.
+   It used to snapshot DB.schedule/experiments/diaries wholesale and put those
+   whole arrays back. That quietly destroyed data: anything created after the
+   snapshot through a path that registers no undo — the + create modal, the
+   task editor's Done, a diary entry added on the Animals page — simply wasn't
+   in the array being restored, so a single Ctrl/Cmd+Z erased it along with
+   the edit actually being undone. Confirmed reproducing exactly that.
+   Nothing below ever assigns a collection; each entry writes fields back onto
+   specific records, or re-inserts precisely what it removed. */
+function snapTaskFields(t){
+  return {when:t.when,endDate:t.endDate,duration:t.duration,
+    doneOccurrences:[...(t.doneOccurrences||[])],
+    excludedDates:[...(t.excludedDates||[])],
+    repeat:t.repeat?JSON.parse(JSON.stringify(t.repeat)):t.repeat};
 }
-function calRestore(json){
-  const s=JSON.parse(json);
-  DB.schedule=s.schedule; DB.experiments=s.experiments;
-  s.diaries.forEach(r=>{ const a=DB.animals.find(x=>x.id===r.id); if(a)a.diary=r.diary; });
+// Restore a task's own scheduling fields; if the record is gone entirely
+// (it was deleted), put that one record back where it was.
+function undoTaskEdit(t){
+  const id=t.id, fields=snapTaskFields(t), copy=JSON.parse(JSON.stringify(t));
+  const idx=taskList().indexOf(t);
+  return ()=>{
+    const live=taskOf(id);
+    if(live) Object.assign(live,fields);
+    else taskList().splice(Math.min(Math.max(idx,0),taskList().length),0,copy);
+  };
 }
-function pushUndo(label,before){
-  undoStack.push({label,before});
+function undoDiaryEdit(a,e){
+  const aid=a.id, eid=e.id;
+  const fields={date:e.date,time:e.time,endTime:e.endTime,done:e.done};
+  return ()=>{
+    const an=DB.animals.find(x=>x.id===aid); if(!an)return;
+    const live=(an.diary||[]).find(x=>x.id===eid);
+    if(live) Object.assign(live,fields);
+  };
+}
+function undoExpEdit(ex){
+  const id=ex.id, fields={deadline:ex.deadline,endDate:ex.endDate,duration:ex.duration};
+  return ()=>{ const live=expById(id); if(live) Object.assign(live,fields); };
+}
+// Some edits mint new records (detaching one occurrence out of a series, or
+// splitting a series in two). Undoing has to take those back out again, or the
+// series would be restored *and* its spun-off copy would survive alongside it.
+function alsoRemoveTasksCreatedBy(fn){
+  const before=new Set(taskList().map(t=>t.id));
+  return ()=>{
+    const added=taskList().filter(t=>!before.has(t.id)).map(t=>t.id);
+    fn();
+    if(added.length) DB.schedule=taskList().filter(t=>!added.includes(t.id));
+  };
+}
+function pushUndo(label,undo){
+  if(typeof undo!=="function")return;
+  undoStack.push({label,undo});
   if(undoStack.length>40)undoStack.shift();
 }
 function runUndo(){
   const u=undoStack.pop();
   if(!u){ toast("Nothing to undo"); return; }
-  calRestore(u.before); persist(); render();
+  u.undo(); persist(); render();
   toast(`Undone — ${u.label}`);
 }
 // every schedule edit ends here: remembered, announced, and reversible
-function commitUndoable(label,before){
-  pushUndo(label,before);
+function commitUndoable(label,undo){
+  pushUndo(label,undo);
   persist();
   toast(label,{label:"Undo",fn:runUndo});
 }
@@ -1992,8 +2070,11 @@ function calChangeSummary(newWhen,newEnd,newDur){
 }
 function commitCalMove(x,newWhen,newEnd,newDur){
   const src=x.src;
-  // taken before anything is written, so every path below can offer an Undo
-  const before=calSnapshot();
+  // captured before anything is written, and scoped to just this record so
+  // undoing it can never disturb anything else on the calendar
+  const before=x.kind==="diary"?undoDiaryEdit(src.a,src.e)
+            :x.kind==="exp"  ?undoExpEdit(src)
+                             :undoTaskEdit(src);
   // A diary entry belongs to one animal on one day. Moving it here is the same
   // edit as moving it in that animal's own diary — there is one record.
   if(x.kind==="diary"){
@@ -2031,6 +2112,7 @@ function commitCalMove(x,newWhen,newEnd,newDur){
   // record — same "this / this and following / all" question a typed edit
   // asks in taskEditor, just triggered by a drop instead of a Save click.
   if(rep&&(newWhen!=null||newDur!=null)){
+    const undoScoped=alsoRemoveTasksCreatedBy(before);
     occurrenceScopeModal(scope=>{
       const what=calChangeSummary(newWhen,undefined,newDur);
       const scopeLabel=scope==="all"?"whole repeating series":scope==="this"?"just this occurrence":"this and every occurrence after it";
@@ -2064,7 +2146,7 @@ function commitCalMove(x,newWhen,newEnd,newDur){
         if(scope==="this")detachOccurrence(src,x.deadline,patch);
         else splitSeriesFrom(src,x.deadline,patch);
       }
-      commitUndoable(`${what} (${scopeLabel})`,before);
+      commitUndoable(`${what} (${scopeLabel})`,undoScoped);
       renderTimeline();
     });
     return true;
@@ -3742,8 +3824,8 @@ function taskEditor(t,after,occWhen,occEndDate){
   document.getElementById("tk_del").onclick=()=>{
     if(!confirm(`Delete the task "${t.title||"(unnamed)"}"?`))return;
     // named apart from taskEditor's own `before` (the pre-edit field snapshot
-    // revert() restores) — this one is the whole-schedule undo snapshot
-    const snapBefore=calSnapshot(), name=t.title||"(unnamed)";
+    // revert() restores) — this one puts the deleted record itself back
+    const snapBefore=undoTaskEdit(t), name=t.title||"(unnamed)";
     if(!wasRecurring||occWhen==null){
       deleteTask(t.id); closeModal();
       commitUndoable(`Deleted "${name}"`,snapBefore); if(after)after(); return;
@@ -4765,221 +4847,105 @@ function calModeSegHTML(){
     .map(m=>`<button type="button" data-m="${m}" class="${calMode===m?"on":""}">${m[0].toUpperCase()+m.slice(1)}</button>`).join("")}</div>`;
 }
 
-/* ---- overdue triage ----
-   Something scheduled and never ticked off used to just scroll out of the
-   past, visible only if you happened to page back to the week it was in.
-   This is the one list of everything still owed, with the two things you
-   actually want to do about each: open it, or pull it to today. */
-function overdueOccurrences(){
-  const today=todayDateStr(), from=addDays(today,-365);
-  const out=[];
-  // events aren't owed — a meeting that happened is not a debt the way an
-  // unticked task is, so only real tasks count here
-  taskList().filter(t=>!t.isEvent&&t.when).forEach(t=>{
-    taskOccurrences(t,from,today).forEach(o=>{
-      if(occDone(t,o.when))return;
-      if(dueClass(o.when,"",o.endDate)!=="overdue")return;
-      out.push({t,when:o.when,endDate:o.endDate});
-    });
-  });
-  return out.sort((a,b)=>a.when.localeCompare(b.when));
-}
-function openOverdueModal(){
-  const draw=()=>{
-    const rows=overdueOccurrences();
-    document.getElementById("modal").innerHTML=`<h3>Overdue</h3>
-      ${rows.length?`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-bottom:10px">
-        ${rows.length} item${rows.length!==1?"s":""} past due and not ticked off</div>
-      <div class="ov-list">${rows.map((r,i)=>`<div class="ov-row" data-i="${i}">
-        <button type="button" class="step-dot" title="Mark done"></button>
-        <span class="ov-title">${esc(r.t.title||"(unnamed task)")}</span>
-        <span class="ov-when">${esc(fmtWhenFull(r.when))}</span>
-        <span class="ov-late">${esc(fmtDue(r.when))}</span>
-        <button type="button" class="ov-today" title="Reschedule to today">→ today</button>
-        <button type="button" class="ov-open" title="Open">open</button>
-      </div>`).join("")}</div>`
-      :`<div class="empty" style="padding:18px 0">Nothing overdue.</div>`}
-      <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`;
-    const rowsEl=document.getElementById("modal").querySelectorAll(".ov-row");
-    rowsEl.forEach(el=>{
-      const r=rows[+el.dataset.i];
-      el.querySelector(".step-dot").onclick=()=>{
-        const before=calSnapshot();
-        setOccDone(r.t,r.when,true);
-        commitUndoable(`Ticked off "${r.t.title||"(unnamed)"}"`,before);
-        draw(); renderTimeline();
-      };
-      el.querySelector(".ov-today").onclick=()=>{
-        const before=calSnapshot();
-        // keep the time of day it was set for; only the date moves
-        const t0=hasTime(r.when)?r.when.slice(11):null;
-        const target=todayDateStr()+(t0?"T"+t0:"");
-        const x={kind:"task",src:r.t,deadline:r.when,endDate:r.endDate,duration:r.t.duration};
-        // a repeating task asks its own scope question; a plain one just moves
-        if(r.t.repeat&&r.t.repeat.every){ closeModal(); commitCalMove(x,target,undefined,undefined); return; }
-        r.t.when=target;
-        if(r.t.endDate){
-          const span=Math.max(0,Math.round((new Date(r.t.endDate.slice(0,10))-new Date(r.when.slice(0,10)))/864e5));
-          r.t.endDate=addDaysISO(target,span).slice(0,10)+(r.t.endDate.length>10?"T"+r.t.endDate.slice(11):"");
-        }
-        commitUndoable(`Moved "${r.t.title||"(unnamed)"}" to today`,before);
-        draw(); renderTimeline();
-      };
-      el.querySelector(".ov-open").onclick=()=>{ closeModal(); taskEditor(r.t,()=>renderTimeline(),r.when,r.endDate); };
-    });
-  };
-  modal("",{wide:true});
-  draw();
-}
-
 /* ---- finding something on the calendar ----
-   The Timeline could only be read forward one period at a time: if you knew
-   a task existed but not which week it was in, there was nothing to ask. */
+   The Timeline can only be read one period at a time: if you know something
+   exists but not which week it is in, there is nothing else to ask.
+   It searches everything the Timeline actually draws — tasks, events, the
+   animals' timeline diary entries, and dated experiments — and matches notes
+   as well as titles, because searching for a word you know you wrote and
+   getting "no match" is what makes a search feel broken. */
 function calSearchHits(q){
-  q=q.trim().toLowerCase();
+  q=String(q||"").trim().toLowerCase();
   if(q.length<2)return [];
   const today=todayDateStr();
+  const hit=(s)=>String(s||"").toLowerCase().includes(q);
   const hits=[];
   taskList().forEach(t=>{
-    if(!t.when||!String(t.title||"").toLowerCase().includes(q))return;
+    if(!t.when)return;
+    if(!hit(t.title)&&!hit(t.notes))return;
     // one row per task, showing the occurrence nearest to now rather than
     // every repeat of it — a weekly task shouldn't flood the results
     const occ=taskOccurrences(t,addDays(today,-365),addDays(today,365));
     const next=occ.find(o=>o.when.slice(0,10)>=today)||occ[occ.length-1];
-    hits.push({kind:t.isEvent?"event":"task",title:t.title||"(unnamed)",
-      when:next?next.when:t.when,src:t});
+    const when=next?next.when:t.when;
+    hits.push({icon:t.isEvent?"◆":"◻",title:t.title||"(unnamed)",when,
+      flashKey:t.id+"@"+when});
   });
+  const timelineKeys=new Set(diaryTypeDefs().filter(d=>d.timeline).map(d=>d.key));
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
+    if(!timelineKeys.has(e.type))return;
+    const def=diaryTypeDef(e.type);
+    if(!hit(a.name)&&!hit(def.label)&&!hit(diaryNoteOf(e.data||{})))return;
+    hits.push({icon:def.icon||"✎",title:`${a.name} — ${def.label}`,
+      when:e.time?`${e.date}T${e.time}`:e.date, flashKey:e.id});
+  }));
   DB.experiments.forEach(ex=>{
-    if(!ex.deadline||!String(ex.title||"").toLowerCase().includes(q))return;
-    hits.push({kind:"experiment",title:ex.title||"(unnamed experiment)",when:ex.deadline,src:ex});
+    if(!ex.deadline)return;
+    if(!hit(ex.title)&&!hit(ex.question)&&!hit(ex.description))return;
+    hits.push({icon:"⚗",title:ex.title||"(unnamed experiment)",when:ex.deadline,flashKey:ex.id});
   });
-  return hits.sort((a,b)=>a.when.localeCompare(b.when)).slice(0,12);
+  // nearest to today first, so the useful one isn't buried under last year's
+  return hits.sort((a,b)=>
+    Math.abs(daysTo(a.when)||0)-Math.abs(daysTo(b.when)||0)||a.when.localeCompare(b.when)
+  ).slice(0,12);
 }
 let calSearchQ="";
+// set when a search result is picked, so the chip it lands on can announce
+// itself; cleared by the render that consumes it
+let calFlashKey=null;
 
-/* ---- quick add ----
-   Typing one line beats opening a modal and filling four fields for the
-   "feed the cages tomorrow at 9" kind of entry, which is most of them.
-   Deliberately forgiving: anything it can't read stays part of the title, so
-   a phrase it doesn't understand becomes a plainly-named task rather than an
-   error. Whatever it did understand is echoed back in the toast, so a
-   misreading is visible immediately (and undoable). */
-const QA_WEEKDAYS=["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
-const QA_MONTHS=["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
-function parseQuickAdd(text){
-  let s=" "+String(text||"").trim()+" ";
-  if(!s.trim())return null;
-  const today=todayDateStr();
-  let date=null, time=null, dur=null;
-  const eat=re=>{ const m=s.match(re); if(m){ s=s.replace(m[0]," "); } return m; };
-
-  // duration: "1h30", "1.5h", "90m", "2 hours"
-  let m=eat(/\s(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\s*(\d{1,2})?\s*(?:m|min|mins|minutes)?(?=\s)/i);
-  if(m) dur=Math.round(parseFloat(m[1])*60)+(m[2]?+m[2]:0);
-  if(dur==null){ m=eat(/\s(\d{1,3})\s*(?:m|min|mins|minute|minutes)(?=\s)/i); if(m)dur=+m[1]; }
-
-  // time: "9am", "9:30 pm", "14:00", "at 9"
-  m=eat(/\s(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?=\s)/i);
-  if(m){
-    let h=+m[1]%12; if(/pm/i.test(m[3]))h+=12;
-    time=`${String(h).padStart(2,"0")}:${m[2]||"00"}`;
-  }
-  if(!time){ m=eat(/\s(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)(?=\s)/); if(m)time=`${String(+m[1]).padStart(2,"0")}:${m[2]}`; }
-
-  // date: explicit ISO, then relative words, then weekday, then d/m and month-name forms
-  m=eat(/\s(\d{4}-\d{2}-\d{2})(?=\s)/);          if(m)date=m[1];
-  if(!date&&eat(/\stoday(?=\s)/i))               date=today;
-  if(!date&&eat(/\s(?:tomorrow|tmrw|tmr)(?=\s)/i)) date=addDays(today,1);
-  if(!date&&(m=eat(/\sin\s+(\d{1,3})\s*(?:d|days?)(?=\s)/i))) date=addDays(today,+m[1]);
-  if(!date&&(m=eat(/\s(?:in\s+(\d{1,2})\s*(?:w|weeks?)|next\s+week)(?=\s)/i)))
-    date=addDays(today,7*(m[1]?+m[1]:1));
-  if(!date&&(m=eat(new RegExp(`\\s(next\\s+)?(${QA_WEEKDAYS.join("|")}|${QA_WEEKDAYS.map(d=>d.slice(0,3)).join("|")})(?=\\s)`,"i")))){
-    const want=QA_WEEKDAYS.findIndex(d=>d.startsWith(m[2].toLowerCase().slice(0,3)));
-    const now=new Date(today+"T00:00:00");
-    let delta=(want-now.getDay()+7)%7;
-    if(delta===0||m[1])delta=delta||7;          // "monday" on a Monday means next Monday
-    date=addDays(today,delta);
-  }
-  if(!date&&(m=eat(new RegExp(`\\s(?:(\\d{1,2})\\s*(${QA_MONTHS.join("|")})|(${QA_MONTHS.join("|")})\\s*(\\d{1,2}))(?=\\s)`,"i")))){
-    const day=+(m[1]||m[4]), mon=QA_MONTHS.indexOf((m[2]||m[3]).toLowerCase());
-    const now=new Date(today+"T00:00:00");
-    let y=now.getFullYear();
-    const p2=x=>String(x).padStart(2,"0");
-    let iso=`${y}-${p2(mon+1)}-${p2(day)}`;
-    if(iso<today)iso=`${y+1}-${p2(mon+1)}-${p2(day)}`;   // a bare month/day already past means next year
-    date=iso;
-  }
-  if(!date&&(m=eat(/\s(\d{1,2})\/(\d{1,2})(?=\s)/))){
-    const now=new Date(today+"T00:00:00"), p2=x=>String(x).padStart(2,"0");
-    let iso=`${now.getFullYear()}-${p2(+m[2])}-${p2(+m[1])}`;  // d/m, matching the app's non-US date wording
-    if(iso<today)iso=`${now.getFullYear()+1}-${p2(+m[2])}-${p2(+m[1])}`;
-    date=iso;
-  }
-
-  const title=s.replace(/\s+/g," ").trim();
-  if(!title)return null;
-  const when=(date||today)+(time?"T"+time:"");
-  return {title,when,duration:time?(dur||null):null,
-          parsed:{date:!!date,time:!!time,duration:dur!=null}};
-}
-// The search / quick-add / overdue row, shared by the hour-grid and month
-// renderers so both get the same tools rather than only whichever was edited.
+// The find row, shared by the hour-grid and month renderers so both get it.
 function calNavExtrasHTML(){
-  const n=overdueOccurrences().length;
   return `<div class="cal-extras">
     <div class="cal-find">
-      <input type="text" id="cal_search" class="cal-inp" placeholder="Find…  /" value="${escAttr(calSearchQ)}" autocomplete="off">
+      <input type="text" id="cal_search" class="cal-inp" placeholder="Find a task, event or experiment…  /" value="${escAttr(calSearchQ)}" autocomplete="off">
       <div class="cal-hits" id="cal_hits" hidden></div>
     </div>
-    <input type="text" id="cal_quickadd" class="cal-inp cal-inp-add" placeholder="＋ Quick add:  feed cages tomorrow 9am 30m" autocomplete="off">
-    ${n?`<button type="button" class="cal-overdue" id="cal_overdue" title="Everything past due">${n} overdue</button>`:""}
   </div>`;
 }
 function wireCalNavExtras(nav,currentISO){
   const title=nav.querySelector("#cal_title");
   if(title) title.onclick=()=>openCalendar(title,currentISO,iso=>calGoToDate(iso),undefined,true);
-  const ov=nav.querySelector("#cal_overdue");
-  if(ov) ov.onclick=openOverdueModal;
-
-  const add=nav.querySelector("#cal_quickadd");
-  if(add) add.addEventListener("keydown",e=>{
-    if(e.key!=="Enter")return;
-    const t=runQuickAdd(add.value);
-    if(!t)return;
-    add.value="";
-    calGoToDate(t.when);          // land on whatever day it was just put on
-  });
 
   const box=nav.querySelector("#cal_search"), hits=nav.querySelector("#cal_hits");
   if(!box||!hits)return;
+  const close=()=>{ hits.hidden=true; hits.innerHTML=""; };
   const draw=()=>{
-    const rows=calSearchHits(calSearchQ);
-    if(!calSearchQ.trim()||calSearchQ.trim().length<2){ hits.hidden=true; hits.innerHTML=""; return; }
+    const q=calSearchQ.trim();
+    if(q.length<2){ close(); return; }
+    const rows=calSearchHits(q);
     hits.hidden=false;
     hits.innerHTML=rows.length?rows.map((r,i)=>`<button type="button" class="cal-hit" data-i="${i}">
-        <span class="ch-kind">${r.kind==="experiment"?"⚗":r.kind==="event"?"◆":"◻"}</span>
+        <span class="ch-kind">${r.icon}</span>
         <span class="ch-title">${esc(r.title)}</span>
         <span class="ch-when">${esc(fmtWhenFull(r.when))}</span>
-      </button>`).join(""):`<div class="cal-hit-empty">No match</div>`;
+      </button>`).join(""):`<div class="cal-hit-empty">Nothing matches “${esc(q)}”</div>`;
     hits.querySelectorAll(".cal-hit").forEach(b=>b.onclick=()=>{
       const r=rows[+b.dataset.i];
-      calSearchQ=""; calGoToDate(r.when);
+      // keep the query so the list is still there to pick a second hit from,
+      // and mark what was jumped to so it can be picked out on arrival
+      calFlashKey=r.flashKey||null;
+      calGoToDate(r.when);
     });
   };
   box.addEventListener("input",e=>{ calSearchQ=e.target.value; draw(); });
+  box.addEventListener("focus",draw);
   box.addEventListener("keydown",e=>{
-    if(e.key==="Escape"){ e.stopPropagation(); calSearchQ=""; box.value=""; draw(); box.blur(); }
-    if(e.key==="Enter"){ const first=hits.querySelector(".cal-hit"); if(first)first.click(); }
+    // Escape must not bubble to the app-wide handler, which would read it as
+    // "close the modal/panel" and leave the search box in a half-open state
+    if(e.key==="Escape"){ e.stopPropagation(); calSearchQ=""; box.value=""; close(); box.blur(); }
+    if(e.key==="Enter"){ e.preventDefault(); const first=hits.querySelector(".cal-hit"); if(first)first.click(); }
   });
-  if(calSearchQ) draw();
-}
-function runQuickAdd(text){
-  const p=parseQuickAdd(text);
-  if(!p){ toast("Nothing to add"); return null; }
-  const before=calSnapshot();
-  const t=addTask({title:p.title,when:p.when,duration:p.duration});
-  commitUndoable(`Added "${t.title}" — ${fmtWhenFull(t.when)}${p.duration?` (${p.duration} min)`:""}`,before);
-  return t;
+  // clicking anywhere else puts the list away — without this it stayed open
+  // over the grid indefinitely, which is most of what made it feel broken
+  const onDocDown=ev=>{
+    if(hits.hidden)return;
+    if(box.contains(ev.target)||hits.contains(ev.target))return;
+    close();
+  };
+  document.addEventListener("pointerdown",onDocDown);
+  hits._cleanup=()=>document.removeEventListener("pointerdown",onDocDown);
+  if(calSearchQ.trim().length>=2) draw();
 }
 /* ---- getting somewhere on the calendar ----
    calWeekOffset counts periods from today, and what a "period" is depends on
@@ -5566,6 +5532,7 @@ function renderTimeline(){
       evt.dataset.dragSrc=t.src.id; evt.dataset.dragWhen=t.deadline;
       // identity for the live re-pack during a drag (see packColumns)
       evt.dataset.layKey=t.id; evt.dataset.layDay=String(di);
+      if(calFlashKey&&calFlashKey===t.id) evt.classList.add("cal-evt-found");
       evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
       const timeStr=dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
       const durLabel=durationMins!==60?` (${durationMins}m)`:"";
@@ -5608,6 +5575,7 @@ function renderTimeline(){
       const evt=document.createElement("div"); evt.className="cal-evt-timed";
       evt.dataset.dragSrc=e.id; evt.dataset.dragWhen=`${e.date}T${e.time}`;
       evt.dataset.layKey=e.id; evt.dataset.layDay=String(dayIdx);
+      if(calFlashKey&&calFlashKey===e.id) evt.classList.add("cal-evt-found");
       const dc=diaryColors(an,def);
       evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${dc.fill}dd;color:#fff;border-left:3px solid ${dc.fill};${edgeCSS(dc.edge)}z-index:2`;
       const timeLabel=e.endTime?`${e.time}–${e.endTime}`:e.time;
@@ -5654,6 +5622,7 @@ function renderTimeline(){
     }
   }
 
+  calFlashKey=null;   // consumed by the chips just built above
   // Put the grid back where it was, or — on a fresh open — show the part of
   // the day you're actually in: the current hour when today is on screen,
   // otherwise the start of the working day.
@@ -9556,11 +9525,11 @@ function showGistSetup(){
       msg("Verified ✓ — looking for existing Arbor data…","var(--gcamp)");
       try{
         const remote=await gistLoad();
-        if(remote&&remote.domains){DB=remote;migrate();lastSyncedRemoteUpdatedAt=remote.updatedAt||0;render();
+        if(remote&&remote.domains){DB=remote;migrate();lastSyncedRemoteVersion=remote.__gistVersion;render();
           msg("Connected as @"+login+" — loaded your existing workspace ✓","var(--gcamp)");}
         else{msg("Connected as @"+login+" — saving current workspace…","var(--gcamp)");
-          await gistSave(JSON.stringify(DB)); lastSyncedRemoteUpdatedAt=DB.updatedAt||0;}
-      }catch(e){await gistSave(JSON.stringify(DB)); lastSyncedRemoteUpdatedAt=DB.updatedAt||0;}
+          lastSyncedRemoteVersion=await gistSave(JSON.stringify(DB));}
+      }catch(e){ lastSyncedRemoteVersion=await gistSave(JSON.stringify(DB)); }
       setSaveState("synced");
       scheduleAutoPull();
       setTimeout(()=>closeModal(),1400);
