@@ -705,6 +705,25 @@
   .ch-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ch-when{flex:0 0 auto;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
   .cal-hit-empty{padding:8px;font-size:12px;color:var(--ink-faint)}
+  /* ── earlier-versions recovery ─────────────────────────────────────────── */
+  .hist-list{max-height:34vh;overflow:auto;border:1px solid var(--line);border-radius:9px}
+  .hist-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;
+    border-bottom:1px solid var(--line);background:transparent;color:var(--ink);
+    padding:8px 10px;cursor:pointer;font-size:12.5px;font-family:inherit}
+  .hist-row:last-child{border-bottom:0}
+  .hist-row:hover{background:var(--panel2)}
+  .hist-when{flex:1;font-family:var(--mono);font-size:11px}
+  .hist-go{flex:0 0 auto;color:var(--ink-faint);font-size:11px}
+  .hist-detail{margin-top:14px;border-top:1px solid var(--line2);padding-top:12px}
+  .hist-head{font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-bottom:10px}
+  .hist-sub{font-size:12.5px;color:var(--ink-dim);margin-bottom:8px}
+  .hist-item{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)}
+  .hi-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--ink)}
+  .hi-when{flex:0 0 auto;font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
+  .hi-restore{flex:0 0 auto;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);
+    border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer}
+  .hi-restore:hover{color:var(--ink);border-color:var(--gcamp)}
+  .hi-done{flex:0 0 auto;font-family:var(--mono);font-size:10.5px;color:var(--gcamp)}
   .cal-overdue{flex:0 0 auto;border:1px solid var(--overdue);background:transparent;color:var(--overdue);
     border-radius:7px;padding:4px 10px;font-family:var(--mono);font-size:11px;cursor:pointer}
   .cal-overdue:hover{background:var(--overdue);color:#fff}
@@ -9910,16 +9929,108 @@ document.getElementById("expCal").addEventListener("click",()=>{
   toast(`Exported ${due.length} task${due.length!==1?"s":""}, ${diaryEvents.length} diary entr${diaryEvents.length!==1?"ies":"y"}`);
 });
 
+/* ---------- HISTORY / RECOVERY ----------
+   Every push to the Gist creates a revision, and GitHub keeps them all. That
+   makes the sync file an archive, not just a mirror: anything that was ever
+   saved is still readable even if it is gone from the workspace now. This
+   reads that archive and shows what a past revision had which the workspace
+   no longer does, so a vanished entry can be looked up (what time was it?)
+   and put back one item at a time — no wholesale rollback needed, since
+   restoring everything would undo the good edits made since as well. */
+async function gistHistoryList(){
+  const id=gistId(); if(!id)return [];
+  const g=await gistRequest("GET","/gists/"+id);
+  return (g&&g.history)||[];
+}
+async function gistRevisionData(version){
+  const id=gistId(); if(!id)return null;
+  const g=await gistRequest("GET","/gists/"+id+"/"+version);
+  const raw=g&&g.files&&g.files[GIST_FILENAME]&&g.files[GIST_FILENAME].content;
+  return raw?JSON.parse(raw):null;
+}
+// Entries a past revision had that the workspace does not have now. Matched on
+// id first; an item re-created by hand gets a different id, so title+date is
+// the fallback that stops it being reported as still-missing.
+function missingFromNow(old){
+  const now=taskList();
+  const byId=new Set(now.map(t=>t.id));
+  const byTitleWhen=new Set(now.map(t=>`${String(t.title||"").trim().toLowerCase()}|${t.when||""}`));
+  return (old.schedule||[]).filter(t=>
+    !byId.has(t.id) && !byTitleWhen.has(`${String(t.title||"").trim().toLowerCase()}|${t.when||""}`));
+}
+function openHistoryModal(){
+  if(!gistToken()){
+    modal(`<h3>Earlier versions</h3>
+      <p style="color:var(--ink-dim);font-size:13px;line-height:1.6;margin:0 0 14px">
+        Version history comes from the synced Gist, and this device isn't connected to one yet.
+        Connect sync to get it — after that every save is recoverable.<br><br>
+        In the meantime, any <b>Export JSON</b> file you've saved is a full snapshot you can open with Import.</p>
+      <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{center:true});
+    return;
+  }
+  modal(`<h3>Earlier versions</h3><div id="hist_body" style="font-size:13px;color:var(--ink-dim)">Loading…</div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+  const body=()=>document.getElementById("hist_body");
+  gistHistoryList().then(list=>{
+    if(!body())return;
+    if(!list.length){ body().textContent="No earlier versions recorded yet."; return; }
+    body().innerHTML=`<p style="margin:0 0 12px;line-height:1.6">Every save is kept. Pick one to see what it
+      had that your workspace doesn't have now.</p>
+      <div class="hist-list">${list.slice(0,40).map((h,i)=>`<button type="button" class="hist-row" data-i="${i}">
+        <span class="hist-when">${esc(new Date(h.committed_at).toLocaleString())}</span>
+        <span class="hist-go">look inside →</span>
+      </button>`).join("")}</div>
+      <div id="hist_detail"></div>`;
+    body().querySelectorAll(".hist-row").forEach(b=>b.onclick=async ()=>{
+      const h=list[+b.dataset.i];
+      const det=document.getElementById("hist_detail");
+      det.innerHTML=`<div style="padding:10px 0">Reading that version…</div>`;
+      try{
+        const old=await gistRevisionData(h.version);
+        if(!old){ det.innerHTML=`<div style="padding:10px 0">That version couldn't be read.</div>`; return; }
+        const gone=missingFromNow(old);
+        det.innerHTML=`<div class="hist-detail">
+          <div class="hist-head">${esc(new Date(h.committed_at).toLocaleString())} —
+            ${(old.schedule||[]).length} scheduled item${(old.schedule||[]).length!==1?"s":""} then,
+            ${taskList().length} now</div>
+          ${gone.length?`<div class="hist-sub">In that version but not in your workspace now:</div>
+          ${gone.map((t,i)=>`<div class="hist-item" data-g="${i}">
+            <span class="hi-title">${esc(t.title||"(unnamed)")}</span>
+            <span class="hi-when">${t.when?esc(fmtWhenFull(t.when)):"no date"}${t.duration?` · ${t.duration}m`:""}${t.repeat&&t.repeat.every?" · repeats":""}</span>
+            <button type="button" class="hi-restore">Put it back</button>
+          </div>`).join("")}`
+          :`<div class="hist-sub">Nothing from that version is missing — your workspace has everything it had.</div>`}
+        </div>`;
+        det.querySelectorAll(".hist-item").forEach(row=>{
+          row.querySelector(".hi-restore").onclick=()=>{
+            const t=gone[+row.dataset.g];
+            // keep its own id if nothing is using it, so a later revision of
+            // the same record lines up rather than becoming a second copy
+            const rec={...t}; if(taskOf(rec.id)) rec.id=uid("tk_");
+            taskList().push(rec); persist(); render();
+            row.querySelector(".hi-restore").outerHTML=`<span class="hi-done">restored ✓</span>`;
+            toast(`Restored "${rec.title||"(unnamed)"}"`);
+          };
+        });
+      }catch(e){
+        det.innerHTML=`<div style="padding:10px 0;color:var(--overdue)">Couldn't read that version: ${esc(String(e.message||e).slice(0,120))}</div>`;
+      }
+    });
+  }).catch(e=>{ if(body())body().innerHTML=`<span style="color:var(--overdue)">Couldn't load history: ${esc(String(e.message||e).slice(0,120))}</span>`; });
+}
+
 /* ---------- BACKUP / RESTORE ---------- */
 document.getElementById("menuBtn").addEventListener("click",()=>{ renderMenuModal(); });
 function renderMenuModal(){
   modal(`<h3>Backup &amp; restore</h3>
     <div class="actions" style="justify-content:flex-start;flex-wrap:wrap;margin-top:0">
+      <button class="btn accent" id="m_history">🕘 Earlier versions</button>
       <button class="btn" id="m_export">↓ Export JSON</button>
       <button class="btn" id="m_excel">↓ Export Excel (.xls)</button>
       <button class="btn" id="m_import">↑ Import JSON</button>
       <button class="btn danger" id="m_reset">↺ Reset to seed</button></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`, {center:true});
+  document.getElementById("m_history").addEventListener("click",openHistoryModal);
   document.getElementById("m_export").addEventListener("click",()=>{download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");toast("Exported JSON");});
   document.getElementById("m_excel").addEventListener("click",()=>{exportFullDatabaseExcel();toast("Exported Excel workbook");});
   document.getElementById("m_import").addEventListener("click",async ()=>{
