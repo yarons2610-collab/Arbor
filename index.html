@@ -706,6 +706,7 @@
   .ch-when{flex:0 0 auto;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
   .cal-hit-empty{padding:8px;font-size:12px;color:var(--ink-faint)}
   /* ── earlier-versions recovery ─────────────────────────────────────────── */
+  .proj-own-bar{margin:2px 0 8px}
   .hist-list{max-height:34vh;overflow:auto;border:1px solid var(--line);border-radius:9px}
   .hist-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;
     border-bottom:1px solid var(--line);background:transparent;color:var(--ink);
@@ -1869,8 +1870,14 @@ function migrate(){                       // backfill fields added in later vers
     DB.projects=[];
     DB._projectsFlattened=true;
   }
-  // an experiment that has since been deleted leaves the task unassigned
-  DB.schedule.forEach(t=>{ if(t.experimentId&&!expById(t.experimentId)) t.experimentId=null; });
+  // an experiment or project that has since been deleted leaves the task
+  // unassigned; a task never holds both, so an experiment wins if some older
+  // record somehow carries the pair
+  DB.schedule.forEach(t=>{
+    if(t.experimentId&&!expById(t.experimentId)) t.experimentId=null;
+    if(t.projectId&&!DB.projects.some(p=>p.id===t.projectId)) t.projectId=null;
+    if(t.experimentId&&t.projectId) t.projectId=null;
+  });
   // experiment/control lives on the animal: it is a fact about the mouse, and it
   // shows up wherever the mouse does rather than only inside one project
   DB.animals.forEach(a=>{ if(a.group===undefined)a.group=""; });
@@ -3030,7 +3037,12 @@ function taskColorOf(t){
   // experiment a task would otherwise borrow one from.
   if(t.isEvent&&t.eventTypeId){ const et=eventTypeById(t.eventTypeId); if(et)return et.color; }
   const e=t.experimentId?expById(t.experimentId):null;
-  return e?e.color:"#7db4ff";        // unassigned tasks get their own colour
+  if(e) return e.color;
+  // a task attached straight to a project borrows the project's colour, the
+  // same way one attached to an experiment borrows the experiment's
+  const pr=t.projectId?projById(t.projectId):null;
+  if(pr) return pr.color;
+  return "#7db4ff";                  // unassigned tasks get their own colour
 }
 // The small marker that tells an event apart from a task at a glance on the
 // calendar itself, not just in its own bell — shared by all three chip
@@ -3309,7 +3321,7 @@ function nextOccurrence(t){
 }
 function addTask(init){
   const t={id:uid("tk_"),title:"",when:null,endDate:null,duration:null,
-           experimentId:null,repeat:null,links:[],doneOccurrences:[],
+           experimentId:null,projectId:null,repeat:null,links:[],doneOccurrences:[],
            isEvent:false,color:null,eventTypeId:null,created:Date.now(),...(init||{})};
   taskList().push(t); persist(); return t;
 }
@@ -3371,9 +3383,33 @@ function splitSeriesFrom(base,splitWhen,patch){
 // Where a task belongs — just an experiment, or nothing. No more "p:"/"e:"
 // prefix scheme: an experiment IS the top-level thing now, so there's only
 // one thing left to point at.
+/* A task belongs to one experiment, or to one project directly, or to nothing.
+   Directly-to-a-project matters because plenty of work is real and clearly
+   part of a project without being part of any single experiment in it —
+   ordering reagents, a meeting, writing the thing up — and forcing an
+   experiment to be invented for those is exactly the top-down busywork this
+   app is trying not to demand. The picker hands back a prefixed value so the
+   two kinds can't be confused; the two ids stay mutually exclusive, so
+   "where does this belong" always has one answer. */
 function setTaskTarget(t,val){
-  t.experimentId=val||null;
+  const v=String(val||"");
+  if(v.startsWith("p:")){ t.projectId=v.slice(2); t.experimentId=null; }
+  else if(v.startsWith("e:")){ t.experimentId=v.slice(2); t.projectId=null; }
+  else { t.experimentId=null; t.projectId=null; }
   persist();
+}
+// what the picker should currently show as selected
+function taskTargetValue(t){
+  if(t.experimentId) return "e:"+t.experimentId;
+  if(t.projectId) return "p:"+t.projectId;
+  return "";
+}
+// The project a task sits under, whether it says so itself or inherits it
+// from the experiment it belongs to.
+function taskProjectId(t){
+  if(t.projectId) return t.projectId;
+  const e=t.experimentId?expById(t.experimentId):null;
+  return e&&e.projectId||null;
 }
 function allSteps(){ return DB.experiments; }
 function stepColor(st){ return st.color||"#7db4ff"; }
@@ -3399,6 +3435,8 @@ function addProject(){
 // them — same "attach later" reasoning as deleteExperiment above
 function deleteProject(id){
   DB.experiments.forEach(ex=>{ if(ex.projectId===id) ex.projectId=null; });
+  // tasks attached straight to it become unattached rather than orphaned
+  taskList().forEach(t=>{ if(t.projectId===id) t.projectId=null; });
   DB.projects=DB.projects.filter(x=>x.id!==id); persist();
 }
 // A diary entry (a weight, a surgery, a training session…) belongs to the
@@ -3552,8 +3590,15 @@ function taskEditor(t,after,occWhen,occEndDate){
   const seeded=JSON.parse(JSON.stringify(t));   // what the form actually opened showing
   // A flat, sorted list — an experiment IS the top-level thing now, so
   // there's only one thing left to pick.
-  const opts=[...DB.experiments].sort((a,b)=>String(a.title||"").localeCompare(String(b.title||"")))
-    .map(ex=>`<option value="${ex.id}" ${t.experimentId===ex.id?"selected":""}>${esc(ex.title||"(unnamed experiment)")}</option>`).join("");
+  // Experiments and projects are both offered, in their own groups — a task
+  // can belong straight to a project without an experiment standing in for it.
+  const sel=taskTargetValue(t);
+  const expOpts=[...DB.experiments].sort((a,b)=>String(a.title||"").localeCompare(String(b.title||"")))
+    .map(ex=>`<option value="e:${ex.id}" ${sel==="e:"+ex.id?"selected":""}>${esc(ex.title||"(unnamed experiment)")}</option>`).join("");
+  const projOpts=[...DB.projects].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")))
+    .map(pr=>`<option value="p:${pr.id}" ${sel==="p:"+pr.id?"selected":""}>${esc(pr.name||"(unnamed project)")}</option>`).join("");
+  const opts=(expOpts?`<optgroup label="Experiments">${expOpts}</optgroup>`:"")
+            +(projOpts?`<optgroup label="Projects">${projOpts}</optgroup>`:"");
   modal(`<h3>${t.isEvent?"Event":"Task"}</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
     ${wasDetached?`<p style="color:var(--ink-dim);font-size:12px;line-height:1.5;margin:-6px 0 14px;background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:8px 10px">
@@ -4427,9 +4472,32 @@ function renderExperiments(){
       const members=DB.experiments.filter(ex=>ex.projectId===pr.id);
       host.appendChild(sectionHead(pr.color||"#7db4ff",pr.name||"(unnamed project)",pr));
       if(pr.links&&pr.links.length){ const catHost=document.createElement("div"); catHost.innerHTML=projCatsHTML(pr); host.appendChild(catHost); }
+      // Work that belongs to the project itself rather than to any one
+      // experiment in it — ordering something, a meeting, writing it up.
+      // Listed above the experiment cards because it is the project's own.
+      const own=taskList().filter(t=>!t.isEvent&&t.projectId===pr.id);
+      if(own.length){
+        const key="__proj_"+pr.id, openP=openSteps.has(key);
+        const bar=document.createElement("div"); bar.className="proj-own-bar";
+        bar.innerHTML=`<button type="button" class="exp-caret">${openP?"▾":"▸"} ${own.length} task${own.length!==1?"s":""} in this project</button>`;
+        host.appendChild(bar);
+        bar.querySelector(".exp-caret").onclick=()=>{
+          openSteps.has(key)?openSteps.delete(key):openSteps.add(key); renderExperiments(); };
+        if(openP){
+          const rows=sortAndGroupItems(own);
+          const list=document.createElement("div"); list.className="step-list"; list.style.cssText="border-top:none;padding-top:0";
+          list.innerHTML=rows.map(stepRowHTML).join("");
+          host.appendChild(list);
+          list.querySelectorAll(".step-line").forEach(el=>{
+            const t=taskOf(el.dataset.id); if(!t)return;
+            wireStepDotEl(el,renderExperiments);
+            el.onclick=()=>taskEditor(t,()=>renderExperiments());
+          });
+        }
+      }
       const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
       if(members.length) members.forEach(ex=>grid.appendChild(drawExperimentCard(ex)));
-      else grid.appendChild(Object.assign(document.createElement("div"),{className:"empty",textContent:"No experiments in this project yet."}));
+      else if(!own.length) grid.appendChild(Object.assign(document.createElement("div"),{className:"empty",textContent:"Nothing in this project yet."}));
     });
     const unassigned=DB.experiments.filter(ex=>!ex.projectId);
     if(unassigned.length){
@@ -4451,12 +4519,12 @@ function renderExperiments(){
   // Shares the same sort/group/hide-completed bar and collapsed-by-default
   // caret every experiment card's own task list already uses, rather than
   // dumping every unattached task straight onto the page unfiltered.
-  const rawUnattached=taskList().filter(t=>!t.isEvent&&!t.experimentId);
+  const rawUnattached=taskList().filter(t=>!t.isEvent&&!t.experimentId&&!t.projectId);
   if(rawUnattached.length){
     const unattached=sortAndGroupItems(rawUnattached);
     const openKey="__unattached", open=openSteps.has(openKey);
     const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="22px";
-    h.innerHTML=`<span class="chip" style="background:#5b6678"></span><h2>Tasks not in an experiment</h2>
+    h.innerHTML=`<span class="chip" style="background:#5b6678"></span><h2>Tasks not in an experiment or project</h2>
       <button type="button" class="exp-caret">${open?"▾":"▸"} ${rawUnattached.length} task${rawUnattached.length!==1?"s":""}</button>`;
     host.appendChild(h);
     h.querySelector(".exp-caret").onclick=()=>{
