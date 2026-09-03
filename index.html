@@ -478,10 +478,10 @@
   .cal-hour-cell.today{background:rgba(84,224,138,.025)}
   .cal-hour-cell:last-child{border-right:0}
   /* event chips */
-  /* same hard outline as the timed chips — the all-day banners and the month
+  /* same pale rim as the timed chips — the all-day banners and the month
      grid's rows sit directly against each other, so they need it most */
   .cal-evt{border-radius:5px;padding:2px 5px;font-size:11px;line-height:1.3;cursor:pointer;overflow:hidden;position:relative;transition:.1s;
-    border:1px solid #000;box-shadow:0 1px 2px rgba(0,0,0,.4)}
+    border:1px solid rgba(255,255,255,.34);box-shadow:0 1px 3px rgba(0,0,0,.5)}
   /* body.cal-dragging (not just this chip) — a lifted chip is pointer-events:none
      so the real cursor's own natural micro-jitter hits whatever ordinary chip
      sits underneath it instead, flickering *that* chip's hover in and out
@@ -503,11 +503,13 @@
   .cal-evt-ck.on{background:currentColor}
   .cal-evt-evicon{font-size:9px;margin-right:2px}
   .cal-evt .es{font-family:var(--mono);font-size:9px;opacity:.8}
-  /* Every chip carries a hard dark outline. Without one, two blocks of
-     similar colour sitting against each other read as a single mass — the
-     edge between them is the only thing saying where one ends. */
+  /* A light rim, not a dark one. Two blocks of similar colour against each
+     other do need an edge — but a black outline on a dark grid reads as a
+     gap rather than a border: side by side it makes a dark channel that
+     looks like empty space between them. A pale rim reads as the edge of
+     the block itself, and the shadow under it does the separating. */
   .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:none;
-    border:1px solid #000;box-shadow:0 1px 2px rgba(0,0,0,.45)}
+    border:1px solid rgba(255,255,255,.34);box-shadow:0 1px 3px rgba(0,0,0,.55)}
   /* the chip a search result just jumped to, so it can be picked out of a
      busy day instead of leaving you hunting for what you searched for */
   .cal-evt-found{animation:calFound 2.4s ease-out 1}
