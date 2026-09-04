@@ -709,6 +709,14 @@
   .cal-hit-empty{padding:8px;font-size:12px;color:var(--ink-faint)}
   /* ── earlier-versions recovery ─────────────────────────────────────────── */
   .proj-own-bar{margin:2px 0 8px}
+  .cage-box{border:1px solid var(--line2);border-radius:12px;background:var(--bg2);margin-bottom:14px;overflow:hidden}
+  .cage-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel2);
+    border-bottom:1px solid var(--line2)}
+  .cage-icon{color:var(--ink-faint);font-size:12px}
+  .cage-name{font-family:var(--mono);font-size:12px;color:var(--ink);letter-spacing:.02em}
+  .cage-count{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-faint);
+    border:1px solid var(--line2);border-radius:20px;padding:1px 8px}
+  .cage-body{padding:10px 10px 2px}
   .hist-list{max-height:34vh;overflow:auto;border:1px solid var(--line);border-radius:9px}
   .hist-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;
     border-bottom:1px solid var(--line);background:transparent;color:var(--ink);
@@ -1082,13 +1090,13 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // type the fill and the animal's home experiment a thin edge; "experiment"
   // or "project" gives that one thing the fill instead, edge gone. Tasks and
   // experiments are coloured by their own record either way.
-  calColorBy:"type", calMode:"week",
+  calMode:"week",
   // How an experiment's combined task+diary list is ordered and clustered.
   expTaskSort:"alpha", expTaskGroup:"none", notesSort:"updated_desc",
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
-  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",search:"",sort:"name"},
+  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",search:"",sort:"name",groupBy:"none"},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // Named, colour-coded event categories — tasks already get an implicit
   // colour from whatever project they're attached to, but an event (isEvent:
@@ -1751,6 +1759,7 @@ function migrate(){                       // backfill fields added in later vers
   animalProject=DB.config.animalFilters.project||"all";
   calMode=DB.config.calMode||"week";
   animalEntry=DB.config.animalFilters.entry||"all";
+  animalGroupBy=DB.config.animalFilters.groupBy||"none";
   // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
   // may still carry — each meant ascending (earliest/oldest first) already,
   // so map them onto their explicit _asc equivalent rather than losing the
@@ -1878,11 +1887,6 @@ function migrate(){                       // backfill fields added in later vers
     if(ex.projectId!=null && !DB.projects.some(p=>p.id===ex.projectId)) ex.projectId=null;
     if(ex.projectId===undefined) ex.projectId=null;
   });
-  // calColorBy's "project" value briefly meant "colour by experiment" while
-  // Projects was removed (see calColourSegHTML) — reclaiming it for real
-  // Project colouring now, so any workspace that saved that preference
-  // during the removal keeps the same colouring behaviour under its new name.
-  if(DB.config.calColorBy==="project") DB.config.calColorBy="experiment";
   if(!Array.isArray(DB.schedule)) DB.schedule=[];
   // A task used to be a child row inside its experiment. It is its own record
   // now so it can exist before it belongs anywhere. Lift them out once, keeping
@@ -4259,12 +4263,14 @@ function animalColor(a){
 // (a thin edge down the right). Under "experiment" or "project" that one takes
 // the fill and the edge goes away, so the whole calendar reads as a single variable.
 function diaryColors(an,def){
+  // Two channels, two variables: the fill is what kind of entry this is
+  // (backed up by the icon the chip already carries), and a thin edge down
+  // the right says which experiment the animal belongs to. This used to be
+  // switchable to colour by experiment or project instead, collapsing it to
+  // one variable — the switch cost a row of the calendar and nobody wanted
+  // the other two readings, so this is simply what it always defaulted to.
   const ex=animalHomeExperiment(an.id);
-  const expc=ex?ex.color:null;
-  const mode=DB.config.calColorBy||"type";
-  if(mode==="experiment") return {fill:expc||"#5b6678",edge:null};
-  if(mode==="project"){ const pr=ex&&ex.projectId?projById(ex.projectId):null; return {fill:pr?pr.color:"#5b6678",edge:null}; }
-  return {fill:def.color,edge:expc};
+  return {fill:def.color, edge:ex?ex.color:null};
 }
 const edgeCSS=c=>c?`border-right:3px solid ${c};`:"";
 
@@ -5217,19 +5223,6 @@ function calVisibleRange(){
   const end=new Date(start); end.setDate(start.getDate()+n-1);
   return [k(start),k(end)];
 }
-function calColourSegHTML(){
-  const m=DB.config.calColorBy||"type";
-  return `<div class="seg cal-colour" id="cal_colour" title="What a diary entry's colour means">`
-    +`<span class="cc-lab">colour</span>${
-    [["type","Type"],["experiment","Experiment"],["project","Project"]].map(([v,l])=>
-      `<button type="button" data-c="${v}" class="${m===v?"on":""}">${l}</button>`).join("")}</div>`;
-}
-function wireCalColourSeg(root){
-  const seg=root.querySelector("#cal_colour"); if(!seg)return;
-  seg.addEventListener("click",e=>{ const b=e.target.closest("button"); if(!b)return;
-    if(b.dataset.c===(DB.config.calColorBy||"type"))return;
-    DB.config.calColorBy=b.dataset.c; persist(); renderTimeline(); });
-}
 // Which of the three kinds of thing the Timeline draws are currently shown.
 // Missing/unset reads as "on" so existing saves (with no calFilters at all)
 // keep showing everything, same as before this filter existed.
@@ -5341,12 +5334,12 @@ function renderMonthView(host){
     <button class="cal-nav-btn today" id="cal_today">Today</button>
     <button class="cal-nav-btn" id="cal_next">›</button>
     <h2 class="cal-title" id="cal_title" title="Jump to a date">${base.toLocaleDateString(undefined,{month:"long",year:"numeric"})}</h2>
-    ${calModeSegHTML()}${calColourSegHTML()}${calFilterSegHTML()}
+    ${calModeSegHTML()}${calFilterSegHTML()}
     ${calNavExtrasHTML()}`;
   nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
   nav.querySelector("#cal_next").onclick=()=>{calWeekOffset++;renderTimeline();};
   nav.querySelector("#cal_today").onclick=()=>{calWeekOffset=0;renderTimeline();};
-  wireCalModeSeg(nav); wireCalColourSeg(nav); wireCalFilterSeg(nav);
+  wireCalModeSeg(nav); wireCalFilterSeg(nav);
   wireCalNavExtras(nav,calVisibleRange()[0]);
 
   const gridStart=new Date(base); gridStart.setDate(1-base.getDay());
@@ -5487,9 +5480,9 @@ function renderTimeline(){
     <button class="cal-nav-btn" id="cal_next">›</button>
     <h2 class="cal-title" id="cal_title" title="Jump to a date">${NCOL===1?ws.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric",year:"numeric"})
                   :`${fmt(ws)} – ${fmt(we)}, ${fmtY(we)}`}</h2>
-    ${calModeSegHTML()}${calColourSegHTML()}${calFilterSegHTML()}
+    ${calModeSegHTML()}${calFilterSegHTML()}
     ${calNavExtrasHTML()}`;
-  wireCalModeSeg(nav); wireCalColourSeg(nav); wireCalFilterSeg(nav);
+  wireCalModeSeg(nav); wireCalFilterSeg(nav);
   wireCalNavExtras(nav,calVisibleRange()[0]);
   nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
   nav.querySelector("#cal_next").onclick=()=>{calWeekOffset++;renderTimeline();};
@@ -7812,7 +7805,7 @@ function noteModal(id,over){
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
-let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name";
+let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name", animalGroupBy="none";
 // Which animal cards have their detail panel open — tracked here rather than
 // as pure per-card DOM state, so a full renderAnimals() (needed whenever a
 // quick-edit might change which animals a status filter or a dob/sacrificed
@@ -8016,7 +8009,10 @@ function renderAnimals(){
     <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin-bottom:10px;align-items:center">
       <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search name, cage, strain, tag, notes or experiment…"
         style="flex:1 1 160px;max-width:340px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
-      <div class="af-sortbar"><span class="af-label af-sort">↕ Sort by</span>
+      <div class="af-sortbar"><span class="af-label af-sort">▦ Show as</span>
+        <select id="a_groupby" class="af-sel af-sort">${[["none","List"],["cage","Cages"],["tag","Tags"]]
+          .map(o=>`<option value="${o[0]}" ${animalGroupBy===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
+        <span class="af-label af-sort" style="margin-left:8px">↕ Sort by</span>
         <select id="a_sort" class="af-sel af-sort">${[["name","Name"],
           ["dob_asc","Born (earliest)"],["dob_desc","Born (latest)"],
           ["added_asc","Added (earliest)"],["added_desc","Added (latest)"],
@@ -8047,6 +8043,7 @@ function renderAnimals(){
   onPick("a_sort",v=>{ animalSort=v; DB.config.animalFilters.sort=v; persist(); renderAnimals(); });
   onPick("a_status",v=>{ animalStatus=v; DB.config.animalFilters.status=v; persist(); renderAnimals(); });
   onPick("a_entry",v=>{ animalEntry=v; DB.config.animalFilters.entry=v; persist(); renderAnimals(); });
+  onPick("a_groupby",v=>{ animalGroupBy=v; DB.config.animalFilters.groupBy=v; persist(); renderAnimals(); });
   bar.querySelector("#a_search").addEventListener("input",e=>{
     const pos=e.target.selectionStart;
     animalSearch=e.target.value;
@@ -8148,8 +8145,36 @@ function renderAnimals(){
       <span class="count">${list.length} animal${list.length!==1?"s":""}</span>`;
     host.appendChild(h);
   }
-  if(list.length) list.forEach(a=>host.appendChild(animalCard(a)));
-  else { const e=document.createElement("div"); e.style.cssText="font-size:12px;color:var(--ink-faint);font-family:var(--mono);padding:4px 0 10px"; e.textContent="no animals"; host.appendChild(e); }
+  if(!list.length){
+    const e=document.createElement("div"); e.style.cssText="font-size:12px;color:var(--ink-faint);font-family:var(--mono);padding:4px 0 10px";
+    e.textContent="no animals"; host.appendChild(e);
+  } else if(animalGroupBy==="none"){
+    list.forEach(a=>host.appendChild(animalCard(a)));
+  } else {
+    // Cages read better as boxes than as a flat list with headings: a cage is
+    // a physical thing several animals are inside, and the whole point of
+    // looking at them this way is seeing who is housed with whom.
+    const keyOf=animalGroupBy==="cage"?(a=>a.cage||""):(a=>a.tag||"");
+    const emptyLabel=animalGroupBy==="cage"?"No cage":"No tag";
+    const buckets=new Map();
+    list.forEach(a=>{ const k=keyOf(a)||emptyLabel; if(!buckets.has(k))buckets.set(k,[]); buckets.get(k).push(a); });
+    // unlabelled last, everything else by name
+    const names=[...buckets.keys()].sort((x,y)=>
+      (x===emptyLabel)-(y===emptyLabel)||String(x).localeCompare(String(y),undefined,{numeric:true}));
+    names.forEach(name=>{
+      const members=buckets.get(name);
+      const box=document.createElement("div"); box.className="cage-box";
+      const tagColor=animalGroupBy==="tag"&&name!==emptyLabel?(tagByName(name)||{}).color:null;
+      box.innerHTML=`<div class="cage-head">
+          ${tagColor?`<span class="chip" style="background:${tagColor}"></span>`:`<span class="cage-icon">${animalGroupBy==="cage"?"▤":"🏷"}</span>`}
+          <span class="cage-name"${name===emptyLabel?' style="color:var(--ink-faint)"':""}>${esc(name)}</span>
+          <span class="cage-count">${members.length}</span>
+        </div><div class="cage-body"></div>`;
+      const body=box.querySelector(".cage-body");
+      members.forEach(a=>body.appendChild(animalCard(a)));
+      host.appendChild(box);
+    });
+  }
 }
 function animalCard(a){
   const card=document.createElement("div");
