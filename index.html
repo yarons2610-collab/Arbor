@@ -29,7 +29,16 @@
     --body:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%}
+  /* Double-tap zoom is a browser default, not something iOS forces on you: a
+     second tap landing near the first inside ~300ms is read as "zoom in" no
+     matter what it hit, which on a dense page of small controls happens by
+     accident constantly. "manipulation" tells the browser this page wants
+     panning and pinch-zoom but no double-tap gesture, so the second tap is
+     just a second tap. Deliberately NOT user-scalable=no on the viewport —
+     that would take pinch-zoom away too, which is the one way to zoom on
+     purpose. A side benefit: it also drops the ~300ms wait browsers keep
+     before firing a tap while they watch for that second one. */
+  html,body{margin:0;height:100%;touch-action:manipulation}
   body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:14px;overflow:hidden}
   button{font-family:inherit;cursor:pointer}
   ::-webkit-scrollbar{width:10px;height:10px}
