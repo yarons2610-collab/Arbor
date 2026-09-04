@@ -712,6 +712,12 @@
   .cal-hit-empty{padding:8px;font-size:12px;color:var(--ink-faint)}
   /* ── earlier-versions recovery ─────────────────────────────────────────── */
   .proj-own-bar{margin:2px 0 8px}
+  .af-panel{border:1px solid var(--line2);border-radius:10px;background:var(--bg2);
+    padding:10px 12px 8px;margin-bottom:10px}
+  .filt-n{display:inline-flex;align-items:center;justify-content:center;min-width:15px;height:15px;
+    border-radius:20px;background:var(--gcamp);color:#08240f;font-size:9.5px;font-family:var(--mono);
+    margin-left:3px;padding:0 4px}
+  .btn.filt-on{border-color:var(--gcamp);color:var(--ink)}
   .acond-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
   .acond{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line2);
     border-radius:20px;padding:3px 6px 3px 11px;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
@@ -1130,7 +1136,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
-  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",search:"",sort:"name",groupBy:"none",conds:[]},
+  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",search:"",sort:"name",groupBy:"none",conds:[],panelOpen:false},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // Named, colour-coded event categories — tasks already get an implicit
   // colour from whatever project they're attached to, but an event (isEvent:
@@ -1795,6 +1801,7 @@ function migrate(){                       // backfill fields added in later vers
   animalEntry=DB.config.animalFilters.entry||"all";
   animalGroupBy=DB.config.animalFilters.groupBy||"none";
   animalConds=Array.isArray(DB.config.animalFilters.conds)?DB.config.animalFilters.conds:[];
+  animalFiltersOpen=!!DB.config.animalFilters.panelOpen;
   // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
   // may still carry — each meant ascending (earliest/oldest first) already,
   // so map them onto their explicit _asc equivalent rather than losing the
@@ -7841,6 +7848,20 @@ function noteModal(id,over){
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
 let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name", animalGroupBy="none";
+let animalFiltersOpen=false;
+// How many filters are actually doing something — shown on the button so a
+// collapsed panel can never hide the fact that the list is being narrowed.
+function animalActiveFilterCount(){
+  return [animalTag,animalExperiment,animalProject,animalGroup,animalStatus,animalEntry]
+    .filter(v=>v&&v!=="all").length + animalConds.length;
+}
+function clearAnimalFilters(){
+  animalTag=animalExperiment=animalProject=animalGroup=animalStatus=animalEntry="all";
+  animalConds=[];
+  Object.assign(DB.config.animalFilters,
+    {tag:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",conds:[]});
+  persist(); renderAnimals();
+}
 // Conditions on the values inside diary entries. An animal satisfies one if
 // ANY of its entries of that type satisfies it, and passes the filter only if
 // it satisfies EVERY condition — so they narrow, the way stacked filters are
@@ -8196,11 +8217,14 @@ function renderAnimals(){
           ["sac_asc","Sacrificed (earliest)"],["sac_desc","Sacrificed (latest)"]]
           .map(o=>`<option value="${o[0]}" ${animalSort===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select></div>
       <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <button class="btn ghost${animalActiveFilterCount()?" filt-on":""}" id="a_filters">⚙ Filter${
+          animalActiveFilterCount()?` <span class="filt-n">${animalActiveFilterCount()}</span>`:""}</button>
         <button class="btn ghost" id="a_tags">🏷 Tags</button>
         <button class="btn ghost" id="a_eventlog">📋 Event log</button>
         <button class="btn accent" id="a_add">＋ Animal</button>
       </div>
     </div>
+    <div class="af-panel" ${animalFiltersOpen?"":"hidden"}>
     <div class="af-grid">
       ${DB.tags.length?col("Tag","a_tag",animalTag,[["all","All tags"],["none","No tag"],...[...DB.tags].sort((a,b)=>a.name.localeCompare(b.name)).map(c=>[c.name,c.name])]):""}
       ${expNames.length?col("Experiment","a_exp",animalExperiment,[["all","All experiments"],["none","Unattached"],...expNames]):""}
@@ -8213,10 +8237,18 @@ function renderAnimals(){
     <div class="acond-bar">
       ${animalConds.map((c,i)=>`<span class="acond" data-i="${i}">${esc(condLabel(c))}<button type="button" class="acond-x" data-i="${i}" title="Remove">✕</button></span>`).join("")}
       <button type="button" class="acond-add" id="a_addcond">⊕ Add condition</button>
-      ${animalConds.length>1?`<button type="button" class="acond-add" id="a_clearcond">clear all</button>`:""}
+      ${animalConds.length>1?`<button type="button" class="acond-add" id="a_clearcond">clear conditions</button>`:""}
+      ${animalActiveFilterCount()?`<button type="button" class="acond-add" id="a_clearall">clear all filters</button>`:""}
+    </div>
     </div>
 `;
   host.appendChild(bar);
+  bar.querySelector("#a_filters").onclick=()=>{
+    animalFiltersOpen=!animalFiltersOpen;
+    DB.config.animalFilters.panelOpen=animalFiltersOpen; persist(); renderAnimals();
+  };
+  const clearAllBtn=bar.querySelector("#a_clearall");
+  if(clearAllBtn) clearAllBtn.onclick=clearAnimalFilters;
   bar.querySelector("#a_addcond").onclick=()=>openCondModal(()=>renderAnimals());
   const clearBtn=bar.querySelector("#a_clearcond");
   if(clearBtn) clearBtn.onclick=()=>{ animalConds=[]; DB.config.animalFilters.conds=[]; persist(); renderAnimals(); };
