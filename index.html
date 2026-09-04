@@ -471,19 +471,24 @@
   .cal-allday-toggle:hover{color:var(--ink)}
   .cal-evt-span{position:relative;z-index:2}
   /* hour rows */
-  /* touch-action:none for the same reason as cal-hour-cell just below (static,
-     not toggled — WebKit only honors the value present at touchstart): without
-     it this column kept real native momentum scroll while every hour cell next
-     to it didn't, so scroll feel changed depending on which pixel column a
-     thumb landed on. wireGutterScroll() drives it manually to match. */
-  .cal-hour-gutter{border-right:1px solid var(--line);padding:0 6px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);text-align:right;height:var(--cal-hour-h);display:flex;align-items:flex-start;padding-top:3px;box-sizing:border-box;touch-action:none}
-  /* touch-action:none, same as cal-evt-timed and for the same reason: WebKit
-     only honors the touch-action value that was already in place at
-     touchstart, not one set later once a hold confirms intent — so this has
-     to be static, not toggled from JS. That means native touch scrolling is
-     off on every hour cell permanently; wireHourCellCreate() drives
-     .cal-grid-wrap's scrollTop itself for a plain swipe to make up for it. */
-  .cal-hour-cell{border-right:1px solid var(--line);border-top:1px solid var(--line);height:var(--cal-hour-h);position:relative;box-sizing:border-box;cursor:cell;touch-action:none}
+  /* pinch-zoom, not none, for the same reason as cal-hour-cell just below
+     (static, not toggled — WebKit only honors the value present at
+     touchstart): without a restriction here this column kept real native
+     momentum scroll while every hour cell next to it didn't, so scroll feel
+     changed depending on which pixel column a thumb landed on.
+     wireGutterScroll() drives it manually to match. */
+  .cal-hour-gutter{border-right:1px solid var(--line);padding:0 6px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);text-align:right;height:var(--cal-hour-h);display:flex;align-items:flex-start;padding-top:3px;box-sizing:border-box;touch-action:pinch-zoom}
+  /* pinch-zoom, same as cal-evt-timed. It has to be static, not toggled from
+     JS, because WebKit only honors the touch-action value already in place at
+     touchstart — not one set later once a hold confirms intent. What the drag
+     and drag-to-create gestures actually need is for the browser not to claim
+     a one-finger drag as a pan, and "pinch-zoom" withholds exactly that while
+     still permitting two-finger zoom; "none" withheld the zoom too, which
+     meant pinching anywhere on the hour grid — most of the Timeline — simply
+     did nothing. Native touch scrolling is still off here either way, so
+     wireHourCellCreate() goes on driving .cal-grid-wrap's scrollTop itself
+     for a plain swipe. */
+  .cal-hour-cell{border-right:1px solid var(--line);border-top:1px solid var(--line);height:var(--cal-hour-h);position:relative;box-sizing:border-box;cursor:cell;touch-action:pinch-zoom}
   .cal-hour-cell.today{background:rgba(84,224,138,.025)}
   .cal-hour-cell:last-child{border-right:0}
   /* event chips */
@@ -517,7 +522,7 @@
      gap rather than a border: side by side it makes a dark channel that
      looks like empty space between them. A pale rim reads as the edge of
      the block itself, and the shadow under it does the separating. */
-  .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:none;
+  .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:pinch-zoom;
     border:1.5px solid rgba(255,255,255,.56);box-shadow:0 1px 3px rgba(0,0,0,.58)}
   /* the chip a search result just jumped to, so it can be picked out of a
      busy day instead of leaving you hunting for what you searched for */
@@ -2369,7 +2374,7 @@ function commitCalMove(x,newWhen,newEnd,newDur){
 // here — a hold long enough to be clearly deliberate, not long enough to
 // feel like the app is ignoring you.
 const DRAG_HOLD_MS=450, DRAG_WIGGLE_PX=9, SWIPE_DISTANCE_PX=60;
-// touch-action:none (required on .cal-hour-cell so the create/drag gestures below
+// touch-action:pinch-zoom (required on .cal-hour-cell so the create/drag gestures below
 // can win the race against Safari's own scroll recognizer — see the cell's own
 // comment for why) kills native momentum scrolling across almost the whole grid.
 // wireHourCellCreate() and wireGutterScroll() compensate by manually driving
@@ -2421,10 +2426,10 @@ function velocityFromSamples(samples){
   return dt>0?(last.y-first.y)/dt:0;
 }
 // The hour-label gutter is the one column of the grid that never got
-// touch-action:none, so it was the one place that kept real native momentum
+// no touch-action restriction, so it was the one place that kept real native momentum
 // scroll while every hour cell next to it went dead — an inconsistent feel
 // depending on which pixel column a thumb happens to land on. Given the same
-// static touch-action:none (see .cal-hour-gutter's own CSS comment) and the
+// static touch-action:pinch-zoom (see .cal-hour-gutter's own CSS comment) and the
 // same manual-scroll-plus-momentum treatment here.
 function wireGutterScroll(gutterEl,gridWrap){
   gutterEl.addEventListener("pointerdown",downEvent=>{
@@ -5991,7 +5996,7 @@ function wireHourCellCreate(cell,day,h0,gridWrap,slideEl){
     const isTouch=downEvent.pointerType!=="mouse";
     const cr=cell.getBoundingClientRect(), rowH=cr.height;
     let armed=!isTouch, moved=false, cancelled=false, scrolling=false, swiping=false, previewEl=null, scrollSamples=null;
-    // cal-hour-cell carries touch-action:none in CSS (see there for why): a
+    // cal-hour-cell carries touch-action:pinch-zoom in CSS (see there for why): a
     // dynamic toggle timed to the hold was tried first and reliably lost the
     // race against Safari's own scroll-gesture recognizer on a real phone —
     // WebKit does not honor a touch-action change made mid-gesture, only the
