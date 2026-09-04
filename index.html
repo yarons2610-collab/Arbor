@@ -7837,29 +7837,75 @@ let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="a
 let animalConds=[];
 const COND_OPS={
   number:[["gt","over"],["lt","under"],["eq","equals"]],
+  count :[["gt","more than"],["lt","fewer than"],["eq","exactly"]],
+  date  :[["after","after"],["before","before"],["on","on"]],
   select:[["is","is"],["not","is not"]],
-  yesno:[["yes","is Yes"],["no","is No"]],
-  text:[["has","contains"],["nothas","does not contain"]]
+  yesno :[["yes","is Yes"],["no","is No"]],
+  text  :[["has","contains"],["nothas","does not contain"]]
 };
+/* Every entry type can be filtered on, not just the ones that happen to
+   declare custom fields. Three things are true of every entry regardless of
+   type — it has a note, it has a date, and there is some number of them — and
+   restricting the builder to declared fields hid all of that, leaving types
+   like Surgery, Perfusion and Comment with nothing to filter by at all.
+   Training carries more still: the behavioural task's name, and whatever
+   metrics that task defines in the task library. */
+function condFields(typeKey){
+  const d=diaryTypeDef(typeKey); if(!d)return [];
+  const out=[
+    {key:"__count",label:"Number of entries",type:"count",src:"count"},
+    {key:"__date", label:"Date",             type:"date", src:"date"},
+    {key:"__note", label:"Note",             type:"text", src:"note"}
+  ];
+  if(typeKey==="training"){
+    out.push({key:"__task",label:"Task",type:"text",src:"task"});
+    // metric keys differ per task, so offer the union across the library
+    const seen=new Set();
+    (DB.config.taskLib||[]).forEach(t=>(t.params||[]).forEach(p=>{
+      if(seen.has(p.key))return; seen.add(p.key);
+      out.push({key:"m:"+p.key,label:`${p.label||p.key} (task metric)`,
+                type:p.type||"text",options:p.options,src:"metric"});
+    }));
+  }
+  (d.fields||[]).forEach(f=>out.push({...f,src:"field"}));
+  return out;
+}
 function condFieldDef(typeKey,fieldKey){
-  const d=diaryTypeDef(typeKey); if(!d)return null;
-  return (d.fields||[]).find(x=>x.key===fieldKey)||null;
+  return condFields(typeKey).find(f=>f.key===fieldKey)||null;
+}
+function condValueOf(e,f){
+  if(f.src==="note")   return diaryNoteOf(e.data||{});
+  if(f.src==="date")   return e.date||"";
+  if(f.src==="task")   return (e.data||{}).task||"";
+  if(f.src==="metric") return ((e.data||{}).metrics||{})[f.key.slice(2)];
+  return (e.data||{})[f.key];
 }
 function condMatches(a,c){
-  const f=condFieldDef(c.type,c.field); const ft=f?f.type:"text";
-  return (a.diary||[]).some(e=>{
-    if(e.type!==c.type)return false;
-    const v=(e.data||{})[c.field];
+  const f=condFieldDef(c.type,c.field); if(!f)return false;
+  const entries=(a.diary||[]).filter(e=>e.type===c.type);
+  // a count is a fact about the set, not about any one entry
+  if(f.type==="count"){
+    const n=entries.length, t=parseFloat(c.value);
+    if(isNaN(t))return false;
+    return c.op==="gt"?n>t:c.op==="lt"?n<t:n===t;
+  }
+  return entries.some(e=>{
+    const v=condValueOf(e,f);
     if(v==null||v==="")return false;
-    if(ft==="number"){
+    if(f.type==="number"){
       const n=parseFloat(v), t=parseFloat(c.value);
       if(isNaN(n)||isNaN(t))return false;
       return c.op==="gt"?n>t:c.op==="lt"?n<t:n===t;
     }
-    if(ft==="yesno"){ const b=(v===true||v==="1"||v===1||String(v).toLowerCase()==="yes");
+    if(f.type==="date"){
+      const d1=String(v).slice(0,10), d2=String(c.value||"").slice(0,10);
+      if(!d2)return false;
+      return c.op==="after"?d1>d2:c.op==="before"?d1<d2:d1===d2;
+    }
+    if(f.type==="yesno"){ const b=(v===true||v==="1"||v===1||String(v).toLowerCase()==="yes");
       return c.op==="yes"?b:!b; }
     const sv=String(v).toLowerCase(), tv=String(c.value||"").toLowerCase();
-    if(ft==="select") return c.op==="is"?sv===tv:sv!==tv;
+    if(f.type==="select") return c.op==="is"?sv===tv:sv!==tv;
     return c.op==="has"?sv.includes(tv):!sv.includes(tv);
   });
 }
@@ -7867,41 +7913,40 @@ function condLabel(c){
   const d=diaryTypeDef(c.type), f=condFieldDef(c.type,c.field);
   const ft=f?f.type:"text";
   const op=((COND_OPS[ft]||COND_OPS.text).find(o=>o[0]===c.op)||["",c.op])[1];
-  const showsValue=ft!=="yesno";
-  return `${d?d.label:c.type} · ${f?f.label:c.field} ${op}${showsValue?" "+c.value:""}`;
+  return `${d?d.label:c.type} · ${f?f.label:c.field} ${op}${ft==="yesno"?"":" "+c.value}`;
 }
-// types worth offering: only those that actually define fields to compare
-function condTypesWithFields(){ return diaryTypeDefs().filter(d=>(d.fields||[]).length); }
 function openCondModal(after){
-  const types=condTypesWithFields();
-  if(!types.length){ toast("No entry type has fields to filter on yet"); return; }
+  const types=diaryTypeDefs();
+  if(!types.length){ toast("No entry types defined yet"); return; }
   const draw=()=>{
     const tKey=document.getElementById("cnd_type")?.value||types[0].key;
-    const def=diaryTypeDef(tKey);
-    const fKey=document.getElementById("cnd_field")?.value||(def.fields[0]||{}).key;
-    const f=condFieldDef(tKey,fKey)||def.fields[0];
-    const ft=f?f.type:"text";
-    const ops=COND_OPS[ft]||COND_OPS.text;
+    const fields=condFields(tKey);
+    const fKey=document.getElementById("cnd_field")?.value||fields[0].key;
+    const f=condFieldDef(tKey,fKey)||fields[0];
+    const ops=COND_OPS[f.type]||COND_OPS.text;
+    const valHTML=
+      f.type==="yesno" ? "" :
+      f.type==="select" ? `<select id="cnd_val">${(f.options||[]).map(o=>`<option value="${escAttr(o)}">${esc(o)}</option>`).join("")}</select>` :
+      f.type==="date"   ? `<input id="cnd_val" type="date">` :
+      `<input id="cnd_val" type="text" inputmode="${(f.type==="number"||f.type==="count")?"decimal":"text"}" placeholder="${
+        f.type==="count"?"e.g. 3":f.type==="number"?"e.g. 22":"text to match"}">`;
     document.getElementById("cnd_body").innerHTML=`
       <div class="drow">
         <div class="fld" style="flex:1"><label>Entry type</label>
           <select id="cnd_type">${types.map(t=>`<option value="${t.key}" ${t.key===tKey?"selected":""}>${esc(t.label)}</option>`).join("")}</select></div>
         <div class="fld" style="flex:1"><label>Field</label>
-          <select id="cnd_field">${(def.fields||[]).map(x=>`<option value="${x.key}" ${x.key===fKey?"selected":""}>${esc(x.label)}</option>`).join("")}</select></div>
+          <select id="cnd_field">${fields.map(x=>`<option value="${escAttr(x.key)}" ${x.key===fKey?"selected":""}>${esc(x.label)}</option>`).join("")}</select></div>
       </div>
       <div class="drow">
         <div class="fld" style="flex:1"><label>Is</label>
           <select id="cnd_op">${ops.map(o=>`<option value="${o[0]}">${esc(o[1])}</option>`).join("")}</select></div>
-        ${ft==="yesno"?"":`<div class="fld" style="flex:1"><label>Value</label>${
-          ft==="select"
-            ?`<select id="cnd_val">${(f.options||[]).map(o=>`<option value="${escAttr(o)}">${esc(o)}</option>`).join("")}</select>`
-            :`<input id="cnd_val" type="text" inputmode="${ft==="number"?"decimal":"text"}" placeholder="${ft==="number"?"e.g. 22":"text to match"}">`
-        }</div>`}
+        ${valHTML?`<div class="fld" style="flex:1"><label>Value</label>${valHTML}</div>`:""}
       </div>`;
-    // changing the type or the field changes what the rest of the form means
     document.getElementById("cnd_type").addEventListener("change",()=>{
-      const d2=diaryTypeDef(document.getElementById("cnd_type").value);
-      document.getElementById("cnd_field").innerHTML=(d2.fields||[]).map(x=>`<option value="${x.key}">${esc(x.label)}</option>`).join("");
+      // a new type has a different field list; start it at that list's first
+      const el=document.getElementById("cnd_field");
+      el.innerHTML=condFields(document.getElementById("cnd_type").value)
+        .map(x=>`<option value="${escAttr(x.key)}">${esc(x.label)}</option>`).join("");
       draw();
     });
     document.getElementById("cnd_field").addEventListener("change",draw);
@@ -7916,8 +7961,8 @@ function openCondModal(after){
     const op=document.getElementById("cnd_op").value;
     const valEl=document.getElementById("cnd_val");
     const value=valEl?valEl.value.trim():"";
-    const f=condFieldDef(type,field); const ft=f?f.type:"text";
-    if(ft!=="yesno"&&!value){ toast("Give it a value to compare against"); return; }
+    const f=condFieldDef(type,field);
+    if(f&&f.type!=="yesno"&&!value){ toast("Give it a value to compare against"); return; }
     animalConds.push({type,field,op,value});
     DB.config.animalFilters.conds=animalConds; persist();
     closeModal(); if(after)after();
