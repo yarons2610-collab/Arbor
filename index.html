@@ -717,14 +717,28 @@
   .acond-add{border:1px dashed var(--line2);background:transparent;color:var(--ink-faint);border-radius:20px;
     padding:3px 11px;font-family:var(--mono);font-size:10.5px;cursor:pointer}
   .acond-add:hover{color:var(--ink);border-color:var(--gcamp)}
-  .cage-box{border:1px solid var(--line2);border-radius:12px;background:var(--bg2);margin-bottom:14px;overflow:hidden}
-  .cage-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel2);
+  .cage-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;align-items:start}
+  .cage-tile{border:1px solid var(--line2);border-radius:12px;background:var(--bg2);overflow:hidden;
+    display:flex;flex-direction:column;min-height:132px}
+  .ct-head{display:flex;align-items:center;gap:7px;padding:7px 10px;background:var(--panel2);
     border-bottom:1px solid var(--line2)}
-  .cage-icon{color:var(--ink-faint);font-size:12px}
-  .cage-name{font-family:var(--mono);font-size:12px;color:var(--ink);letter-spacing:.02em}
-  .cage-count{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-faint);
-    border:1px solid var(--line2);border-radius:20px;padding:1px 8px}
-  .cage-body{padding:10px 10px 2px}
+  .ct-mark{width:12px;height:12px;border-radius:3px;flex:0 0 auto;font-size:9px;line-height:12px;
+    text-align:center;color:var(--ink-faint)}
+  .ct-name{font-family:var(--mono);font-size:11.5px;color:var(--ink);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .ct-count{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);
+    border:1px solid var(--line2);border-radius:20px;padding:0 7px;flex:0 0 auto}
+  .ct-body{flex:1;padding:4px 4px 2px;display:flex;flex-direction:column;gap:1px}
+  .ct-animal{display:flex;align-items:center;gap:6px;width:100%;text-align:left;border:0;background:transparent;
+    color:var(--ink);padding:3px 6px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:12px}
+  .ct-animal:hover{background:var(--panel)}
+  .ct-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+  .ct-nm{flex:0 0 auto;font-weight:500}
+  .ct-meta{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--ink-faint);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ct-foot{border-top:1px solid var(--line);padding:5px 10px;font-family:var(--mono);font-size:9.5px;
+    color:var(--ink-faint)}
+  @media(max-width:600px){ .cage-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px} }
   .hist-list{max-height:34vh;overflow:auto;border:1px solid var(--line);border-radius:9px}
   .hist-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;
     border-bottom:1px solid var(--line);background:transparent;color:var(--ink);
@@ -8265,28 +8279,44 @@ function renderAnimals(){
   } else if(animalGroupBy==="none"){
     list.forEach(a=>host.appendChild(animalCard(a)));
   } else {
-    // Cages read better as boxes than as a flat list with headings: a cage is
-    // a physical thing several animals are inside, and the whole point of
-    // looking at them this way is seeing who is housed with whom.
+    // A summary, not the full list re-sectioned: one small tile per cage that
+    // can be taken in at a glance, several across the screen at once, so the
+    // question "who is housed with whom, and how are they doing" is answered
+    // by looking rather than by scrolling. The animal rows inside are just
+    // enough to identify one and click into it.
     const keyOf=animalGroupBy==="cage"?(a=>a.cage||""):(a=>a.tag||"");
     const emptyLabel=animalGroupBy==="cage"?"No cage":"No tag";
     const buckets=new Map();
     list.forEach(a=>{ const k=keyOf(a)||emptyLabel; if(!buckets.has(k))buckets.set(k,[]); buckets.get(k).push(a); });
-    // unlabelled last, everything else by name
     const names=[...buckets.keys()].sort((x,y)=>
       (x===emptyLabel)-(y===emptyLabel)||String(x).localeCompare(String(y),undefined,{numeric:true}));
+    const STATUS={alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"};
+    const grid=document.createElement("div"); grid.className="cage-grid"; host.appendChild(grid);
     names.forEach(name=>{
       const members=buckets.get(name);
-      const box=document.createElement("div"); box.className="cage-box";
+      const alive=members.filter(a=>a.termination==="alive").length;
+      const strains=[...new Set(members.map(a=>a.strain).filter(Boolean))];
+      const sexes=members.map(a=>a.sex).filter(Boolean);
+      const nM=sexes.filter(x=>/^m/i.test(x)).length, nF=sexes.filter(x=>/^f/i.test(x)).length;
       const tagColor=animalGroupBy==="tag"&&name!==emptyLabel?(tagByName(name)||{}).color:null;
-      box.innerHTML=`<div class="cage-head">
-          ${tagColor?`<span class="chip" style="background:${tagColor}"></span>`:`<span class="cage-icon">${animalGroupBy==="cage"?"▤":"🏷"}</span>`}
-          <span class="cage-name"${name===emptyLabel?' style="color:var(--ink-faint)"':""}>${esc(name)}</span>
-          <span class="cage-count">${members.length}</span>
-        </div><div class="cage-body"></div>`;
-      const body=box.querySelector(".cage-body");
-      members.forEach(a=>body.appendChild(animalCard(a)));
-      host.appendChild(box);
+      const tile=document.createElement("div"); tile.className="cage-tile";
+      tile.innerHTML=`
+        <div class="ct-head">
+          <span class="ct-mark" style="${tagColor?`background:${tagColor}`:""}">${tagColor?"":(animalGroupBy==="cage"?"▤":"🏷")}</span>
+          <span class="ct-name"${name===emptyLabel?' style="color:var(--ink-faint)"':""}>${esc(name)}</span>
+          <span class="ct-count">${members.length}</span>
+        </div>
+        <div class="ct-body">${members.map(a=>{
+          const w=latestWeight(a), aw=ageWeeks(a);
+          return `<button type="button" class="ct-animal" data-id="${escAttr(a.id)}">
+            <span class="ct-dot" style="background:${STATUS[a.termination]||"#3a4252"}"></span>
+            <span class="ct-nm">${esc(a.name)}</span>
+            <span class="ct-meta">${[a.sex,aw!=null?aw+"w":null,w!=null?w+"g":null].filter(Boolean).join(" · ")}</span>
+          </button>`;}).join("")}</div>
+        <div class="ct-foot">${alive}/${members.length} alive${
+          (nM||nF)?` · ${nM}♂ ${nF}♀`:""}${strains.length===1?` · ${esc(strains[0])}`:strains.length>1?` · ${strains.length} strains`:""}</div>`;
+      tile.querySelectorAll(".ct-animal").forEach(b=>b.onclick=()=>animalModal(b.dataset.id));
+      grid.appendChild(tile);
     });
   }
 }
