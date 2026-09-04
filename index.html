@@ -709,6 +709,14 @@
   .cal-hit-empty{padding:8px;font-size:12px;color:var(--ink-faint)}
   /* ── earlier-versions recovery ─────────────────────────────────────────── */
   .proj-own-bar{margin:2px 0 8px}
+  .acond-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+  .acond{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line2);
+    border-radius:20px;padding:3px 6px 3px 11px;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
+  .acond-x{border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:10px;padding:0 3px}
+  .acond-x:hover{color:var(--overdue)}
+  .acond-add{border:1px dashed var(--line2);background:transparent;color:var(--ink-faint);border-radius:20px;
+    padding:3px 11px;font-family:var(--mono);font-size:10.5px;cursor:pointer}
+  .acond-add:hover{color:var(--ink);border-color:var(--gcamp)}
   .cage-box{border:1px solid var(--line2);border-radius:12px;background:var(--bg2);margin-bottom:14px;overflow:hidden}
   .cage-head{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel2);
     border-bottom:1px solid var(--line2)}
@@ -1096,7 +1104,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
-  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",search:"",sort:"name",groupBy:"none"},
+  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",search:"",sort:"name",groupBy:"none",conds:[]},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // Named, colour-coded event categories — tasks already get an implicit
   // colour from whatever project they're attached to, but an event (isEvent:
@@ -1760,6 +1768,7 @@ function migrate(){                       // backfill fields added in later vers
   calMode=DB.config.calMode||"week";
   animalEntry=DB.config.animalFilters.entry||"all";
   animalGroupBy=DB.config.animalFilters.groupBy||"none";
+  animalConds=Array.isArray(DB.config.animalFilters.conds)?DB.config.animalFilters.conds:[];
   // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
   // may still carry — each meant ascending (earliest/oldest first) already,
   // so map them onto their explicit _asc equivalent rather than losing the
@@ -7806,6 +7815,100 @@ function noteModal(id,over){
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
 let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name", animalGroupBy="none";
+// Conditions on the values inside diary entries. An animal satisfies one if
+// ANY of its entries of that type satisfies it, and passes the filter only if
+// it satisfies EVERY condition — so they narrow, the way stacked filters are
+// expected to. Operators follow the field's own type: "over 22" means nothing
+// for a yes/no, "contains" means nothing for a number.
+let animalConds=[];
+const COND_OPS={
+  number:[["gt","over"],["lt","under"],["eq","equals"]],
+  select:[["is","is"],["not","is not"]],
+  yesno:[["yes","is Yes"],["no","is No"]],
+  text:[["has","contains"],["nothas","does not contain"]]
+};
+function condFieldDef(typeKey,fieldKey){
+  const d=diaryTypeDef(typeKey); if(!d)return null;
+  return (d.fields||[]).find(x=>x.key===fieldKey)||null;
+}
+function condMatches(a,c){
+  const f=condFieldDef(c.type,c.field); const ft=f?f.type:"text";
+  return (a.diary||[]).some(e=>{
+    if(e.type!==c.type)return false;
+    const v=(e.data||{})[c.field];
+    if(v==null||v==="")return false;
+    if(ft==="number"){
+      const n=parseFloat(v), t=parseFloat(c.value);
+      if(isNaN(n)||isNaN(t))return false;
+      return c.op==="gt"?n>t:c.op==="lt"?n<t:n===t;
+    }
+    if(ft==="yesno"){ const b=(v===true||v==="1"||v===1||String(v).toLowerCase()==="yes");
+      return c.op==="yes"?b:!b; }
+    const sv=String(v).toLowerCase(), tv=String(c.value||"").toLowerCase();
+    if(ft==="select") return c.op==="is"?sv===tv:sv!==tv;
+    return c.op==="has"?sv.includes(tv):!sv.includes(tv);
+  });
+}
+function condLabel(c){
+  const d=diaryTypeDef(c.type), f=condFieldDef(c.type,c.field);
+  const ft=f?f.type:"text";
+  const op=((COND_OPS[ft]||COND_OPS.text).find(o=>o[0]===c.op)||["",c.op])[1];
+  const showsValue=ft!=="yesno";
+  return `${d?d.label:c.type} · ${f?f.label:c.field} ${op}${showsValue?" "+c.value:""}`;
+}
+// types worth offering: only those that actually define fields to compare
+function condTypesWithFields(){ return diaryTypeDefs().filter(d=>(d.fields||[]).length); }
+function openCondModal(after){
+  const types=condTypesWithFields();
+  if(!types.length){ toast("No entry type has fields to filter on yet"); return; }
+  const draw=()=>{
+    const tKey=document.getElementById("cnd_type")?.value||types[0].key;
+    const def=diaryTypeDef(tKey);
+    const fKey=document.getElementById("cnd_field")?.value||(def.fields[0]||{}).key;
+    const f=condFieldDef(tKey,fKey)||def.fields[0];
+    const ft=f?f.type:"text";
+    const ops=COND_OPS[ft]||COND_OPS.text;
+    document.getElementById("cnd_body").innerHTML=`
+      <div class="drow">
+        <div class="fld" style="flex:1"><label>Entry type</label>
+          <select id="cnd_type">${types.map(t=>`<option value="${t.key}" ${t.key===tKey?"selected":""}>${esc(t.label)}</option>`).join("")}</select></div>
+        <div class="fld" style="flex:1"><label>Field</label>
+          <select id="cnd_field">${(def.fields||[]).map(x=>`<option value="${x.key}" ${x.key===fKey?"selected":""}>${esc(x.label)}</option>`).join("")}</select></div>
+      </div>
+      <div class="drow">
+        <div class="fld" style="flex:1"><label>Is</label>
+          <select id="cnd_op">${ops.map(o=>`<option value="${o[0]}">${esc(o[1])}</option>`).join("")}</select></div>
+        ${ft==="yesno"?"":`<div class="fld" style="flex:1"><label>Value</label>${
+          ft==="select"
+            ?`<select id="cnd_val">${(f.options||[]).map(o=>`<option value="${escAttr(o)}">${esc(o)}</option>`).join("")}</select>`
+            :`<input id="cnd_val" type="text" inputmode="${ft==="number"?"decimal":"text"}" placeholder="${ft==="number"?"e.g. 22":"text to match"}">`
+        }</div>`}
+      </div>`;
+    // changing the type or the field changes what the rest of the form means
+    document.getElementById("cnd_type").addEventListener("change",()=>{
+      const d2=diaryTypeDef(document.getElementById("cnd_type").value);
+      document.getElementById("cnd_field").innerHTML=(d2.fields||[]).map(x=>`<option value="${x.key}">${esc(x.label)}</option>`).join("");
+      draw();
+    });
+    document.getElementById("cnd_field").addEventListener("change",draw);
+  };
+  modal(`<h3>Add a condition</h3><div id="cnd_body"></div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn accent" id="cnd_add">Add</button></div>`,{wide:true});
+  draw();
+  document.getElementById("cnd_add").onclick=()=>{
+    const type=document.getElementById("cnd_type").value;
+    const field=document.getElementById("cnd_field").value;
+    const op=document.getElementById("cnd_op").value;
+    const valEl=document.getElementById("cnd_val");
+    const value=valEl?valEl.value.trim():"";
+    const f=condFieldDef(type,field); const ft=f?f.type:"text";
+    if(ft!=="yesno"&&!value){ toast("Give it a value to compare against"); return; }
+    animalConds.push({type,field,op,value});
+    DB.config.animalFilters.conds=animalConds; persist();
+    closeModal(); if(after)after();
+  };
+}
 // Which animal cards have their detail panel open — tracked here rather than
 // as pure per-card DOM state, so a full renderAnimals() (needed whenever a
 // quick-edit might change which animals a status filter or a dob/sacrificed
@@ -8033,8 +8136,18 @@ function renderAnimals(){
       ${col("Entry","a_entry",animalEntry,[["all","Any entry"],["none","No entries"],
         ...diaryTypeDefs().map(d=>[d.key,`${d.icon||""} ${d.label}`.trim()])])}
     </div>
+    <div class="acond-bar">
+      ${animalConds.map((c,i)=>`<span class="acond" data-i="${i}">${esc(condLabel(c))}<button type="button" class="acond-x" data-i="${i}" title="Remove">✕</button></span>`).join("")}
+      <button type="button" class="acond-add" id="a_addcond">⊕ Add condition</button>
+      ${animalConds.length>1?`<button type="button" class="acond-add" id="a_clearcond">clear all</button>`:""}
+    </div>
 `;
   host.appendChild(bar);
+  bar.querySelector("#a_addcond").onclick=()=>openCondModal(()=>renderAnimals());
+  const clearBtn=bar.querySelector("#a_clearcond");
+  if(clearBtn) clearBtn.onclick=()=>{ animalConds=[]; DB.config.animalFilters.conds=[]; persist(); renderAnimals(); };
+  bar.querySelectorAll(".acond-x").forEach(b=>b.onclick=()=>{
+    animalConds.splice(+b.dataset.i,1); DB.config.animalFilters.conds=animalConds; persist(); renderAnimals(); });
   const onPick=(id,fn)=>{ const el=bar.querySelector("#"+id); if(el)el.addEventListener("change",e=>fn(e.target.value)); };
   onPick("a_tag",v=>{ animalTag=v; DB.config.animalFilters.tag=v; persist(); renderAnimals(); });
   onPick("a_exp",v=>{ animalExperiment=v; DB.config.animalFilters.experiment=v; persist(); renderAnimals(); });
@@ -8113,6 +8226,7 @@ function renderAnimals(){
     inTag(a,animalTag) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
     (animalStatus==="all"||a.termination===animalStatus) &&
     inEntry(a,animalEntry) &&
+    animalConds.every(c=>condMatches(a,c)) &&
     searchMatch(a));
   // Missing dates sort last whichever way round, so a half-filled column never
   // buries the animals that do have one.
