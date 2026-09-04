@@ -645,17 +645,20 @@
   .seg{display:flex;gap:4px;flex-wrap:wrap}
   .seg button{flex:1;background:var(--bg2);border:1px solid var(--line2);color:var(--ink-dim);padding:7px;border-radius:7px;font-size:12px}
   .seg button.on{color:#fff;border-color:currentColor}
-  .af-grid{display:grid;grid-auto-flow:column;grid-template-rows:auto auto;grid-auto-columns:minmax(0,1fr);
-    column-gap:10px;row-gap:4px;margin-bottom:6px}
+  .af-grid{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:6px}
+  .af-cell{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:4px}
   .af-grid .af-sel{width:100%;min-width:0;background:var(--panel2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:6px 9px;font-size:12.5px}
   .af-grid .af-sel:focus{outline:none;border-color:var(--gcamp)}
   .af-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
   .af-row .seg button{flex:0 0 auto}
   .af-label{font-family:var(--mono);font-size:10px;color:var(--ink-faint);text-transform:uppercase;width:60px;flex:0 0 auto}
-  .af-grid .af-label{width:auto;align-self:end;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .af-sortbar{display:flex;align-items:center;gap:7px;flex:0 0 auto}
+  /* align-self:end meant "sit on the bottom row" back when this was a
+     column-flow grid; inside a column-direction cell it is the cross axis,
+     so it was pushing every title to the right of its own dropdown */
+  .af-grid .af-label{width:auto;align-self:flex-start;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .af-sortbar{display:flex;align-items:center;gap:7px;flex:1 1 auto;min-width:0;flex-wrap:wrap}
   .af-sortbar .af-label{width:auto;color:var(--ink-dim);flex:0 0 auto}
-  .af-sortbar .af-sel{width:auto;min-width:104px;background:var(--panel2);border:1px solid var(--line2);
+  .af-sortbar .af-sel{width:auto;min-width:104px;max-width:100%;background:var(--panel2);border:1px solid var(--line2);
     color:var(--ink);border-radius:7px;padding:6px 9px;font-size:12.5px}
   .af-sortbar .af-sel:focus{outline:none;border-color:var(--gcamp)}
   .taglist{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
@@ -738,7 +741,16 @@
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ct-foot{border-top:1px solid var(--line);padding:5px 10px;font-family:var(--mono);font-size:9.5px;
     color:var(--ink-faint)}
-  @media(max-width:600px){ .cage-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px} }
+  @media(max-width:600px){
+    .cage-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+    /* two filters per row rather than all of them crushed onto one */
+    .af-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .af-cell{flex:none}
+    .af-word{display:none}                       /* the icon carries the meaning */
+    .af-sortbar{gap:5px}
+    .af-sortbar .af-sel{min-width:0;flex:1 1 90px}
+    .af-sortbar .af-label{margin-left:0!important}
+  }
   .hist-list{max-height:34vh;overflow:auto;border:1px solid var(--line);border-radius:9px}
   .hist-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;
     border-bottom:1px solid var(--line);background:transparent;color:var(--ink);
@@ -8161,20 +8173,23 @@ function renderAnimals(){
     .flatMap(st=>(st.groupDefs||[]).map(g=>g.name).filter(Boolean)))].sort((a,b)=>a.localeCompare(b));
   const bar=document.createElement("div");
   bar.style.cssText="margin-bottom:16px";
-  // One column per filter: its title, and its dropdown directly beneath. The
-  // columns wrap together, so the titles always sit on the line above their own
-  // control however narrow the window gets.
-  const col=(label,id,cur,opts,cls)=>`<span class="af-label${cls?" "+cls:""}">${label}</span>
+  // Each filter is one cell holding its own title and dropdown. They used to
+  // be loose siblings in a column-flow grid, which forced every filter onto a
+  // single row however many there were — six of them on a phone left each
+  // about sixty pixels wide, every value truncated to "All t…". As cells they
+  // can wrap: one row on a laptop, two per row on a phone.
+  const col=(label,id,cur,opts,cls)=>`<div class="af-cell">
+    <span class="af-label${cls?" "+cls:""}">${label}</span>
     <select id="${id}" class="af-sel${cls?" "+cls:""}">${opts.map(o=>
-      `<option value="${escAttr(o[0])}" ${String(cur)===String(o[0])?"selected":""}>${esc(o[1])}</option>`).join("")}</select>`;
+      `<option value="${escAttr(o[0])}" ${String(cur)===String(o[0])?"selected":""}>${esc(o[1])}</option>`).join("")}</select></div>`;
   bar.innerHTML=`
     <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;margin-bottom:10px;align-items:center">
-      <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search name, cage, strain, tag, notes or experiment…"
+      <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search"
         style="flex:1 1 160px;max-width:340px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
-      <div class="af-sortbar"><span class="af-label af-sort">▦ Show as</span>
+      <div class="af-sortbar"><span class="af-label af-sort">▦<span class="af-word"> Show as</span></span>
         <select id="a_groupby" class="af-sel af-sort">${[["none","List"],["cage","Cages"],["tag","Tags"]]
           .map(o=>`<option value="${o[0]}" ${animalGroupBy===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
-        <span class="af-label af-sort" style="margin-left:8px">↕ Sort by</span>
+        <span class="af-label af-sort" style="margin-left:8px">↕<span class="af-word"> Sort by</span></span>
         <select id="a_sort" class="af-sel af-sort">${[["name","Name"],
           ["dob_asc","Born (earliest)"],["dob_desc","Born (latest)"],
           ["added_asc","Added (earliest)"],["added_desc","Added (latest)"],
