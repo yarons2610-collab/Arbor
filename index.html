@@ -3507,9 +3507,10 @@ function deleteTask(id){ DB.schedule=taskList().filter(x=>x.id!==id); persist();
 // needs to apply to fewer than "every occurrence forever" has to ask which
 // occurrences it actually means, the same three-way choice every calendar
 // app offers once a series is involved.
-function occurrenceScopeModal(onChoice){
-  modal(`<h3>Repeating task</h3>
-    <p style="color:var(--ink-dim);font-size:13px;margin:0 0 16px;line-height:1.5">This change — apply it to:</p>
+function occurrenceScopeModal(onChoice,opts){
+  opts=opts||{};
+  modal(`<h3>${esc(opts.title||"Repeating task")}</h3>
+    <p style="color:var(--ink-dim);font-size:13px;margin:0 0 16px;line-height:1.5">${esc(opts.prompt||"This change — apply it to:")}</p>
     <div style="display:flex;flex-direction:column;gap:8px">
       <button type="button" class="btn ghost" id="occ_this" style="text-align:left;justify-content:flex-start">Only this event</button>
       <button type="button" class="btn ghost" id="occ_following" style="text-align:left;justify-content:flex-start">This and all following events</button>
@@ -3658,13 +3659,14 @@ function diaryRepeatDates(startISO,every,untilISO){
 // Timeline's "new entry" flow so the two can't drift apart. Only offered for
 // a new entry: changing the rule on one that already exists would have to
 // rewrite entries that may already hold recorded data.
-function diaryRepeatHTML(prefix){
+function diaryRepeatHTML(prefix,rule){
+  const cur=(rule&&rule.every)||"";
   return `<div class="dg-row" style="margin-top:6px">
     <div><label>Repeats</label>
       <select id="${prefix}_rep" class="dg-f-rep">${DIARY_REPEATS.map(r=>
-        `<option value="${r[0]}">${r[1]}</option>`).join("")}</select></div>
-    <div id="${prefix}_repuntilwrap" style="display:none"><label>Until</label>
-      <input type="date" id="${prefix}_repuntil" class="dg-f-repuntil"></div>
+        `<option value="${r[0]}" ${r[0]===cur?"selected":""}>${r[1]}</option>`).join("")}</select></div>
+    <div id="${prefix}_repuntilwrap" style="${cur?"":"display:none"}"><label>Until</label>
+      <input type="date" id="${prefix}_repuntil" class="dg-f-repuntil" value="${escAttr((rule&&rule.until)||"")}"></div>
   </div>`;
 }
 function wireDiaryRepeat(root,prefix){
@@ -3682,16 +3684,25 @@ function readDiaryRepeat(root,prefix){
 // in; the rest copy its type, time and fields, since "weigh at 9am" repeating
 // means the same thing each time — what differs is what you find, and that
 // gets typed into each entry when its day comes.
-function pushDiarySeries(a,base,rep){
+function pushDiarySeries(a,base,rep,seriesId){
   const dates=rep?diaryRepeatDates(base.date,rep.every,rep.until):[base.date];
-  const seriesId=dates.length>1?uid("ds_"):null;
+  const sid=dates.length>1?(seriesId||uid("ds_")):null;
   dates.forEach(date=>{
     a.diary.push({...base,id:uid("d_"),date,
       data:JSON.parse(JSON.stringify(base.data||{})),
       created:Date.now(),edited:null,
-      ...(seriesId?{seriesId}:{})});
+      ...(sid?{seriesId:sid,seriesRule:{...rep}}:{})});
   });
   return dates.length;
+}
+// The occurrences of one series from a given date onward, oldest first.
+function diarySeriesFrom(a,entry,scope){
+  if(!entry.seriesId)return [entry];
+  const all=(a.diary||[]).filter(e=>e.seriesId===entry.seriesId)
+    .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+  if(scope==="all")return all;
+  if(scope==="following")return all.filter(e=>e.date>=entry.date);
+  return [entry];
 }
 function diarySeriesCount(a,seriesId){
   return (a.diary||[]).filter(e=>e.seriesId===seriesId).length;
@@ -8733,7 +8744,7 @@ function paintDiary(container,a,opts){
       </div>
       ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
-      ${editingId?"":diaryRepeatHTML("dg")}
+      ${diaryRepeatHTML("dg",editingId?(a.diary.find(e=>e.id===editingId)||{}).seriesRule:null)}
       ${formActions()}</div>`;
   }
   function wireForm(host,type,editing){
@@ -8846,9 +8857,36 @@ function paintDiary(container,a,opts){
         });
       }
       data.note=host.querySelector(".dg-f-note").value.trim();
-      if(editing){ editing.data=data; editing.date=entryDate; editing.time=entryTime; editing.endTime=entryEndTime; editing.edited=Date.now(); }
+      const rep=readDiaryRepeat(host,"dg");
+      if(editing){
+        editing.data=data; editing.date=entryDate; editing.time=entryTime;
+        editing.endTime=entryEndTime; editing.edited=Date.now();
+        // A repeat can be set, changed or cleared on an entry that already
+        // exists, not only on a new one. Every occurrence is a real record, so
+        // "change the rule" means rewriting the ones after this — never the
+        // ones before, which may already hold results that were recorded.
+        const was=editing.seriesRule||null;
+        const changed=JSON.stringify(was||null)!==JSON.stringify(rep||null);
+        if(changed){
+          const later=diarySeriesFrom(a,editing,"following").filter(e=>e.id!==editing.id);
+          const laterIds=new Set(later.map(e=>e.id));
+          if(laterIds.size) a.diary=a.diary.filter(e=>!laterIds.has(e.id));
+          if(rep){
+            const sid=editing.seriesId||uid("ds_");
+            editing.seriesId=sid; editing.seriesRule={...rep};
+            // regenerate the tail from this entry's own date
+            const dates=diaryRepeatDates(entryDate,rep.every,rep.until).slice(1);
+            dates.forEach(date=>a.diary.push({type,date,time:entryTime,endTime:entryEndTime,
+              id:uid("d_"),data:JSON.parse(JSON.stringify(data)),created:Date.now(),edited:null,
+              seriesId:sid,seriesRule:{...rep}}));
+            toast(dates.length?`Repeats set — ${dates.length+1} entries`:"Repeat cleared");
+          } else {
+            delete editing.seriesId; delete editing.seriesRule;
+            toast(laterIds.size?`Repeat removed — ${laterIds.size} later entr${laterIds.size!==1?"ies":"y"} deleted`:"Repeat removed");
+          }
+        }
+      }
       else {
-        const rep=readDiaryRepeat(host,"dg");
         const n=pushDiarySeries(a,{type,date:entryDate,time:entryTime,endTime:entryEndTime,data},rep);
         if(n>1) toast(`${n} ${diaryTypeDef(type).label} entries added`);
       }
@@ -8977,20 +9015,18 @@ function paintDiary(container,a,opts){
       formType=entry.type; editingId=entry.id; draw();
     } else if(delBtn){
       const entry=a.diary.find(x=>x.id===delBtn.dataset.id); if(!entry)return;
-      // One of a repeating set is rarely deleted on its own — usually the
-      // whole plan changed. Offer the rest of the set from this date on,
-      // rather than making it a row-by-row job.
-      const later=entry.seriesId
-        ? a.diary.filter(x=>x.seriesId===entry.seriesId&&x.date>=entry.date)
-        : [entry];
-      if(later.length>1){
-        const all=confirm(`This is one of ${diarySeriesCount(a,entry.seriesId)} repeating entries.\n\n`+
-          `OK — delete this and the ${later.length-1} later repeat${later.length-1!==1?"s":""}.\n`+
-          `Cancel — delete only this one.`);
-        const ids=new Set((all?later:[entry]).map(x=>x.id));
-        a.diary=a.diary.filter(x=>!ids.has(x.id));
-        persist(); notifyChange(); draw();
-        toast(all?`Deleted ${ids.size} entries`:"Entry deleted");
+      // One of a repeating set gets the same three-way question a repeating
+      // task asks. This used to be a confirm() whose Cancel meant "delete just
+      // this one" — so Cancel didn't cancel, and either button deleted
+      // something, which is the opposite of what a confirm dialog promises.
+      if(entry.seriesId&&diarySeriesCount(a,entry.seriesId)>1){
+        occurrenceScopeModal(scope=>{
+          const doomed=diarySeriesFrom(a,entry,scope);
+          const ids=new Set(doomed.map(x=>x.id));
+          a.diary=a.diary.filter(x=>!ids.has(x.id));
+          persist(); notifyChange(); draw();
+          toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
+        },{title:"Repeating entry",prompt:"Delete which of them?"});
         return;
       }
       if(confirm("Delete this diary entry?")){
