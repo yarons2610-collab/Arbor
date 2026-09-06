@@ -5605,6 +5605,40 @@ function renderMonthView(host){
     });
   });
 }
+/* The red now-line used to be built inside the hour-row loop, which meant it
+   was only ever as current as the last render: it froze at whatever minute the
+   Timeline happened to draw at and moved only when something else forced a
+   redraw — changing week, or leaving the tab and coming back. It now places
+   itself on a minute tick instead.
+   It finds its cell by the date/hour attributes the cells already carry rather
+   than by any index into the render pass's own arrays — the earlier version
+   indexed hourCells by now.getDay(), which only lines up in week view (where
+   day index and weekday number are the same thing by construction) and so hid
+   the line in day view on every day but Sunday. Looking the cell up by date
+   also makes the "is today even on screen?" check fall out for free: on any
+   other week or day there is simply no cell to match. */
+function placeNowLine(){
+  document.querySelectorAll(".cal-now-line").forEach(el=>el.remove());
+  const now=new Date(), pad=n=>String(n).padStart(2,"0");
+  const iso=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  const cell=document.querySelector(`.cal-hour-cell[data-date="${iso}"][data-hour="${now.getHours()}"]`);
+  if(!cell)return;
+  const line=document.createElement("div");
+  line.className="cal-now-line"; line.style.top=(now.getMinutes()/60)*100+"%";
+  const dot=document.createElement("div"); dot.className="cal-now-dot"; line.appendChild(dot);
+  cell.appendChild(line);
+}
+// Re-aimed at the next minute boundary each time rather than a fixed 60s
+// interval, so the line steps exactly when the clock does instead of drifting
+// to some arbitrary offset within the minute. Nothing happens while the tab is
+// hidden — a phone with the app backgrounded for an hour would otherwise wake
+// to sixty queued no-op ticks — and visibilitychange snaps it straight back to
+// the right place the moment you return, before the next tick is due.
+(function tickNowLine(){
+  if(!document.hidden) placeNowLine();
+  setTimeout(tickNowLine, 60000-(Date.now()%60000)+50);
+})();
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) placeNowLine(); });
 function renderTimeline(){
   const host=document.getElementById("timeline");
   // Where the hour grid was before this redraw. Every drag ends in a full
@@ -5990,23 +6024,8 @@ function renderTimeline(){
     });
     // click-to-create on hour cells; drag-to-create sets a duration first
     hourCells.forEach(({cell,day})=>wireHourCellCreate(cell,day,h,wrap,outer));
-    // now-line on current hour. Found by matching each cell's own date against
-    // today — not by now.getDay() (0-6, Sunday-based) indexing directly into
-    // hourCells, which only happened to line up in week view (where day index
-    // and weekday number are the same thing by construction) and meant the
-    // line only ever showed in day view when the visible day was a Sunday,
-    // the one case where hourCells[0] and hourCells[now.getDay()] coincide.
-    if(calWeekOffset===0){
-      const now=new Date();
-      const todayCell=hourCells.find(hc=>hc.day.getTime()===today.getTime());
-      if(now.getHours()===h&&todayCell){
-        const pct=(now.getMinutes()/60)*100;
-        const line=document.createElement("div"); line.className="cal-now-line"; line.style.top=pct+"%";
-        const dot=document.createElement("div"); dot.className="cal-now-dot"; line.appendChild(dot);
-        todayCell.cell.appendChild(line);
-      }
-    }
   }
+  placeNowLine();   // the minute ticker keeps it moving from here on
 
   calFlashKey=null;   // consumed by the chips just built above
   // Put the grid back where it was, or — on a fresh open — show the part of
