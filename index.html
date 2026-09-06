@@ -3621,6 +3621,81 @@ function deleteProject(id){
 // a scheduled task (title/when/endDate/repeat) so stepRow, taskDone and taskSpan
 // all work on it unchanged; its id keeps the diary entry's own "d_" prefix so a
 // click can tell the two apart.
+/* ---- repeating diary entries ----
+   These materialise real entries rather than being generated from a rule the
+   way a repeating task is. A task occurrence carries almost nothing of its
+   own — whether it was ticked, and that's it — so a rule plus a set of
+   done-dates describes the whole series. A diary entry is a record of what
+   happened, and every occurrence holds its own data: the weight actually
+   measured that morning, the note actually written after that session. There
+   is nothing to generate from a rule; each occurrence has to be a real row
+   you can open and fill in. Every one of them is an ordinary entry from the
+   moment it exists, so everything that already reads the diary — the
+   Timeline, notifications, the .ics export, search, conditions — needs no
+   knowledge of any of this.
+   They carry a shared seriesId so the set can still be handled as one. */
+const DIARY_REPEATS=[["","Does not repeat"],["day","Every day"],["week","Every week"],
+                     ["2week","Every 2 weeks"],["month","Every month"]];
+const DIARY_REPEAT_CAP=200;   // a guard against a runaway "until" date, not a real limit
+function diaryRepeatDates(startISO,every,untilISO){
+  const out=[startISO];
+  if(!every||!untilISO||untilISO<=startISO)return out;
+  // Every date is measured from the start, never from the one before it.
+  // Stepping month-by-month drifts: the 31st clamps to the 28th in February
+  // and then stays on the 28th forever, because the next step is taken from
+  // the clamped date rather than from what was actually asked for.
+  for(let i=1;out.length<DIARY_REPEAT_CAP;i++){
+    const cur = every==="day"   ? addDaysISO(startISO,i)
+              : every==="week"  ? addDaysISO(startISO,i*7)
+              : every==="2week" ? addDaysISO(startISO,i*14)
+              :                   addMonthsISO(startISO,i);
+    if(cur>untilISO)break;
+    out.push(cur);
+  }
+  return out;
+}
+// The repeat controls, shared by the animal's own diary form and the
+// Timeline's "new entry" flow so the two can't drift apart. Only offered for
+// a new entry: changing the rule on one that already exists would have to
+// rewrite entries that may already hold recorded data.
+function diaryRepeatHTML(prefix){
+  return `<div class="dg-row" style="margin-top:6px">
+    <div><label>Repeats</label>
+      <select id="${prefix}_rep" class="dg-f-rep">${DIARY_REPEATS.map(r=>
+        `<option value="${r[0]}">${r[1]}</option>`).join("")}</select></div>
+    <div id="${prefix}_repuntilwrap" style="display:none"><label>Until</label>
+      <input type="date" id="${prefix}_repuntil" class="dg-f-repuntil"></div>
+  </div>`;
+}
+function wireDiaryRepeat(root,prefix){
+  const sel=root.querySelector("#"+prefix+"_rep"); if(!sel)return;
+  const wrap=root.querySelector("#"+prefix+"_repuntilwrap");
+  sel.addEventListener("change",()=>{ wrap.style.display=sel.value?"":"none"; });
+}
+function readDiaryRepeat(root,prefix){
+  const sel=root.querySelector("#"+prefix+"_rep");
+  if(!sel||!sel.value)return null;
+  const until=(root.querySelector("#"+prefix+"_repuntil")||{}).value||"";
+  return until?{every:sel.value,until}:null;
+}
+// Writes the whole series in one go. The first entry is the one just filled
+// in; the rest copy its type, time and fields, since "weigh at 9am" repeating
+// means the same thing each time — what differs is what you find, and that
+// gets typed into each entry when its day comes.
+function pushDiarySeries(a,base,rep){
+  const dates=rep?diaryRepeatDates(base.date,rep.every,rep.until):[base.date];
+  const seriesId=dates.length>1?uid("ds_"):null;
+  dates.forEach(date=>{
+    a.diary.push({...base,id:uid("d_"),date,
+      data:JSON.parse(JSON.stringify(base.data||{})),
+      created:Date.now(),edited:null,
+      ...(seriesId?{seriesId}:{})});
+  });
+  return dates.length;
+}
+function diarySeriesCount(a,seriesId){
+  return (a.diary||[]).filter(e=>e.seriesId===seriesId).length;
+}
 function diaryEntryById(id){
   for(const a of DB.animals){ const e=(a.diary||[]).find(x=>x.id===id); if(e)return {a,e}; }
   return null;
@@ -8658,9 +8733,11 @@ function paintDiary(container,a,opts){
       </div>
       ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
+      ${editingId?"":diaryRepeatHTML("dg")}
       ${formActions()}</div>`;
   }
   function wireForm(host,type,editing){
+    wireDiaryRepeat(host,"dg");
     // Opened from the Timeline (openCalItem), this modal exists to edit one
     // entry and nothing else — Cancel/Save should close it, not fall back to
     // the calendar/list view underneath, which is what the animal detail
@@ -8770,7 +8847,11 @@ function paintDiary(container,a,opts){
       }
       data.note=host.querySelector(".dg-f-note").value.trim();
       if(editing){ editing.data=data; editing.date=entryDate; editing.time=entryTime; editing.endTime=entryEndTime; editing.edited=Date.now(); }
-      else { a.diary.push({id:uid("d_"), type, date:entryDate, time:entryTime, endTime:entryEndTime, created:Date.now(), edited:null, data}); }
+      else {
+        const rep=readDiaryRepeat(host,"dg");
+        const n=pushDiarySeries(a,{type,date:entryDate,time:entryTime,endTime:entryEndTime,data},rep);
+        if(n>1) toast(`${n} ${diaryTypeDef(type).label} entries added`);
+      }
       // perfusion terminates the animal as part of the procedure, so it always
       // implies sacrifice (not the reverse) - only for a completed (today or
       // earlier), not a future-scheduled, entry.
@@ -8843,6 +8924,7 @@ function paintDiary(container,a,opts){
               <button type="button" class="step-dot dg-done${e.done?" on":""}" data-id="${e.id}" title="${e.done?"Done — click to undo":"Mark done"}">${e.done?"✓":""}</button>
               <span>${diaryTypeDef(e.type).icon}</span>
               <span class="dg-esum" title="${escAttr(diaryEntrySummary(e,a))}">${esc(diaryEntrySummary(e,a))}</span>
+              ${e.seriesId?`<span class="dg-rep" title="One of ${diarySeriesCount(a,e.seriesId)} repeating entries">↻</span>`:""}
               <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
               <button class="dg-edit" data-id="${e.id}">✎</button>
               <button class="dg-del" data-id="${e.id}">✕</button>
@@ -8894,8 +8976,25 @@ function paintDiary(container,a,opts){
       const entry=a.diary.find(x=>x.id===editBtn.dataset.id); if(!entry)return;
       formType=entry.type; editingId=entry.id; draw();
     } else if(delBtn){
+      const entry=a.diary.find(x=>x.id===delBtn.dataset.id); if(!entry)return;
+      // One of a repeating set is rarely deleted on its own — usually the
+      // whole plan changed. Offer the rest of the set from this date on,
+      // rather than making it a row-by-row job.
+      const later=entry.seriesId
+        ? a.diary.filter(x=>x.seriesId===entry.seriesId&&x.date>=entry.date)
+        : [entry];
+      if(later.length>1){
+        const all=confirm(`This is one of ${diarySeriesCount(a,entry.seriesId)} repeating entries.\n\n`+
+          `OK — delete this and the ${later.length-1} later repeat${later.length-1!==1?"s":""}.\n`+
+          `Cancel — delete only this one.`);
+        const ids=new Set((all?later:[entry]).map(x=>x.id));
+        a.diary=a.diary.filter(x=>!ids.has(x.id));
+        persist(); notifyChange(); draw();
+        toast(all?`Deleted ${ids.size} entries`:"Entry deleted");
+        return;
+      }
       if(confirm("Delete this diary entry?")){
-        a.diary=a.diary.filter(x=>x.id!==delBtn.dataset.id);
+        a.diary=a.diary.filter(x=>x.id!==entry.id);
         persist(); notifyChange(); draw();
       }
     }
@@ -10192,8 +10291,10 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
       </div>
       <div id="tc_fields"></div>
       <label style="margin-top:6px;display:block">Note</label><textarea id="tc_note"></textarea>
+      ${diaryRepeatHTML("tc")}
       <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="tc_save">Save</button></div>`;
 
+    wireDiaryRepeat(document,"tc");
     let dtValue=date+(time?"T"+time:""), endTimeValue=time?endTime:"";
     const dtBtn=document.getElementById("tc_dt");
     dtBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${fmtWhenFull(dtValue)}`;
@@ -10259,10 +10360,12 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
         });
       }
       data.note=document.getElementById("tc_note").value.trim();
-      a.diary.push({id:uid("d_"), type, date:entryDate, time:entryTime, endTime:entryEndTime, created:Date.now(), edited:null, data});
+      const rep=readDiaryRepeat(document,"tc");
+      const n=pushDiarySeries(a,{type,date:entryDate,time:entryTime,endTime:entryEndTime,data},rep);
       if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
       persist(); closeModal(); render();
-      toast(`${diaryTypeDef(type).label} entry added for ${a.name}`);
+      toast(n>1?`${n} ${diaryTypeDef(type).label} entries added for ${a.name}`
+                :`${diaryTypeDef(type).label} entry added for ${a.name}`);
     };
   }
 
