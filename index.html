@@ -564,6 +564,12 @@
   .cal-evt-resize-bottom{bottom:-2px}
   .cal-now-line{position:absolute;left:0;right:0;height:2px;background:var(--mruby);pointer-events:none;z-index:4}
   .cal-now-dot{position:absolute;left:-4px;top:-4px;width:10px;height:10px;border-radius:50%;background:var(--mruby)}
+  /* the live time readout that follows a dragged chip — see beginTimedEventDrag */
+  .cal-drag-readout{position:fixed;z-index:60;pointer-events:none;transform:translate(-50%,-100%);
+    background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:3px 8px;
+    font-family:var(--mono);font-size:11px;color:var(--ink);white-space:nowrap;
+    box-shadow:0 8px 22px -8px #000}
+  .cal-drag-readout.below{transform:translate(-50%,0)}
   .bv-expand{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);border-radius:8px;padding:5px 10px;font-size:11.5px;cursor:pointer}
   .bv-ddbtn{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);border-radius:8px;padding:5px 10px;font-size:11.5px;cursor:pointer;flex:0 0 auto}
   .bv-ddbtn:hover{border-color:var(--gold)}
@@ -6321,8 +6327,17 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
         const w=cr.width/cols;
         place(cr.left+ci*w+2, Math.max(w-4,12));
       }
+      // after place(), so the pill is centred on where the chip actually is
+      // this frame rather than trailing a frame behind its column
+      const startMin=dropTarget.hour*60+dropTarget.minute;
+      const startLabel=clockAt(dropTarget.date,startMin);
+      readout(`${startLabel} – ${clockAt(dropTarget.date,startMin+origDuration)}`);
+      setChipTime(startLabel,origDuration);
     } else {
+      // no cell under the pointer means nothing would be committed, so there
+      // is no time to report — a stale one left on screen would be a lie
       evtEl.classList.add("drag-invalid");
+      hideReadout();
     }
   }
   // The chip's current horizontal box, so a move that resolves no column
@@ -6330,6 +6345,44 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
   function place(left,width){
     evtEl.style.left=left+"px";
     evtEl.style.width=width+"px";
+  }
+  /* ── live time readout ──────────────────────────────────────────────────
+     A drag answered everything except the question it actually raises: what
+     time is this going to land on? The chip's own subtitle went on showing
+     the time it started at, and on a phone the finger is over the chip
+     anyway. This pill follows the drag showing what will really be
+     committed — built from the same expressions onUp uses, snap included, so
+     what it reads a moment before release is exactly what gets saved rather
+     than a rounded-looking approximation of it. */
+  let readoutEl=null;
+  const origDateISO=t.deadline.slice(0,10);
+  const origMinOfDay=origStart.getHours()*60+origStart.getMinutes();
+  function clockAt(dateISO,mins){
+    const d=new Date(dateISO+"T00:00:00"); d.setMinutes(mins);
+    return d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+  }
+  // Sits above the chip, or below it when the chip is near the top of the
+  // window, and is kept clear of both side edges — a drop near any border of
+  // the grid is exactly where the time is least obvious, so that is the last
+  // place the readout can afford to be clipped. A resize anchors it to the
+  // bottom instead, which is the edge being moved.
+  function readout(text,anchorBottom){
+    if(!readoutEl){ readoutEl=document.createElement("div");
+      readoutEl.className="cal-drag-readout"; document.body.appendChild(readoutEl); }
+    readoutEl.textContent=text;
+    const r=evtEl.getBoundingClientRect();
+    const below=!!anchorBottom||r.top<44;
+    readoutEl.classList.toggle("below",below);
+    const half=readoutEl.offsetWidth/2+6;
+    readoutEl.style.left=Math.round(Math.min(Math.max(r.left+r.width/2,half),window.innerWidth-half))+"px";
+    readoutEl.style.top=Math.round(below?r.bottom+8:r.top-8)+"px";
+  }
+  function hideReadout(){ if(readoutEl){ readoutEl.remove(); readoutEl=null; } }
+  // the chip's own subtitle follows along too, so the block and the pill are
+  // never two different answers to the same question
+  function setChipTime(startLabel,mins){
+    const es=evtEl.querySelector(".es"); if(!es)return;
+    es.textContent=startLabel+(mins!==60?` (${mins}m)`:"");
   }
   /* Re-pack the day under the pointer as if the drop happened now, and widen
      or narrow every chip in it — including the one being dragged — to match.
@@ -6450,14 +6503,23 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
       // in onUp was always correct.
       const rawDur=Math.max(origDuration+dy/pxPerMin,MIN_DUR);
       evtEl.style.height=Math.max(rawDur*pxPerMin,14)+"px";
+      const newDur=Math.max(origDuration+snap(dy/pxPerMin),MIN_DUR);
+      const st=clockAt(origDateISO,origMinOfDay);
+      readout(`${st} – ${clockAt(origDateISO,origMinOfDay+newDur)} · ${newDur}m`,true);
+      setChipTime(st,newDur);
     } else if(mode==="resize-top"){
       const rawDur=Math.max(origDuration-dy/pxPerMin,MIN_DUR);
       const actualDelta=origDuration-rawDur;
       evtEl.style.top=(rect.top+actualDelta*pxPerMin)+"px";
       evtEl.style.height=Math.max(rawDur*pxPerMin,14)+"px";
+      const newDur=Math.max(origDuration-snap(dy/pxPerMin),MIN_DUR);
+      const st=clockAt(origDateISO,origMinOfDay+(origDuration-newDur));
+      readout(`${st} – ${clockAt(origDateISO,origMinOfDay+origDuration)} · ${newDur}m`);
+      setChipTime(st,newDur);
     }
   }
   function cleanup(){
+    hideReadout();
     clearTimeout(holdTimer);
     clearTimeout(dayChangeTimer);
     gridWrap?._scrollLoop?.stop();
