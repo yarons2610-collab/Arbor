@@ -2115,6 +2115,12 @@ function migrate(){                       // backfill fields added in later vers
     if(!Array.isArray(sp.links)) sp.links = sp.ref ? [{kind:"url",url:sp.ref}] : [];
   });
   DB.spines=DB.spines.filter(sp=>DB.tasks.some(t=>t.id===sp.dendriteId));
+  // Open-ended diary series keep a rolling year of rows ahead of today. This
+  // is the one place guaranteed to run on every load and after every pull, so
+  // it is where the horizon gets pushed forward. persist() only if it actually
+  // added something — the rows are deterministic, so re-deriving them costs
+  // nothing, but they still have to reach disk and the Gist like any others.
+  if(typeof topUpOpenDiarySeries==="function"&&topUpOpenDiarySeries()) persist();
 }
 const uid=p=>p+Math.random().toString(36).slice(2,8);
 
@@ -3753,15 +3759,47 @@ function deleteProject(id){
    Timeline, notifications, the .ics export, search, conditions — needs no
    knowledge of any of this.
    They carry a shared seriesId so the set can still be handled as one. */
-const DIARY_REPEAT_CAP=200;   // a guard against a runaway "until" date, not a real limit
+const DIARY_REPEAT_CAP=400;   // a ceiling on one materialisation pass, not a limit on the series
+/* An open series is bounded by rows as well as by time, because a year means
+   very different amounts of it depending on the rule: a weekly series is 53
+   rows, a daily one 366. Keeping at most this many rows ahead of today gives a
+   weekly series its whole year and a daily one about four months, and the
+   top-up below extends either one as time passes — so the runway is always
+   long, and never at the cost of carrying hundreds of empty rows per series
+   through every sync. */
+const DIARY_OPEN_MAX=120;
+/* "Every week until when?" is a question a repeating task never has to answer
+   — a task is a rule, so "forever" costs nothing and only the occurrences you
+   are actually looking at get generated. A diary entry is a real row, so
+   forever would mean infinitely many rows, which is why an end date was
+   required at first. Requiring it was the wrong trade: most of the reasons to
+   repeat an entry (weigh this animal every Monday, check the incision daily)
+   have no end anyone knows at the time, and being made to invent one is worse
+   than the plumbing it saved.
+   An open-ended series instead keeps a rolling year of rows ahead of today,
+   extended a little further every time the app loads. Which rows those are is
+   decided by the rule, not by when a top-up happened to run, and each one's
+   id is derived from its series and its date (diaryOccId) — so two devices
+   topping up the same series independently produce byte-identical records
+   that the sync merge folds together instead of duplicating. */
+const DIARY_OPEN_HORIZON_DAYS=365;
+function diaryHorizon(fromISO){ return addDays(fromISO||todayDateStr(),DIARY_OPEN_HORIZON_DAYS); }
+function diaryOccId(seriesId,date){ return "d_"+String(seriesId).replace(/^ds_/,"")+"_"+date.replace(/-/g,""); }
 /* The dates come from taskOccurrences — the same generator a repeating task
    uses. Writing a second one gave diary entries a smaller vocabulary (no
    yearly, no custom) and its own bugs: it stepped month to month from the
    previous date, so the 31st clamped to the 28th in February and stayed
    there. One engine means one set of rules and one set of fixes. */
 function diaryRepeatDates(startISO,rule,untilISO){
-  const until=untilISO||(rule&&rule.until)||"";
-  if(!rule||!rule.every||!until||until<=startISO)return [startISO];
+  if(!rule||!rule.every)return [startISO];
+  // no end date is a real answer, not a missing one: generate a year out from
+  // whichever is later, the series' own start or today, so a series begun long
+  // ago still reaches a year past now rather than a year past its first entry
+  const open=!(untilISO||rule.until);
+  const until=open
+    ? diaryHorizon(startISO>todayDateStr()?startISO:todayDateStr())
+    : (untilISO||rule.until);
+  if(until<=startISO)return [startISO];
   const pseudo={id:"diary-preview",when:startISO,endDate:null,
     repeat:{...rule,until},excludedDates:[],doneOccurrences:[]};
   const dates=taskOccurrences(pseudo,startISO,until).map(o=>o.when.slice(0,10));
@@ -3782,17 +3820,18 @@ function wireDiaryRepeat(root,prefix,initial,anchorFn){
   wireRepeatEditor(root,prefix,()=>diaryPendingRule[prefix],
     r=>{ diaryPendingRule[prefix]=r; }, anchorFn||(()=>todayDateStr()));
 }
-// A rule with no end date would mean generating rows forever, so an entry
-// repeat only counts once "repeat until" is set.
+// An end date is optional — leaving it at "no end" means exactly that, and the
+// series is kept a rolling year ahead instead (see diaryRepeatDates).
 function readDiaryRepeat(root,prefix){
   const r=diaryPendingRule[prefix];
-  return (r&&r.every&&r.until)?r:null;
+  return (r&&r.every)?r:null;
 }
 function pushDiarySeries(a,base,rep,seriesId){
-  const dates=rep?diaryRepeatDates(base.date,rep,rep.until):[base.date];
+  let dates=rep?diaryRepeatDates(base.date,rep,rep.until):[base.date];
+  if(rep&&!rep.until) dates=dates.slice(0,DIARY_OPEN_MAX);
   const sid=dates.length>1?(seriesId||uid("ds_")):null;
   dates.forEach(date=>{
-    a.diary.push({...base,id:uid("d_"),date,
+    a.diary.push({...base,id:sid?diaryOccId(sid,date):uid("d_"),date,
       data:JSON.parse(JSON.stringify(base.data||{})),
       created:Date.now(),edited:null,
       ...(sid?{seriesId:sid,seriesRule:{...rep}}:{})});
@@ -3810,6 +3849,69 @@ function diarySeriesFrom(a,entry,scope){
 }
 function diarySeriesCount(a,seriesId){
   return (a.diary||[]).filter(e=>e.seriesId===seriesId).length;
+}
+// Ending an open series: the rule stops at the last row that is actually
+// left, so the top-up below has nothing further to add. Written to every
+// remaining occurrence because seriesRule travels on the rows themselves —
+// there is no separate series record to edit.
+function closeDiarySeries(a,seriesId,untilISO){
+  (a.diary||[]).forEach(e=>{ if(e.seriesId===seriesId&&e.seriesRule)
+    e.seriesRule={...e.seriesRule,until:untilISO}; });
+}
+// Deleting the far end of an open-ended series is how you end one, so the rule
+// has to stop at the last row that survives — otherwise the next top-up would
+// hand back exactly what was just deleted. Taking a gap out of the middle
+// changes nothing: the top-up never fills those in.
+function closeOpenSeriesIfTailRemoved(a,seriesId,removedDates){
+  const left=(a.diary||[]).filter(e=>e.seriesId===seriesId);
+  if(!left.length)return;
+  const rule=left[0].seriesRule;
+  if(!rule||!rule.every||rule.until)return;
+  const lastLeft=left.map(e=>e.date).sort().pop();
+  if(!removedDates.some(d=>d>lastLeft))return;
+  closeDiarySeries(a,seriesId,lastLeft);
+}
+/* Keeps every open-ended series stocked a year ahead. Runs from migrate(), so
+   it happens on boot and again after every sync pull, and is written to be
+   safe to run at any time: it only ever adds dates the rule itself produces,
+   only ones later than the last row the series still has, and always under an
+   id derived from the series and the date. That combination is what makes it
+   idempotent — a second run adds nothing, and two devices running it at once
+   produce the same rows rather than two sets of them.
+   Deliberately never fills a gap: a row deleted from the middle of a series
+   stays deleted. Only the far end grows. */
+function topUpOpenDiarySeries(){
+  let added=0;
+  const horizon=diaryHorizon(todayDateStr());
+  (DB.animals||[]).forEach(a=>{
+    if(!Array.isArray(a.diary)||!a.diary.length)return;
+    const open=new Map();
+    a.diary.forEach(e=>{
+      if(!e.seriesId||!e.seriesRule||!e.seriesRule.every||e.seriesRule.until)return;
+      const list=open.get(e.seriesId)||[]; list.push(e); open.set(e.seriesId,list);
+    });
+    open.forEach((entries,sid)=>{
+      entries.sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+      const first=entries[0], last=entries[entries.length-1];
+      if(last.date>=horizon)return;
+      const have=new Set(entries.map(e=>e.date));
+      // room is counted in rows still ahead of today, so a series naturally
+      // reclaims space as its old occurrences fall into the past
+      let room=DIARY_OPEN_MAX-entries.filter(e=>e.date>=todayDateStr()).length;
+      diaryRepeatDates(first.date,first.seriesRule).forEach(date=>{
+        if(room<=0||date<=last.date||have.has(date))return;
+        room--;
+        // a future occurrence is a slot to fill in, not a copy of what was
+        // measured last time — it starts empty, whatever the rows before it
+        // ended up holding
+        a.diary.push({type:first.type,date,time:first.time,endTime:first.endTime,
+          id:diaryOccId(sid,date),data:{},created:Date.now(),edited:null,
+          seriesId:sid,seriesRule:{...first.seriesRule}});
+        added++;
+      });
+    });
+  });
+  return added;
 }
 function diaryEntryById(id){
   for(const a of DB.animals){ const e=(a.diary||[]).find(x=>x.id===id); if(e)return {a,e}; }
@@ -8970,7 +9072,7 @@ function paintDiary(container,a,opts){
             // regenerate the tail from this entry's own date
             const dates=diaryRepeatDates(entryDate,rep,rep.until).slice(1);
             dates.forEach(date=>a.diary.push({type,date,time:entryTime,endTime:entryEndTime,
-              id:uid("d_"),data:JSON.parse(JSON.stringify(data)),created:Date.now(),edited:null,
+              id:diaryOccId(sid,date),data:JSON.parse(JSON.stringify(data)),created:Date.now(),edited:null,
               seriesId:sid,seriesRule:{...rep}}));
             toast(dates.length?`Repeats set — ${dates.length+1} entries`:"Repeat cleared");
           } else {
@@ -9104,15 +9206,17 @@ function paintDiary(container,a,opts){
       // which is the only thing the Timeline opens, so an entry could be
       // edited from there but never removed from there
       const entry=editingId?a.diary.find(x=>x.id===editingId):null; if(!entry)return;
-      const finish=ids=>{ a.diary=a.diary.filter(x=>!ids.has(x.id));
+      const finish=rows=>{ const ids=new Set(rows.map(x=>x.id)); const sid=rows[0]&&rows[0].seriesId;
+        a.diary=a.diary.filter(x=>!ids.has(x.id));
+        if(sid) closeOpenSeriesIfTailRemoved(a,sid,rows.map(x=>x.date));
         formType=null; editingId=null; persist(); notifyChange(); draw();
         toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted"); };
       if(entry.seriesId&&diarySeriesCount(a,entry.seriesId)>1){
-        occurrenceScopeModal(scope=>finish(new Set(diarySeriesFrom(a,entry,scope).map(x=>x.id))),
+        occurrenceScopeModal(scope=>finish(diarySeriesFrom(a,entry,scope)),
           {title:"Repeating entry",prompt:"Delete which of them?",noun:"entry"});
         return;
       }
-      if(confirm("Delete this diary entry?")) finish(new Set([entry.id]));
+      if(confirm("Delete this diary entry?")) finish([entry]);
       return;
     }
     const viewBtn=e.target.closest(".dg-view"), editBtn=e.target.closest(".dg-edit"), delBtn=e.target.closest(".dg-del");
@@ -9134,6 +9238,7 @@ function paintDiary(container,a,opts){
           const doomed=diarySeriesFrom(a,entry,scope);
           const ids=new Set(doomed.map(x=>x.id));
           a.diary=a.diary.filter(x=>!ids.has(x.id));
+          closeOpenSeriesIfTailRemoved(a,entry.seriesId,doomed.map(x=>x.date));
           persist(); notifyChange(); draw();
           toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
         },{title:"Repeating entry",prompt:"Delete which of them?",noun:"entry"});
