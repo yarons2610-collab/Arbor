@@ -3261,6 +3261,117 @@ function taskSpan(t){
 const REPEATS=[["","Does not repeat"],["day","Every day"],["week","Every week"],
                ["2week","Every 2 weeks"],["month","Every month"],["year","Every year"],["custom","Custom…"]];
 const DOW=["Su","Mo","Tu","We","Th","Fr","Sa"];
+/* ---- the repeat editor, shared ----
+   One implementation of "how does this repeat", used by the task editor and
+   by the animal diary. They had drifted into two: tasks got the full rule
+   vocabulary — every N days/weeks/months/years, particular weekdays, the
+   third Tuesday — while a diary entry got a short list with no custom option
+   and no yearly, for no better reason than that it was written second.
+   It edits a plain rule object and reports every change through onChange, so
+   it does not care whether that rule lives on a task or on a diary entry. */
+function repeatEditorHTML(pfx,rule){
+  const every=(rule&&rule.every)||"";
+  return `<div class="drow">
+      <div class="fld" style="flex:1"><label>Repeats</label>
+        <select id="${pfx}_rep">${REPEATS.map(r=>
+          `<option value="${r[0]}" ${every===r[0]?"selected":""}>${r[1]}</option>`).join("")}</select></div>
+      <div class="fld" style="flex:1"><label>Repeat until</label>
+        <button type="button" id="${pfx}_until" class="datebtn ${rule&&rule.until?"":"datebtn-empty"}">${
+          rule&&rule.until?fmtWhenFull(rule.until):"📅 no end"}</button></div>
+    </div>
+    <div class="fld" id="${pfx}_customwrap" style="display:none">
+      <label>Custom repeat</label>
+      <div class="dow-every" style="margin:0 0 10px">
+        <span>repeat every</span>
+        <input id="${pfx}_ivl" type="number" min="1" max="365" value="1" style="width:52px">
+        <select id="${pfx}_freq">
+          <option value="day">day(s)</option>
+          <option value="week">week(s)</option>
+          <option value="month">month(s)</option>
+          <option value="year">year(s)</option>
+        </select>
+      </div>
+      <div id="${pfx}_freq_week"><div class="dow-row" id="${pfx}_dow"></div></div>
+      <div id="${pfx}_freq_month" style="display:none">
+        <div class="dow-row" id="${pfx}_monthmode">
+          <button type="button" data-v="date">on day <span id="${pfx}_mm_date"></span></button>
+          <button type="button" data-v="weekday">on the <span id="${pfx}_mm_weekday"></span></button>
+        </div>
+      </div>
+    </div>`;
+}
+// getRule/setRule keep the caller in charge of where the rule is stored and
+// when it is persisted; anchorISO is the start date the "on day 15" and "on
+// the third Tuesday" labels are read off.
+function wireRepeatEditor(root,pfx,getRule,setRule,getAnchor){
+  const $=id=>root.querySelector("#"+pfx+"_"+id);
+  const wrap=$("customwrap"), dowBox=$("dow"), ivl=$("ivl"), freqSel=$("freq"),
+        weekBox=$("freq_week"), monthBox=$("freq_month"), monthModeBox=$("monthmode");
+  if(!wrap)return;
+  const commit=r=>{ setRule(r); draw(); };
+  function draw(){
+    const rule=getRule();
+    const custom=!!(rule&&rule.every==="custom");
+    wrap.style.display=custom?"":"none";
+    if(!custom)return;
+    const freq=rule.freq||"week";
+    ivl.value=Math.max(1,+rule.interval||1);
+    freqSel.value=freq;
+    weekBox.style.display=freq==="week"?"":"none";
+    monthBox.style.display=freq==="month"?"":"none";
+    if(freq==="week"){
+      const days=rule.days||[];
+      dowBox.innerHTML=DOW.map((d,i)=>`<button type="button" data-d="${i}" class="${days.includes(i)?"on":""}">${d}</button>`).join("");
+      dowBox.querySelectorAll("button").forEach(b=>b.onclick=()=>{
+        const i=+b.dataset.d, cur=getRule();
+        cur.days=(cur.days||[]).includes(i)?cur.days.filter(x=>x!==i):[...(cur.days||[]),i];
+        commit(cur); });
+    } else if(freq==="month"){
+      const anchor=getAnchor();
+      if(anchor){
+        $("mm_date").textContent=+anchor.slice(8,10);
+        $("mm_weekday").textContent=nthWeekdayLabel(anchor);
+      }
+      const mode=rule.monthMode||"date";
+      monthModeBox.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.v===mode));
+    }
+  }
+  ivl.addEventListener("change",()=>{ const r=getRule(); if(!r)return;
+    r.interval=Math.max(1,Math.min(365,+ivl.value||1)); commit(r); });
+  freqSel.addEventListener("change",()=>{
+    const r=getRule(); if(!r)return;
+    r.freq=freqSel.value;
+    // seed a freshly-switched mode with something that actually produces
+    // occurrences, rather than a rule that quietly generates nothing
+    const anchor=getAnchor();
+    if(r.freq==="week"&&!(r.days||[]).length)
+      r.days=[anchor?new Date(anchor.slice(0,10)+"T00:00:00").getDay():new Date().getDay()];
+    if(r.freq==="month"&&!r.monthMode) r.monthMode="date";
+    commit(r);
+  });
+  monthModeBox.addEventListener("click",e=>{
+    const b=e.target.closest("button"); if(!b)return;
+    const r=getRule(); if(!r)return;
+    r.monthMode=b.dataset.v; commit(r);
+  });
+  $("rep").addEventListener("change",e=>{
+    const v=e.target.value;
+    if(!v){ commit(null); return; }
+    const prev=getRule();
+    const r={every:v,until:(prev&&prev.until)||null};
+    if(v==="custom"){
+      const anchor=getAnchor();
+      const d=anchor?new Date(anchor.slice(0,10)+"T00:00:00").getDay():new Date().getDay();
+      r.freq="week"; r.days=[d]; r.interval=1;
+    }
+    commit(r);
+  });
+  bindDateButton($("until"), ()=>((getRule()||{}).until||""), v=>{
+    const r=getRule()||{every:"week",until:null};
+    r.until=v?v.slice(0,10):null; commit(r);
+  });
+  draw();
+}
 const DOW_FULL=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const NTH_NAMES=["first","second","third","fourth","fifth"];
 // "Monthly on the ___" always derives from the date itself rather than being
@@ -3509,12 +3620,13 @@ function deleteTask(id){ DB.schedule=taskList().filter(x=>x.id!==id); persist();
 // app offers once a series is involved.
 function occurrenceScopeModal(onChoice,opts){
   opts=opts||{};
+  const noun=opts.noun||"event", nouns=noun==="entry"?"entries":noun+"s";
   modal(`<h3>${esc(opts.title||"Repeating task")}</h3>
     <p style="color:var(--ink-dim);font-size:13px;margin:0 0 16px;line-height:1.5">${esc(opts.prompt||"This change — apply it to:")}</p>
     <div style="display:flex;flex-direction:column;gap:8px">
-      <button type="button" class="btn ghost" id="occ_this" style="text-align:left;justify-content:flex-start">Only this event</button>
-      <button type="button" class="btn ghost" id="occ_following" style="text-align:left;justify-content:flex-start">This and all following events</button>
-      <button type="button" class="btn ghost" id="occ_all" style="text-align:left;justify-content:flex-start">All events</button>
+      <button type="button" class="btn ghost" id="occ_this" style="text-align:left;justify-content:flex-start">Only this ${esc(noun)}</button>
+      <button type="button" class="btn ghost" id="occ_following" style="text-align:left;justify-content:flex-start">This and all following ${esc(nouns)}</button>
+      <button type="button" class="btn ghost" id="occ_all" style="text-align:left;justify-content:flex-start">All ${esc(nouns)}</button>
     </div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`,{center:true});
   document.getElementById("occ_this").onclick=()=>{ closeModal(); onChoice("this"); };
@@ -3635,57 +3747,43 @@ function deleteProject(id){
    Timeline, notifications, the .ics export, search, conditions — needs no
    knowledge of any of this.
    They carry a shared seriesId so the set can still be handled as one. */
-const DIARY_REPEATS=[["","Does not repeat"],["day","Every day"],["week","Every week"],
-                     ["2week","Every 2 weeks"],["month","Every month"]];
 const DIARY_REPEAT_CAP=200;   // a guard against a runaway "until" date, not a real limit
-function diaryRepeatDates(startISO,every,untilISO){
-  const out=[startISO];
-  if(!every||!untilISO||untilISO<=startISO)return out;
-  // Every date is measured from the start, never from the one before it.
-  // Stepping month-by-month drifts: the 31st clamps to the 28th in February
-  // and then stays on the 28th forever, because the next step is taken from
-  // the clamped date rather than from what was actually asked for.
-  for(let i=1;out.length<DIARY_REPEAT_CAP;i++){
-    const cur = every==="day"   ? addDaysISO(startISO,i)
-              : every==="week"  ? addDaysISO(startISO,i*7)
-              : every==="2week" ? addDaysISO(startISO,i*14)
-              :                   addMonthsISO(startISO,i);
-    if(cur>untilISO)break;
-    out.push(cur);
-  }
-  return out;
+/* The dates come from taskOccurrences — the same generator a repeating task
+   uses. Writing a second one gave diary entries a smaller vocabulary (no
+   yearly, no custom) and its own bugs: it stepped month to month from the
+   previous date, so the 31st clamped to the 28th in February and stayed
+   there. One engine means one set of rules and one set of fixes. */
+function diaryRepeatDates(startISO,rule,untilISO){
+  const until=untilISO||(rule&&rule.until)||"";
+  if(!rule||!rule.every||!until||until<=startISO)return [startISO];
+  const pseudo={id:"diary-preview",when:startISO,endDate:null,
+    repeat:{...rule,until},excludedDates:[],doneOccurrences:[]};
+  const dates=taskOccurrences(pseudo,startISO,until).map(o=>o.when.slice(0,10));
+  return (dates.length?dates:[startISO]).slice(0,DIARY_REPEAT_CAP);
 }
 // The repeat controls, shared by the animal's own diary form and the
-// Timeline's "new entry" flow so the two can't drift apart. Only offered for
-// a new entry: changing the rule on one that already exists would have to
-// rewrite entries that may already hold recorded data.
-function diaryRepeatHTML(prefix,rule){
-  const cur=(rule&&rule.every)||"";
-  return `<div class="dg-row" style="margin-top:6px">
-    <div><label>Repeats</label>
-      <select id="${prefix}_rep" class="dg-f-rep">${DIARY_REPEATS.map(r=>
-        `<option value="${r[0]}" ${r[0]===cur?"selected":""}>${r[1]}</option>`).join("")}</select></div>
-    <div id="${prefix}_repuntilwrap" style="${cur?"":"display:none"}"><label>Until</label>
-      <input type="date" id="${prefix}_repuntil" class="dg-f-repuntil" value="${escAttr((rule&&rule.until)||"")}"></div>
-  </div>`;
+// Timeline's "new entry" flow so the two can't drift apart — and the same
+// editor the task editor uses, so "custom" means the same thing in both.
+function diaryRepeatHTML(prefix,rule){ return repeatEditorHTML(prefix,rule); }
+/* Unlike a task, a diary rule has nowhere to live until the entry is saved —
+   there is no record yet to hang it on — so the editor writes into this
+   per-prefix scratch slot and the save path reads it back out. Keyed by
+   prefix because the animal form ("dg") and the Timeline's ("tc") can both
+   be open in the same page. */
+const diaryPendingRule={};
+function wireDiaryRepeat(root,prefix,initial,anchorFn){
+  diaryPendingRule[prefix]=initial?JSON.parse(JSON.stringify(initial)):null;
+  wireRepeatEditor(root,prefix,()=>diaryPendingRule[prefix],
+    r=>{ diaryPendingRule[prefix]=r; }, anchorFn||(()=>todayDateStr()));
 }
-function wireDiaryRepeat(root,prefix){
-  const sel=root.querySelector("#"+prefix+"_rep"); if(!sel)return;
-  const wrap=root.querySelector("#"+prefix+"_repuntilwrap");
-  sel.addEventListener("change",()=>{ wrap.style.display=sel.value?"":"none"; });
-}
+// A rule with no end date would mean generating rows forever, so an entry
+// repeat only counts once "repeat until" is set.
 function readDiaryRepeat(root,prefix){
-  const sel=root.querySelector("#"+prefix+"_rep");
-  if(!sel||!sel.value)return null;
-  const until=(root.querySelector("#"+prefix+"_repuntil")||{}).value||"";
-  return until?{every:sel.value,until}:null;
+  const r=diaryPendingRule[prefix];
+  return (r&&r.every&&r.until)?r:null;
 }
-// Writes the whole series in one go. The first entry is the one just filled
-// in; the rest copy its type, time and fields, since "weigh at 9am" repeating
-// means the same thing each time — what differs is what you find, and that
-// gets typed into each entry when its day comes.
 function pushDiarySeries(a,base,rep,seriesId){
-  const dates=rep?diaryRepeatDates(base.date,rep.every,rep.until):[base.date];
+  const dates=rep?diaryRepeatDates(base.date,rep,rep.until):[base.date];
   const sid=dates.length>1?(seriesId||uid("ds_")):null;
   dates.forEach(date=>{
     a.diary.push({...base,id:uid("d_"),date,
@@ -3875,32 +3973,7 @@ function taskEditor(t,after,occWhen,occEndDate){
     <label style="display:flex;align-items:center;gap:6px;margin:-6px 0 12px;font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);cursor:pointer">
       <input type="checkbox" id="tk_allday" style="width:auto" ${t.when&&!hasTime(t.when)?"checked":""}>All day
     </label>
-    <div class="drow">
-      <div class="fld" style="flex:1"><label>Repeats</label>
-        <select id="tk_rep">${REPEATS.map(r=>`<option value="${r[0]}" ${((t.repeat&&t.repeat.every)||"")===r[0]?"selected":""}>${r[1]}</option>`).join("")}</select></div>
-      <div class="fld" style="flex:1"><label>Repeat until</label>
-        <button type="button" id="tk_until" class="datebtn ${t.repeat&&t.repeat.until?"":"datebtn-empty"}">${t.repeat&&t.repeat.until?fmtWhenFull(t.repeat.until):"📅 no end"}</button></div>
-    </div>
-    <div class="fld" id="tk_customwrap" style="display:none">
-      <label>Custom repeat</label>
-      <div class="dow-every" style="margin:0 0 10px">
-        <span>repeat every</span>
-        <input id="tk_ivl" type="number" min="1" max="365" value="1" style="width:52px">
-        <select id="tk_freq">
-          <option value="day">day(s)</option>
-          <option value="week">week(s)</option>
-          <option value="month">month(s)</option>
-          <option value="year">year(s)</option>
-        </select>
-      </div>
-      <div id="tk_freq_week"><div class="dow-row" id="tk_dow"></div></div>
-      <div id="tk_freq_month" style="display:none">
-        <div class="dow-row" id="tk_monthmode">
-          <button type="button" data-v="date">on day <span id="tk_mm_date"></span></button>
-          <button type="button" data-v="weekday">on the <span id="tk_mm_weekday"></span></button>
-        </div>
-      </div>
-    </div>
+    ${repeatEditorHTML("tk",t.repeat)}
     <div class="fld"><label>Colour</label>
       ${t.isEvent?`<div id="tk_cat_chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
@@ -4051,70 +4124,7 @@ function taskEditor(t,after,occWhen,occEndDate){
     t.color=e.target.value; persist();
     tkColorAuto.style.boxShadow="";
   });
-  const wrap=document.getElementById("tk_customwrap"), dowBox=document.getElementById("tk_dow"),
-        ivl=document.getElementById("tk_ivl"), freqSel=document.getElementById("tk_freq"),
-        weekBox=document.getElementById("tk_freq_week"), monthBox=document.getElementById("tk_freq_month"),
-        monthModeBox=document.getElementById("tk_monthmode");
-  function drawRepeat(){
-    const custom=!!(t.repeat&&t.repeat.every==="custom");
-    wrap.style.display=custom?"":"none";
-    if(!custom)return;
-    const freq=t.repeat.freq||"week";
-    ivl.value=Math.max(1,+t.repeat.interval||1);
-    freqSel.value=freq;
-    weekBox.style.display=freq==="week"?"":"none";
-    monthBox.style.display=freq==="month"?"":"none";
-    if(freq==="week"){
-      const days=(t.repeat.days||[]);
-      dowBox.innerHTML=DOW.map((d,i)=>`<button type="button" data-d="${i}" class="${days.includes(i)?"on":""}">${d}</button>`).join("");
-      dowBox.querySelectorAll("button").forEach(b=>b.onclick=()=>{
-        const i=+b.dataset.d;
-        t.repeat.days=(t.repeat.days||[]).includes(i)
-          ? t.repeat.days.filter(x=>x!==i) : [...(t.repeat.days||[]),i];
-        persist(); drawRepeat(); });
-    } else if(freq==="month"&&t.when){
-      // Both options are read straight off the task's own start date — "on
-      // day 15" and "on the third Tuesday" aren't independent choices, one
-      // is just how the other one reads once you know which date it is.
-      document.getElementById("tk_mm_date").textContent=+t.when.slice(8,10);
-      document.getElementById("tk_mm_weekday").textContent=nthWeekdayLabel(t.when);
-      const mode=t.repeat.monthMode||"date";
-      monthModeBox.querySelectorAll("button").forEach(b=>b.classList.toggle("on",b.dataset.v===mode));
-    }
-  }
-  ivl.addEventListener("change",()=>{ if(t.repeat)t.repeat.interval=Math.max(1,Math.min(365,+ivl.value||1)); persist(); drawRepeat(); });
-  freqSel.addEventListener("change",()=>{
-    if(!t.repeat)return;
-    t.repeat.freq=freqSel.value;
-    // seed a freshly-switched-to mode with something that actually produces
-    // occurrences, the same reasoning the weekday seed below already used
-    if(t.repeat.freq==="week"&&!(t.repeat.days||[]).length){
-      t.repeat.days=[t.when?new Date(t.when.slice(0,10)+"T00:00:00").getDay():new Date().getDay()];
-    }
-    if(t.repeat.freq==="month"&&!t.repeat.monthMode) t.repeat.monthMode="date";
-    persist(); drawRepeat();
-  });
-  monthModeBox.addEventListener("click",e=>{
-    const b=e.target.closest("button"); if(!b||!t.repeat)return;
-    t.repeat.monthMode=b.dataset.v; persist(); drawRepeat();
-  });
-  document.getElementById("tk_rep").addEventListener("change",e=>{
-    const v=e.target.value;
-    if(!v){ t.repeat=null; }
-    else {
-      const keep=(t.repeat&&t.repeat.until)||null;
-      t.repeat={every:v,until:keep};
-      // seed a custom rule with the weekday the task already starts on, so it
-      // is never a repeat that produces nothing
-      if(v==="custom"){
-        const d=t.when?new Date(t.when.slice(0,10)+"T00:00:00").getDay():new Date().getDay();
-        t.repeat.freq="week"; t.repeat.days=[d]; t.repeat.interval=1;
-      }
-    }
-    persist(); drawRepeat(); });
-  drawRepeat();
-  bindDateButton(document.getElementById("tk_until"), ()=>((t.repeat&&t.repeat.until)||""),
-    v=>{ if(!t.repeat)t.repeat={every:"week",until:null}; t.repeat.until=v?v.slice(0,10):null; persist(); });
+  wireRepeatEditor(document,"tk",()=>t.repeat,r=>{ t.repeat=r; persist(); },()=>t.when);
   // "this"/"following" must never leak this session's in-progress edit onto
   // occurrences the chosen scope doesn't cover — puts the shared record back
   // exactly how it stood before any of these handlers touched it, so the
@@ -8745,10 +8755,12 @@ function paintDiary(container,a,opts){
       ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
       ${diaryRepeatHTML("dg",editingId?(a.diary.find(e=>e.id===editingId)||{}).seriesRule:null)}
+      ${editingId?`<div class="drow" style="margin-top:4px"><button type="button" class="btn danger dg-formdel">Delete entry</button></div>`:""}
       ${formActions()}</div>`;
   }
   function wireForm(host,type,editing){
-    wireDiaryRepeat(host,"dg");
+    wireDiaryRepeat(host,"dg",editing?editing.seriesRule:null,
+      ()=>(editing?editing.date:selDate)||todayDateStr());
     // Opened from the Timeline (openCalItem), this modal exists to edit one
     // entry and nothing else — Cancel/Save should close it, not fall back to
     // the calendar/list view underneath, which is what the animal detail
@@ -8875,7 +8887,7 @@ function paintDiary(container,a,opts){
             const sid=editing.seriesId||uid("ds_");
             editing.seriesId=sid; editing.seriesRule={...rep};
             // regenerate the tail from this entry's own date
-            const dates=diaryRepeatDates(entryDate,rep.every,rep.until).slice(1);
+            const dates=diaryRepeatDates(entryDate,rep,rep.until).slice(1);
             dates.forEach(date=>a.diary.push({type,date,time:entryTime,endTime:entryEndTime,
               id:uid("d_"),data:JSON.parse(JSON.stringify(data)),created:Date.now(),edited:null,
               seriesId:sid,seriesRule:{...rep}}));
@@ -9005,6 +9017,23 @@ function paintDiary(container,a,opts){
       const entry=a.diary.find(x=>x.id===doneBtn.dataset.id); if(!entry)return;
       entry.done=!entry.done; persist(); notifyChange(); draw(); return;
     }
+    const formDel=e.target.closest(".dg-formdel");
+    if(formDel){
+      // the same delete the list's ✕ performs, reachable from the edit form —
+      // which is the only thing the Timeline opens, so an entry could be
+      // edited from there but never removed from there
+      const entry=editingId?a.diary.find(x=>x.id===editingId):null; if(!entry)return;
+      const finish=ids=>{ a.diary=a.diary.filter(x=>!ids.has(x.id));
+        formType=null; editingId=null; persist(); notifyChange(); draw();
+        toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted"); };
+      if(entry.seriesId&&diarySeriesCount(a,entry.seriesId)>1){
+        occurrenceScopeModal(scope=>finish(new Set(diarySeriesFrom(a,entry,scope).map(x=>x.id))),
+          {title:"Repeating entry",prompt:"Delete which of them?",noun:"entry"});
+        return;
+      }
+      if(confirm("Delete this diary entry?")) finish(new Set([entry.id]));
+      return;
+    }
     const viewBtn=e.target.closest(".dg-view"), editBtn=e.target.closest(".dg-edit"), delBtn=e.target.closest(".dg-del");
     if(viewBtn){
       const id=viewBtn.dataset.id;
@@ -9026,7 +9055,7 @@ function paintDiary(container,a,opts){
           a.diary=a.diary.filter(x=>!ids.has(x.id));
           persist(); notifyChange(); draw();
           toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
-        },{title:"Repeating entry",prompt:"Delete which of them?"});
+        },{title:"Repeating entry",prompt:"Delete which of them?",noun:"entry"});
         return;
       }
       if(confirm("Delete this diary entry?")){
@@ -10330,8 +10359,10 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
       ${diaryRepeatHTML("tc")}
       <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="tc_save">Save</button></div>`;
 
-    wireDiaryRepeat(document,"tc");
     let dtValue=date+(time?"T"+time:""), endTimeValue=time?endTime:"";
+    // anchored on the live date field, not the slot this was opened from, so
+    // "on day 15" / "on the third Tuesday" follow the date actually picked
+    wireDiaryRepeat(document,"tc",null,()=>dtValue.slice(0,10));
     const dtBtn=document.getElementById("tc_dt");
     dtBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${fmtWhenFull(dtValue)}`;
     const endWrap=document.getElementById("tc_endwrap");
