@@ -8929,14 +8929,32 @@ function paintDiary(container,a,opts){
   if(!container)return;
   opts=opts||{};
   if(!Array.isArray(a.diary))a.diary=[];
-  const startD=a.diary.length?new Date([...a.diary].sort((x,y)=>x.date.localeCompare(y.date)).pop().date+"T00:00:00"):new Date();
+  /* Which month the calendar opens on. This was "the month of the latest
+     entry", which was right back when every entry was something that had
+     already happened. A repeat with no end date puts entries a year ahead, so
+     that rule opened the calendar twelve months into the future — a page of
+     empty placeholders, with every recorded weight out of sight behind twelve
+     presses of ‹, which reads exactly as though the history had been replaced.
+     Open on the most recent entry that has actually happened; on the earliest
+     one still to come if none have yet; on today for an animal with no diary. */
+  const startD=(()=>{
+    const today=todayDateStr();
+    const dates=a.diary.map(e=>e.date).filter(Boolean).sort();
+    if(!dates.length)return new Date();
+    const happened=dates.filter(d=>d<=today);
+    return new Date((happened.length?happened[happened.length-1]:dates[0])+"T00:00:00");
+  })();
   let viewY=startD.getFullYear(), viewM=startD.getMonth();
   let selDate=todayDateStr();
   let visibleTypes=new Set(diaryTypeDefs().map(t=>t.key));
   let formType=null, editingId=null;
   if(opts.editId){
     const seed=a.diary.find(e=>e.id===opts.editId);
-    if(seed){ selDate=seed.date; formType=seed.type; editingId=seed.id; }
+    // opened from the Timeline to edit one specific entry: show that entry's
+    // own month behind the form, not whichever month the animal's history
+    // would otherwise have opened on
+    if(seed){ selDate=seed.date; formType=seed.type; editingId=seed.id;
+      const sd=new Date(seed.date+"T00:00:00"); viewY=sd.getFullYear(); viewM=sd.getMonth(); }
   }
   let expandedIds=new Set(); // entries currently showing their full read-only detail
   const WD=["Su","Mo","Tu","We","Th","Fr","Sa"];
