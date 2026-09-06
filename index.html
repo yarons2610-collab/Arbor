@@ -2327,10 +2327,14 @@ function commitCalMove(x,newWhen,newEnd,newDur){
   // A diary entry belongs to one animal on one day. Moving it here is the same
   // edit as moving it in that animal's own diary — there is one record.
   if(x.kind==="diary"){
-    const e=src.e;
+    const a=src.a, e=src.e;
+    // What this drop makes of the dragged entry, worked out before anything is
+    // written, so the series question below can be asked first and answered
+    // once rather than applied and then partly undone.
+    const next={date:e.date,time:e.time,endTime:e.endTime};
     if(newWhen!=null){
-      e.date=newWhen.slice(0,10);
-      e.time=newWhen.length>10?newWhen.slice(11,16):"";
+      next.date=newWhen.slice(0,10);
+      next.time=newWhen.length>10?newWhen.slice(11,16):"";
     }
     // An explicit resize (newDur set) always writes an end time from the new
     // duration, even for an entry that never had one — a bare instant-in-time
@@ -2342,12 +2346,43 @@ function commitCalMove(x,newWhen,newEnd,newDur){
     // move (newDur not passed) still only carries an existing duration
     // forward — it should never invent an end time an entry didn't have.
     const mins=newDur!=null?newDur:(e.endTime?x.duration:null);
-    if(e.time&&mins){
-      const [h,m]=e.time.split(":").map(Number);
+    if(next.time&&mins){
+      const [h,m]=next.time.split(":").map(Number);
       const t2=h*60+m+mins, p4=n=>String(n).padStart(2,"0");
       // an end time cannot run past midnight on a single-day entry
-      e.endTime=t2>=1440?"23:59":`${p4(Math.floor(t2/60))}:${p4(t2%60)}`;
+      next.endTime=t2>=1440?"23:59":`${p4(Math.floor(t2/60))}:${p4(t2%60)}`;
     }
+    const writeDragged=()=>{ e.date=next.date; e.time=next.time; e.endTime=next.endTime; };
+    /* Dropping one occurrence of a repeating entry somewhere else raises the
+       same question dragging a repeating task does, and the same one the
+       diary's own editor asks when the time is typed instead of dragged —
+       there is no reason the answer should depend on which of the two you
+       used. Only the time travels with it: the other occurrences keep their
+       own dates, because they are real rows on real days and some already
+       hold what was measured that day, so sliding their dates would file
+       Monday's weight under Tuesday. A drag sideways onto another day at the
+       same time therefore moves just the entry dragged and asks nothing — a
+       date is the one thing here that cannot belong to the whole series. */
+    const timeMoved=next.time!==(e.time||"")||next.endTime!==(e.endTime||"");
+    if(timeMoved&&e.seriesId&&diarySeriesCount(a,e.seriesId)>1){
+      occurrenceScopeModal(scope=>{
+        const undos=[before];
+        writeDragged();
+        let n=1;
+        if(scope!=="this"){
+          const rows=diarySeriesFrom(a,e,scope).filter(r=>r.id!==e.id);
+          rows.forEach(r=>undos.push(undoDiaryEdit(a,r)));     // captured before the write below
+          rows.forEach(r=>{ r.time=next.time; r.endTime=next.endTime; r.edited=Date.now(); });
+          n+=rows.length;
+        }
+        const scopeLabel=scope==="all"?"whole series":scope==="this"?"just this entry":`${n} entries`;
+        commitUndoable(`${calChangeSummary(newWhen,newEnd,newDur)} (${scopeLabel})`,
+          ()=>undos.forEach(f=>f()));
+        renderTimeline();
+      },{title:"Repeating entry",prompt:"Apply the new time to:",noun:"entry"});
+      return true;
+    }
+    writeDragged();
     commitUndoable(calChangeSummary(newWhen,newEnd,newDur),before); return true;
   }
   if(x.kind==="exp"){
