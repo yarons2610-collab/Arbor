@@ -9106,7 +9106,29 @@ function paintDiary(container,a,opts){
       }
       data.note=host.querySelector(".dg-f-note").value.trim();
       const rep=readDiaryRepeat(host,"dg");
+      // everything after the edit is applied, in one place, so the paths that
+      // have to stop and ask a question first can all end the same way
+      const finishSave=()=>{
+        // perfusion terminates the animal as part of the procedure, so it always
+        // implies sacrifice (not the reverse) - only for a completed (today or
+        // earlier), not a future-scheduled, entry.
+        if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
+        persist(); notifyChange();
+        formType=null; editingId=null;
+        if(opts.closeOnDone){ closeModal(); return; }
+        draw();
+      };
       if(editing){
+        /* The time an occurrence sits at is a property of the series — "these
+           sessions are at 2pm, not 9am" is almost never about one of them —
+           so changing it asks the same three-way question a repeating task
+           asks. What is recorded in the entry never propagates, whatever the
+           answer: the weight measured that morning, the metrics from that
+           session, the note written after it are that day's own results, and
+           writing them across the series would overwrite every other day's.
+           That asymmetry is the whole reason a diary entry is a real row
+           rather than a rule (see the series notes above). */
+        const wasTime=editing.time||"", wasEnd=editing.endTime||"";
         editing.data=data; editing.date=entryDate; editing.time=entryTime;
         editing.endTime=entryEndTime; editing.edited=Date.now();
         // A repeat can be set, changed or cleared on an entry that already
@@ -9115,6 +9137,21 @@ function paintDiary(container,a,opts){
         // ones before, which may already hold results that were recorded.
         const was=editing.seriesRule||null;
         const changed=JSON.stringify(was||null)!==JSON.stringify(rep||null);
+        // a rule change already rewrites the tail from this entry, carrying
+        // this time with it — asking on top of that would be a second question
+        // about something the first one has already settled
+        if(!changed && (wasTime!==(entryTime||"")||wasEnd!==(entryEndTime||""))
+           && editing.seriesId && diarySeriesCount(a,editing.seriesId)>1){
+          occurrenceScopeModal(scope=>{
+            if(scope!=="this"){
+              const rows=diarySeriesFrom(a,editing,scope).filter(e=>e.id!==editing.id);
+              rows.forEach(e=>{ e.time=entryTime; e.endTime=entryEndTime; e.edited=Date.now(); });
+              if(rows.length) toast(`New time applied to ${rows.length+1} entries`);
+            }
+            finishSave();
+          },{title:"Repeating entry",prompt:"Apply the new time to:",noun:"entry"});
+          return;
+        }
         if(changed){
           const later=diarySeriesFrom(a,editing,"following").filter(e=>e.id!==editing.id);
           const laterIds=new Set(later.map(e=>e.id));
@@ -9138,14 +9175,7 @@ function paintDiary(container,a,opts){
         const n=pushDiarySeries(a,{type,date:entryDate,time:entryTime,endTime:entryEndTime,data},rep);
         if(n>1) toast(`${n} ${diaryTypeDef(type).label} entries added`);
       }
-      // perfusion terminates the animal as part of the procedure, so it always
-      // implies sacrifice (not the reverse) - only for a completed (today or
-      // earlier), not a future-scheduled, entry.
-      if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
-      persist(); notifyChange();
-      formType=null; editingId=null;
-      if(opts.closeOnDone){ closeModal(); return; }
-      draw();
+      finishSave();
     };
   }
 
