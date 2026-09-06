@@ -1074,7 +1074,10 @@
       catch(e){ return {ok:false, error:String(e)}; }
     },
     saveSync(db){
-      try{ localStorage.setItem(KEY, JSON.stringify(db)); }catch(e){}
+      // returns false rather than swallowing: the caller (flushSave) is the
+      // last write before the page goes away, and "it didn't happen" is worth
+      // knowing even when there is no longer any UI to say it in
+      try{ localStorage.setItem(KEY, JSON.stringify(db)); return true; }catch(e){ return false; }
     },
     async saveFile(name, content, mime){
       try{
@@ -1256,6 +1259,27 @@ function syncTags(){
   });
 }
 let saveTimer=null, storageOK=null;
+/* Why a wrapper rather than a plain try/catch: the browser shim reports a full
+   disk or an exceeded quota by RETURNING {ok:false}, it does not throw. A
+   catch alone therefore saw nothing at all — every failed write still set
+   storageOK true and left a green "✓ saved" standing over data that had never
+   been stored, which is the worst possible way for this to fail. Only an
+   explicit ok:false counts as a failure here; the Electron build's own
+   arbor.save resolves with no result object at all, and that stays a success.
+   Returns null when the write landed, else a reason. */
+let storageError=null;
+async function arborSave(db){
+  try{
+    const res=await window.arbor.save(db);
+    if(res&&res.ok===false) return String(res.error||"storage write failed");
+    return null;
+  }catch(e){ return String((e&&e.message)||e); }
+}
+// short enough to sit in the status pill; the full reason goes to the console
+function storageFailDetail(){
+  if(!storageError)return undefined;
+  return /quota|exceeded|full/i.test(storageError)?"out of space":"storage error";
+}
 /* ── PERSISTENCE ─────────────────────────────────────────────────────────────
    Desktop build: DB is stored as a plain JSON file on disk, read/written by the
    Electron main process over IPC (see src/main.js, src/preload.js). No
@@ -1614,16 +1638,19 @@ function mergeLocalAdditions(remote,local){
 
 async function doWrite(){
   setSaveState("saving");
-  try{ await window.arbor.save(DB); storageOK=true; }
-  catch(e){ storageOK=false; console.error("Arbor native save failed:",e); }
-  if(gistToken()) scheduleSync(); else setSaveState(storageOK?"saved":"failed");
+  storageError=await arborSave(DB);
+  storageOK=!storageError;
+  if(storageError) console.error("Arbor native save failed:",storageError);
+  // a failed local write makes the Gist the only copy there is, so the push
+  // still goes ahead — it is more important now, not less
+  if(gistToken()) scheduleSync(); else setSaveState(storageOK?"saved":"failed",storageFailDetail());
 }
 function scheduleSync(){
   syncPending=true;
   clearTimeout(syncTimer);
   const now=Date.now();
   const wait=Math.max(SYNC_IDLE, lastSyncAt+SYNC_MIN_GAP-now, syncBackoffUntil-now);
-  setSaveState(storageOK?"saved":"failed");
+  setSaveState(storageOK?"saved":"failed",storageFailDetail());
   syncTimer=setTimeout(runSync,wait);
 }
 async function runSync(){
@@ -1649,7 +1676,7 @@ async function runSync(){
       if(editingInProgress()){
         // don't yank the DOM out from under an active edit — this device's
         // own change stays queued (localDirty untouched) and retries shortly
-        syncPending=true; setSaveState(storageOK?"saved":"failed");
+        syncPending=true; setSaveState(storageOK?"saved":"failed",storageFailDetail());
         return;
       }
       // Take what landed on the Gist, keeping anything created here that has
@@ -1668,7 +1695,7 @@ async function runSync(){
       localDirty=true; syncPending=true;
       try{ await window.arbor.save(DB); }catch(e){}
       render(); syncTopCollapsed();
-      setSaveState(storageOK?"saved":"failed");
+      setSaveState(storageOK?"saved":"failed",storageFailDetail());
       return;
     }
     const pushedVersion=await gistSave(JSON.stringify(DB));
@@ -1698,7 +1725,15 @@ function persist(){
   DB.updatedAt=Date.now(); localDirty=true;
   clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160);
 }
-async function flushSave(){ clearTimeout(saveTimer); try{ window.arbor.saveSync(DB); }catch(e){} }
+async function flushSave(){
+  clearTimeout(saveTimer);
+  try{
+    const res=window.arbor.saveSync(DB);
+    if(res===false){ storageError="storage write failed"; storageOK=false;
+      console.error("Arbor final save failed — workspace not written"); }
+  }catch(e){ storageError=String((e&&e.message)||e); storageOK=false;
+    console.error("Arbor final save failed:",e); }
+}
 
 /* ── PASSIVE PULL: catches up with another device's edits while this tab
    just sits open, no reload needed. Push (above) already happens on every
@@ -11134,8 +11169,10 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
     // device that opened afterward. The Gist must only ever be written to by an
     // actual user edit (persist()/doWrite() elsewhere in the app) or the explicit
     // Connect & Sync flow — never as a side effect of merely opening the app.
-    let storageOK2=true;
-    try{ await window.arbor.save(DB); }catch(e){ storageOK2=false; console.error("Arbor native save failed:",e); }
+    storageError=await arborSave(DB);
+    const storageOK2=!storageError;
+    storageOK=storageOK2;
+    if(storageError) console.error("Arbor native save failed:",storageError);
     if(gistToken()){
       if(src==="gist") setSaveState("synced");
       else{
@@ -11144,7 +11181,7 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
         setSaveState("syncwarn");
       }
     } else {
-      setSaveState(storageOK2?"saved":"failed");
+      setSaveState(storageOK2?"saved":"failed",storageFailDetail());
     }
     scheduleAutoPull();
   }catch(e){ console.error("Arbor failed to start:",e); }
