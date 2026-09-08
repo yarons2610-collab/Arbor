@@ -3253,6 +3253,25 @@ function projCatsHTML(owner,keyPrefix){
     </div>`;
   }).join("");
 }
+/* The markup above is inert on its own — every one of its rows needs a
+   handler hung on it afterwards. It is rendered in two places (an experiment
+   card, and a project's section header in the grouped view) and only the
+   first of them ever did that wiring, so a project's own literature drew
+   perfectly and did nothing at all when clicked: the category would not even
+   open. One function does it for both now, so the next place that renders
+   these cannot forget. */
+function wireProjCats(root,owner,redraw){
+  if(!root)return;
+  root.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=e=>{
+    e.stopPropagation();
+    const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k); redraw(); });
+  root.querySelectorAll(".pc-item").forEach(r=>r.onclick=e=>{
+    e.stopPropagation(); openLinked((owner.links||[])[+r.dataset.i]); });
+  root.querySelectorAll(".pc-item-file").forEach(r=>{
+    wireFileOpener(r,r.dataset.filekey);
+    const inner=r.onclick; r.onclick=e=>{ e.stopPropagation(); return inner&&inner.call(r,e); };
+  });
+}
 
 /* ---- experiments and tasks ----
    An experiment is its own top-level record (DB.experiments), not a child
@@ -4876,15 +4895,7 @@ function drawExperimentCard(ex){
     card.querySelector(".exp-name").onclick=e=>{ e.stopPropagation(); experimentModal(ex,()=>renderExperiments()); };
     const projBadge=card.querySelector(".exp-proj");
     if(projBadge) projBadge.onclick=e=>{ e.stopPropagation(); if(pr)projectModal(pr,()=>renderExperiments()); };
-    card.querySelectorAll(".pc-cathead").forEach(b=>b.onclick=e=>{
-      e.stopPropagation();
-      const k=b.dataset.key; projOpen.has(k)?projOpen.delete(k):projOpen.add(k); redraw(); });
-    card.querySelectorAll(".pc-item").forEach(r=>r.onclick=e=>{
-      e.stopPropagation(); openLinked((ex.links||[])[+r.dataset.i]); });
-    card.querySelectorAll(".pc-item-file").forEach(r=>{
-      wireFileOpener(r,r.dataset.filekey);
-      const inner=r.onclick; r.onclick=e=>{ e.stopPropagation(); return inner&&inner.call(r,e); };
-    });
+    wireProjCats(card,ex,redraw);
     card.querySelector(".exp-sub").onclick=e=>{
       e.stopPropagation();
       const k=addTask({experimentId:ex.id}); openSteps.add(ex.id); taskEditor(k,redraw);
@@ -4955,7 +4966,10 @@ function renderExperiments(){
     [...DB.projects].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).forEach(pr=>{
       const members=DB.experiments.filter(ex=>ex.projectId===pr.id);
       host.appendChild(sectionHead(pr.color||"#7db4ff",pr.name||"(unnamed project)",pr));
-      if(pr.links&&pr.links.length){ const catHost=document.createElement("div"); catHost.innerHTML=projCatsHTML(pr); host.appendChild(catHost); }
+      if(pr.links&&pr.links.length){
+        const catHost=document.createElement("div"); catHost.innerHTML=projCatsHTML(pr); host.appendChild(catHost);
+        wireProjCats(catHost,pr,()=>renderExperiments());
+      }
       // Work that belongs to the project itself rather than to any one
       // experiment in it — ordering something, a meeting, writing it up.
       // Listed above the experiment cards because it is the project's own.
