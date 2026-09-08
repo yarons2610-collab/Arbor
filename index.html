@@ -8237,6 +8237,11 @@ const COND_OPS={
   date  :[["after","after"],["before","before"],["on","on"]],
   select:[["is","is"],["not","is not"]],
   yesno :[["yes","is Yes"],["no","is No"]],
+  // its own type rather than a plain yesno so the chip can read "Surgery ·
+  // Status not completed" instead of "Status is No"; "not completed" leads
+  // because that is the question actually being asked of it — who is still
+  // waiting on this
+  done  :[["no","not completed"],["yes","completed"]],
   text  :[["has","contains"],["nothas","does not contain"]]
 };
 /* Every entry type can be filtered on, not just the ones that happen to
@@ -8251,6 +8256,10 @@ function condFields(typeKey){
   const out=[
     {key:"__count",label:"Number of entries",type:"count",src:"count"},
     {key:"__date", label:"Date",             type:"date", src:"date"},
+    // the ✓ on the entry itself — "scheduled for surgery but hasn't had it"
+    // is a question about the tick, not about the date: an entry whose day has
+    // passed without being ticked is exactly the case worth finding
+    {key:"__done", label:"Status",           type:"done", src:"done"},
     {key:"__note", label:"Note",             type:"text", src:"note"}
   ];
   if(typeKey==="training"){
@@ -8272,6 +8281,7 @@ function condFieldDef(typeKey,fieldKey){
 function condValueOf(e,f){
   if(f.src==="note")   return diaryNoteOf(e.data||{});
   if(f.src==="date")   return e.date||"";
+  if(f.src==="done")   return !!e.done;   // false, not undefined: an untouched entry IS "not completed"
   if(f.src==="task")   return (e.data||{}).task||"";
   if(f.src==="metric") return ((e.data||{}).metrics||{})[f.key.slice(2)];
   return (e.data||{})[f.key];
@@ -8298,6 +8308,7 @@ function condMatches(a,c){
       if(!d2)return false;
       return c.op==="after"?d1>d2:c.op==="before"?d1<d2:d1===d2;
     }
+    if(f.type==="done") return c.op==="yes"?v===true:v!==true;
     if(f.type==="yesno"){ const b=(v===true||v==="1"||v===1||String(v).toLowerCase()==="yes");
       return c.op==="yes"?b:!b; }
     const sv=String(v).toLowerCase(), tv=String(c.value||"").toLowerCase();
@@ -8309,7 +8320,7 @@ function condLabel(c){
   const d=diaryTypeDef(c.type), f=condFieldDef(c.type,c.field);
   const ft=f?f.type:"text";
   const op=((COND_OPS[ft]||COND_OPS.text).find(o=>o[0]===c.op)||["",c.op])[1];
-  return `${d?d.label:c.type} · ${f?f.label:c.field} ${op}${ft==="yesno"?"":" "+c.value}`;
+  return `${d?d.label:c.type} · ${f?f.label:c.field} ${op}${(ft==="yesno"||ft==="done")?"":" "+c.value}`;
 }
 function openCondModal(after){
   const types=diaryTypeDefs();
@@ -8321,7 +8332,7 @@ function openCondModal(after){
     const f=condFieldDef(tKey,fKey)||fields[0];
     const ops=COND_OPS[f.type]||COND_OPS.text;
     const valHTML=
-      f.type==="yesno" ? "" :
+      (f.type==="yesno"||f.type==="done") ? "" :
       f.type==="select" ? `<select id="cnd_val">${(f.options||[]).map(o=>`<option value="${escAttr(o)}">${esc(o)}</option>`).join("")}</select>` :
       f.type==="date"   ? `<input id="cnd_val" type="date">` :
       `<input id="cnd_val" type="text" inputmode="${(f.type==="number"||f.type==="count")?"decimal":"text"}" placeholder="${
@@ -8358,7 +8369,7 @@ function openCondModal(after){
     const valEl=document.getElementById("cnd_val");
     const value=valEl?valEl.value.trim():"";
     const f=condFieldDef(type,field);
-    if(f&&f.type!=="yesno"&&!value){ toast("Give it a value to compare against"); return; }
+    if(f&&f.type!=="yesno"&&f.type!=="done"&&!value){ toast("Give it a value to compare against"); return; }
     animalConds.push({type,field,op,value});
     DB.config.animalFilters.conds=animalConds; persist();
     closeModal(); if(after)after();
