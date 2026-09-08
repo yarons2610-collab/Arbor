@@ -8864,12 +8864,26 @@ function animalCard(a){
 function openEventLogModal(presetIds){
   const allAnimals=[...DB.animals].sort((x,y)=>x.name.localeCompare(y.name));
   let selected=new Set(presetIds&&presetIds.length?presetIds:allAnimals.map(a=>a.id));
+  /* A log is a record of what happened, so it stops at today by default. That
+     used to make no difference — every entry was something already done — but
+     a repeat with no end date materialises a year of occurrences ahead, and
+     without this the log for one such animal is fifty-odd empty future rows
+     with the actual history buried underneath them. What is coming is still
+     worth seeing on purpose, so it is a toggle rather than a hard cut. */
+  let withUpcoming=false;
 
   function events(){
-    const out=[];
-    allAnimals.forEach(a=>{ if(selected.has(a.id)) (a.diary||[]).forEach(e=>out.push({a,e})); });
+    const out=[], today=todayDateStr();
+    allAnimals.forEach(a=>{ if(selected.has(a.id)) (a.diary||[]).forEach(e=>{
+      if(!withUpcoming&&e.date>today)return;
+      out.push({a,e}); }); });
     out.sort((x,y)=> x.e.date<y.e.date?-1:x.e.date>y.e.date?1:(x.e.time||"").localeCompare(y.e.time||""));
     return out;
+  }
+  function upcomingCount(){
+    const today=todayDateStr(); let n=0;
+    allAnimals.forEach(a=>{ if(selected.has(a.id)) (a.diary||[]).forEach(e=>{ if(e.date>today)n++; }); });
+    return n;
   }
   // diaryEntrySummary already prefixes "HH:MM–HH:MM · " when a time is set —
   // reused here rather than re-derived, minus that prefix since time gets its
@@ -8879,10 +8893,12 @@ function openEventLogModal(presetIds){
     const prefix=`${e.time}${e.endTime?"–"+e.endTime:""} · `;
     return s.startsWith(prefix)?s.slice(prefix.length):s;
   }
+  // the tick leads the line: with repeats in play, which occurrences actually
+  // happened is the first thing anyone reads a log for
   function lineFor(a,e){
     const def=diaryTypeDef(e.type);
     const time=e.time?`${e.time}${e.endTime?"–"+e.endTime:""} · `:"";
-    return `${def.icon} ${time}${a.name} — ${def.label}: ${summaryNoTime(e,a)}`;
+    return `${e.done?"✓":"○"} ${def.icon} ${time}${a.name} — ${def.label}: ${summaryNoTime(e,a)}`;
   }
 
   modal(`<h3>Event log</h3>
@@ -8895,9 +8911,10 @@ function openEventLogModal(presetIds){
         <div id="el_animals" style="max-height:360px;overflow:auto;border:1px solid var(--line2);border-radius:8px;padding:6px"></div>
       </div>
       <div style="flex:1;min-width:280px">
-        <div style="display:flex;gap:8px;margin-bottom:8px">
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
           <button class="btn ghost" id="el_txt" style="font-size:12px">↓ Export .txt</button>
           <button class="btn ghost" id="el_xlsx" style="font-size:12px">↓ Export .xlsx</button>
+          <button type="button" class="btn ghost" id="el_future" style="font-size:12px"></button>
         </div>
         <div id="el_list" style="max-height:400px;overflow:auto;font-size:12.5px;line-height:1.6"></div>
       </div>
@@ -8921,15 +8938,23 @@ function openEventLogModal(presetIds){
     });
     host.innerHTML=html;
   }
-  paintAnimalList(); paintList();
+  function paintFutureBtn(){
+    const b=document.getElementById("el_future"); if(!b)return;
+    const n=upcomingCount();
+    b.textContent=withUpcoming?`hide ${n} upcoming`:`＋ show ${n} upcoming`;
+    b.style.display=n?"":"none";
+    b.classList.toggle("accent",withUpcoming);
+  }
+  paintAnimalList(); paintList(); paintFutureBtn();
+  document.getElementById("el_future").onclick=()=>{ withUpcoming=!withUpcoming; paintList(); paintFutureBtn(); };
 
   animalsHost.addEventListener("change",e=>{
     const cb=e.target.closest(".el_a"); if(!cb)return;
     if(cb.checked)selected.add(cb.dataset.id); else selected.delete(cb.dataset.id);
-    paintList();
+    paintList(); paintFutureBtn();
   });
-  document.getElementById("el_all").onclick=()=>{ selected=new Set(allAnimals.map(a=>a.id)); paintAnimalList(); paintList(); };
-  document.getElementById("el_none").onclick=()=>{ selected=new Set(); paintAnimalList(); paintList(); };
+  document.getElementById("el_all").onclick=()=>{ selected=new Set(allAnimals.map(a=>a.id)); paintAnimalList(); paintList(); paintFutureBtn(); };
+  document.getElementById("el_none").onclick=()=>{ selected=new Set(); paintAnimalList(); paintList(); paintFutureBtn(); };
 
   document.getElementById("el_txt").onclick=()=>{
     const evs=events(); if(!evs.length){ toast("Nothing to export"); return; }
@@ -8943,10 +8968,10 @@ function openEventLogModal(presetIds){
   };
   document.getElementById("el_xlsx").onclick=()=>{
     const evs=events(); if(!evs.length){ toast("Nothing to export"); return; }
-    const rows=[["Date","Time","Animal","Tag","Type","Summary"]];
+    const rows=[["Date","Time","Animal","Tag","Type","Summary","Done"]];
     evs.forEach(({a,e})=>{
       const def=diaryTypeDef(e.type);
-      rows.push([e.date, e.time?`${e.time}${e.endTime?"–"+e.endTime:""}`:"", a.name, a.tag||"", def.label, summaryNoTime(e,a)]);
+      rows.push([e.date, e.time?`${e.time}${e.endTime?"–"+e.endTime:""}`:"", a.name, a.tag||"", def.label, summaryNoTime(e,a), e.done?"Yes":"No"]);
     });
     downloadExcel("arbor_event_log.xls",[{name:"Events",rows}]);
     toast(`Exported ${evs.length} events`);
@@ -11191,14 +11216,33 @@ function downloadExcel(filename,sheets){ download(filename,buildExcelXML(sheets)
 // export's completeness but in a form that opens directly in Excel. Animal
 // id/domain/tag id foreign keys are resolved to their names since those
 // are what's actually useful in a spreadsheet.
+/* One workbook covering the whole workspace. It had fallen a long way behind
+   what Arbor actually holds: the Timeline (DB.schedule — every scheduled task
+   and event), Experiments, Projects, Notes and the whole Library were absent
+   entirely, and its "Tasks" sheet exported DB.tasks — the legacy outline, not
+   the calendar — so the sheet most likely to be opened looking for scheduled
+   work was empty while the real thing was nowhere in the file. Export JSON is
+   a complete snapshot regardless (it serialises DB itself, so it can never
+   drift); this is the readable one, and readable is worth nothing if it is
+   missing the half of the workspace you came to read. */
 function exportFullDatabaseExcel(){
-  const animalsRows=[["ID","Name","Tag","Cage","Sex","Strain","Born","Sacrificed","Status","Head-post","Cranial window","Comments"]];
+  const plain=h=>richTextPlain(h||"");
+  const attachedTo=(kind,id)=>attachLabel(attachmentsOf({kind,id}));
+  const animalsRows=[["ID","Name","Tag","Cage","Sex","Strain","Born","Sacrificed","Status","Head-post","Cranial window","Experiments","Comments"]];
   DB.animals.forEach(a=>animalsRows.push([a.id,a.name,a.tag||"",a.cage||"",a.sex||"",a.strain||"",a.dob||"",a.sacrificed||"",
-    a.termination||"",a.surgeryDetail&&a.surgeryDetail.headpost?"Yes":"No",a.surgeryDetail&&a.surgeryDetail.window?"Yes":"No",richTextPlain(richBodyHTML(a.comments,a.commentsRich))]));
+    a.termination||"",a.surgeryDetail&&a.surgeryDetail.headpost?"Yes":"No",a.surgeryDetail&&a.surgeryDetail.window?"Yes":"No",
+    animalSteps(a.id).map(ex=>ex.title||"(unnamed)").join(", "),
+    richTextPlain(richBodyHTML(a.comments,a.commentsRich))]));
 
-  const diaryRows=[["Animal","Tag","Date","Time","End time","Type","Summary","Logged"]];
+  // Done and Repeats earn their columns now that entries can be ticked off and
+  // can run as an open-ended series: without them a sheet of a repeating
+  // entry's occurrences is a list of identical-looking rows with no way to
+  // tell which have actually happened.
+  const diaryRows=[["Animal","Tag","Date","Time","End time","Type","Summary","Done","Repeats","Logged"]];
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    diaryRows.push([a.name,a.tag||"",e.date,e.time||"",e.endTime||"",diaryTypeDef(e.type).label,diaryEntrySummary(e,a),e.created?new Date(e.created).toLocaleString():""]);
+    diaryRows.push([a.name,a.tag||"",e.date,e.time||"",e.endTime||"",diaryTypeDef(e.type).label,diaryEntrySummary(e,a),
+      e.done?"Yes":"No", e.seriesRule?repeatLabel(e.seriesRule,e.date)||"yes":"",
+      e.created?new Date(e.created).toLocaleString():""]);
   }));
 
   const injRows=[["Animal","#","Depth","Virus","Type","Site region","AP","ML","DV","Volume (nl)","Target region","Target AP","Target ML","Target DV"]];
@@ -11211,6 +11255,44 @@ function exportFullDatabaseExcel(){
       injRows.push([a.name,i+1,di+1,inj.virus||"",inj.type||"",inj.siteRegion||"",inj.ap,inj.ml,d.dv,d.volume,inj.partnerRegion||"",inj.pAp,inj.pMl,inj.pDv]);
     });
   }));
+
+  // The Timeline: everything on the calendar. This is what "Tasks" used to be
+  // assumed to mean and never was — that sheet reads DB.tasks, the old outline,
+  // and is now named for what it actually is (below).
+  const timelineRows=[["ID","Kind","Title","When","End","Duration (min)","Repeats","Experiment","Project","Materials","Done occurrences"]];
+  taskList().forEach(t=>{
+    const ex=t.experimentId?expById(t.experimentId):null;
+    const pr=t.projectId?projById(t.projectId):(ex&&ex.projectId?projById(ex.projectId):null);
+    timelineRows.push([t.id,t.isEvent?"Event":"Task",t.title||"",t.when||"",t.endDate||"",t.duration||"",
+      repeatLabel(t.repeat,t.when)||"",ex?(ex.title||"(unnamed)"):"",pr?(pr.name||"(unnamed)"):"",
+      (t.materials||[]).join(", "),(t.doneOccurrences||[]).length]);
+  });
+
+  const expRows=[["ID","Title","Project","Status","Question","Deadline","End","Animals","Notes"]];
+  DB.experiments.forEach(ex=>{
+    const pr=ex.projectId?projById(ex.projectId):null;
+    expRows.push([ex.id,ex.title||"",pr?(pr.name||"(unnamed)"):"",ex.status||"",ex.question||"",
+      ex.deadline||"",ex.endDate||"",
+      animalsForStep(ex).map(a=>a.name).join(", "),   // animals hang off ex.links, not an ex.animals array
+
+      plain(ex.notes)]);
+  });
+
+  const projRows=[["ID","Name","Question","Experiments","Notes"]];
+  (DB.projects||[]).forEach(pr=>projRows.push([pr.id,pr.name||"",pr.question||"",
+    DB.experiments.filter(ex=>ex.projectId===pr.id).map(ex=>ex.title||"(unnamed)").join(", "),plain(pr.notes)]));
+
+  const notesRows=[["Title","Attached to","Created","Updated","Body"]];
+  (DB.notes||[]).forEach(n=>notesRows.push([n.title||"",attachedTo("note",n.id),
+    n.created?new Date(n.created).toLocaleString():"",n.updated?new Date(n.updated).toLocaleString():"",
+    plain(richBodyHTML(n.body,n.rich))]));
+
+  const libRows=[["Kind","Title","Authors","Year","Status","Track","Tag","Attached to","Notes"]];
+  [...(DB.readings||[]).map(r=>["Literature",r]),...(DB.protocols||[]).map(r=>["Protocol",r]),
+   ...(DB.other||[]).map(r=>["Other",r])].forEach(([kind,r])=>{
+    libRows.push([kind,r.title||"",r.authors||"",r.year||"",r.status||"",r.track||"",r.tag||"",
+      attachedTo(kind==="Literature"?"reading":kind==="Protocol"?"protocol":"other",r.id),plain(r.notes)]);
+  });
 
   const tasksRows=[["ID","Name","Soma","Status","Start","End","Notes"]];
   DB.tasks.forEach(t=>tasksRows.push([t.id,t.title||"",(domById(t.domainId)||{}).name||"",t.status||"",t.deadline||"",t.endDate||"",t.notes||""]));
@@ -11235,7 +11317,12 @@ function exportFullDatabaseExcel(){
     {name:"Animals",rows:animalsRows},
     {name:"Diary entries",rows:diaryRows},
     {name:"Injections",rows:injRows},
-    {name:"Tasks",rows:tasksRows},
+    {name:"Timeline",rows:timelineRows},
+    {name:"Experiments",rows:expRows},
+    {name:"Projects",rows:projRows},
+    {name:"Notes",rows:notesRows},
+    {name:"Library",rows:libRows},
+    {name:"Outline tasks",rows:tasksRows},
     {name:"Tags",rows:tagsRows},
     {name:"Virus library",rows:virusRows},
     {name:"Site library",rows:siteRows},
