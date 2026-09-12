@@ -10227,7 +10227,7 @@ function animalModal(id,draft){
     </div>
 
     <div class="fld"><label>Surgical comments / notes</label><div id="am_comwrap"></div></div>
-    <div class="actions">${id?`<button class="btn danger" id="am_del" style="margin-right:auto">Delete</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
+    <div class="actions">${id?`<button class="btn danger" id="am_del">Delete</button><button class="btn ghost" id="am_dup" style="margin-right:auto">⧉ Duplicate</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
 
   // Which experiments this animal is in and which group of each. For an existing
   // animal this reads and writes the experiments directly — same assignment the
@@ -10310,17 +10310,20 @@ function animalModal(id,draft){
     toast(`Saved "${name}" to Procedures library`);
   };
 
-  document.getElementById("am_save").onclick=()=>{
-    const name=document.getElementById("am_name").value.trim(); if(!name){toast("Name needed");return;}
+  // the record as it stands on screen — what Save stores and Duplicate copies
+  function formRecord(){
     const snap=procEditor.getSnapshot();
     const cleanInjs=snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
     const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
-    const rec={name,tag:document.getElementById("am_tag").value.trim(),
+    return {name:document.getElementById("am_name").value.trim(),tag:document.getElementById("am_tag").value.trim(),
       cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
       dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
       termination, alive:termination==="alive",
       comments:comBody.textContent.trim()?comBody.innerHTML:"", commentsRich:true};
+  }
+  document.getElementById("am_save").onclick=()=>{
+    const rec=formRecord(); if(!rec.name){toast("Name needed");return;}
     if(id){
       Object.assign(a,rec);
     } else {
@@ -10332,6 +10335,25 @@ function animalModal(id,draft){
     persist(); closeModal(); render(); toast(id?"Animal updated":"Animal added");
   };
   if(id)document.getElementById("am_del").onclick=()=>{ if(confirm("Delete this animal record?")){DB.animals=DB.animals.filter(x=>x.id!==id);persist();closeModal();render();toast("Deleted");}};
+  // A cage-mate in one click: the profile, the procedure and every experiment,
+  // group and project the original sits in. Not the diary, and not the death —
+  // weights, surgeries and a sacrifice happened to that one animal, not to its
+  // copy. The original is left exactly as last saved.
+  if(id)document.getElementById("am_dup").onclick=()=>{
+    const rec=formRecord();
+    const newId=uid("a_");
+    DB.animals.push({id:newId,created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],tasks:[],
+      ...rec, name:(rec.name||"(unnamed)")+" (copy)",
+      sacrificed:"", termination:"alive", alive:true,
+      surgeryDetail:rec.surgeryDetail?JSON.parse(JSON.stringify(rec.surgeryDetail)):null});
+    [...DB.experiments,...DB.projects].forEach(st=>{
+      if((st.links||[]).some(l=>l.kind==="animal"&&l.id===id)) st.links.push({kind:"animal",id:newId});
+      const gid=(st.groups||{})[id]; if(gid) st.groups[newId]=gid;
+    });
+    syncTags(); persist(); closeModal(); render();
+    animalModal(newId);
+    toast("Duplicated — you're editing the copy");
+  };
 }
 
 /* ---------- DETAIL / EDIT ---------- */
