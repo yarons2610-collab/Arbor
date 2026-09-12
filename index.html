@@ -8253,11 +8253,11 @@ const COND_OPS={
   date  :[["after","after"],["before","before"],["on","on"]],
   select:[["is","is"],["not","is not"]],
   yesno :[["yes","is Yes"],["no","is No"]],
-  // its own type rather than a plain yesno so the chip can read "Surgery ·
-  // Status not completed" instead of "Status is No"; "not completed" leads
-  // because that is the question actually being asked of it — who is still
-  // waiting on this
-  done  :[["no","not completed"],["yes","completed"]],
+  // Three answers that never overlap. "Not completed" read as if it took in
+  // animals with no such entry at all, so "has none" is its own answer rather
+  // than something to infer. "no"/"yes" keep their keys so saved filters still
+  // mean what they meant.
+  done  :[["no","scheduled, not done yet"],["yes","done"],["none","not scheduled at all"]],
   text  :[["has","contains"],["nothas","does not contain"]]
 };
 /* Every entry type can be filtered on, not just the ones that happen to
@@ -8311,6 +8311,7 @@ function condMatches(a,c){
     if(isNaN(t))return false;
     return c.op==="gt"?n>t:c.op==="lt"?n<t:n===t;
   }
+  if(f.type==="done"&&c.op==="none") return !entries.length;
   return entries.some(e=>{
     const v=condValueOf(e,f);
     if(v==null||v==="")return false;
@@ -8336,7 +8337,9 @@ function condLabel(c){
   const d=diaryTypeDef(c.type), f=condFieldDef(c.type,c.field);
   const ft=f?f.type:"text";
   const op=((COND_OPS[ft]||COND_OPS.text).find(o=>o[0]===c.op)||["",c.op])[1];
-  return `${d?d.label:c.type} · ${f?f.label:c.field} ${op}${(ft==="yesno"||ft==="done")?"":" "+c.value}`;
+  // "Surgery · not scheduled at all" — the answer already says it is a status
+  if(ft==="done") return `${d?d.label:c.type} · ${op}`;
+  return `${d?d.label:c.type} · ${f?f.label:c.field} ${op}${ft==="yesno"?"":" "+c.value}`;
 }
 function openCondModal(after){
   const types=diaryTypeDefs();
