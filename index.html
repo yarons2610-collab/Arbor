@@ -1838,10 +1838,12 @@ function migrate(){                       // backfill fields added in later vers
           DB.config.diaryTypes.push({...t,fields:t.fields.map(f=>({...f}))});
       });
       // A core type that survived but lost its fields is equally unusable —
-      // give the seeded fields back when it has none of its own.
+      // give the seeded fields back when it has none of its own. Core only:
+      // this ran for every seeded type once, so emptying Post-op's fields on
+      // purpose had them all back on the next load or sync, every time.
       DB.config.diaryTypes.forEach(t=>{
         const seed=DEFAULT_CONFIG.diaryTypes.find(x=>x.key===t.key);
-        if(seed&&seed.fields.length&&!(t.fields||[]).length)
+        if(seed&&seed.core&&seed.fields.length&&!(t.fields||[]).length)
           t.fields=seed.fields.map(f=>({...f}));
       }); }
   }
