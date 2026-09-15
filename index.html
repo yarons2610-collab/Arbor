@@ -536,7 +536,18 @@
      vivid the whole time; a translucent copy is what's left behind at the
      original slot, not the block actually being moved */
   .cal-evt-timed.dragging{box-shadow:0 6px 18px rgba(0,0,0,.45);cursor:grabbing;z-index:50}
-  .cal-evt-ghost{opacity:.32;pointer-events:none}
+  /* Where the chip came from — an outline, not a faded copy. The copy kept
+     its text, so the dragged chip's own title, the time pill, and whatever
+     the re-packed day slid across that spot all printed on top of it: text
+     over text. Beneath the ordinary chips (z-index 2), so anything that now
+     fills the space simply covers it. */
+  .cal-evt-ghost{pointer-events:none;background:transparent!important;border:1.5px dashed rgba(255,255,255,.3)!important;box-shadow:none!important;filter:none!important;z-index:1!important}
+  .cal-evt-ghost>*{visibility:hidden}
+  /* While a chip is dragged the rest of its day re-packs around it. Gliding
+     into the new column reads as making room; snapping there read as the
+     grid twitching every quarter hour. Only during a drag — a normal render
+     builds fresh chips, which have nothing to animate from. */
+  body.cal-dragging .cal-evt-timed{transition:transform .18s cubic-bezier(.34,1.56,.64,1),box-shadow .18s ease-out,left .16s ease-out,width .16s ease-out}
   /* dashed, not solid — nothing has been created yet, this is only a preview
      of what dragging here would default to */
   .cal-create-preview{border:2px dashed var(--gcamp);border-radius:5px;background:rgba(84,224,138,.15);
@@ -2571,24 +2582,83 @@ function liftChipForDrag(el){
   document.body.classList.add("cal-dragging");
   return {rect,ghostEl};
 }
-function makeAllDayDraggable(chip,item,cells,weekStart){
+// Hold a dragged chip at the left or right edge of the calendar and the page
+// turns — a day in Day view, a week in Week view — with the drag carrying on
+// into the new page. A dwell rather than an instant flip, so passing near an
+// edge on the way to a drop doesn't turn anything. Day view's single column
+// can spare 48px at each side; a week column can be narrower than that on a
+// phone, so there the zones are the hour gutter on the left and a thin strip
+// at (or past) the right edge, and every day stays droppable. onTurn runs
+// once the new page has rendered.
+function makeCalEdgePager(onTurn){
+  const HOLD_MS=550, DAY_ZONE_PX=48, WEEK_RIGHT_PX=14;
+  let timer=null, side=null;
+  function cancel(){ clearTimeout(timer); timer=null; side=null; }
+  function step(x){
+    const wrap=calMode!=="month"&&document.querySelector(".cal-grid-wrap");
+    if(!wrap){ cancel(); return; }
+    const wr=wrap.getBoundingClientRect();
+    let prev, next;
+    if(calMode==="day"){ prev=x<wr.left+DAY_ZONE_PX; next=x>wr.right-DAY_ZONE_PX; }
+    else{
+      const firstCell=wrap.querySelector(".cal-hour-cell");
+      prev=x<Math.max(firstCell?firstCell.getBoundingClientRect().left:wr.left+DAY_ZONE_PX, wr.left+12);
+      next=x>wr.right-WEEK_RIGHT_PX;
+    }
+    const s=prev?"prev":next?"next":null;
+    if(s===side)return;
+    clearTimeout(timer); timer=null; side=s;
+    if(!s)return;
+    timer=setTimeout(()=>{
+      timer=null; side=null;
+      // The all-day strip is as tall as that page's busiest day needs, so the
+      // hour grid can start higher or lower on the next page. Scroll by the
+      // difference, so the hour under the finger is still the hour under it.
+      const oldTop=wrap.getBoundingClientRect().top;
+      calWeekOffset+=s==="prev"?-1:1;
+      renderTimeline();
+      const fresh=document.querySelector(".cal-grid-wrap");
+      if(fresh) fresh.scrollTop+=fresh.getBoundingClientRect().top-oldTop;
+      onTurn();
+    },HOLD_MS);
+  }
+  return {step,cancel};
+}
+// cellSel names the day cells a drop can land in, each carrying data-date:
+// the week/day all-day strip, or every cell of the month grid. Looked up live
+// on each move rather than handed in once, because a page turned mid-drag
+// replaces every one of them.
+function makeAllDayDraggable(chip,item,cellSel){
+  const inMonth=cellSel===".month-cell";
   chip.style.cursor="grab";
   chip.addEventListener("pointerdown",ev=>{
     if(ev.button)return;
     ev.preventDefault();
     const startX=ev.clientX, startY=ev.clientY;
-    const colAt=x=>{ for(let i=0;i<cells.length;i++){ const r=cells[i].getBoundingClientRect();
-      if(x>=r.left&&x<=r.right)return i; } return -1; };
-    // Which day the chip started in — geometry, not DOM containment: a
+    // The day under a point: of the cells spanning its x, the one nearest its
+    // y. The strip is a single row, so that is just the column; the month
+    // grid has six, and it used to be handed only the chip's own week, which
+    // is why a month-view drag could never leave its row.
+    const dayAt=(x,y)=>{
+      let best=null, bestDy=Infinity;
+      document.querySelectorAll(cellSel).forEach(c=>{
+        if(!c.dataset.date)return;
+        const r=c.getBoundingClientRect(); if(x<r.left||x>r.right)return;
+        const dy=y<r.top?r.top-y:y>r.bottom?y-r.bottom:0;
+        if(dy<bestDy){ bestDy=dy; best=c.dataset.date; }
+      });
+      return best;
+    };
+    // Which day the chip was grabbed on — geometry, not DOM containment: a
     // multi-day bar or a month-view chip is a grid sibling of its day cells,
-    // not nested inside one, so cells.findIndex(c=>c.contains(chip)) always
-    // came back -1 for either. targetCol is already computed this same way
-    // during the drag; matching it here means delta is "how many columns did
-    // the pointer travel", correct regardless of where on a wide bar it was
-    // grabbed.
-    const startCol=colAt(startX);
+    // not nested inside one. The move is "how many days did the pointer
+    // travel", applied to the item's own dates, so grabbing a wide bar by its
+    // third day doesn't drop its first day under the pointer.
+    const startDay=dayAt(startX,startY);
     const isTouch=ev.pointerType!=="mouse";
-    let armed=!isTouch, moved=false, cancelled=false, targetCol=startCol, rect=null, ghostEl=null;
+    let armed=!isTouch, moved=false, cancelled=false, targetDay=startDay, rect=null, ghostEl=null;
+    let lastX=startX, lastY=startY;
+    const pager=inMonth?null:makeCalEdgePager(()=>{ const d=dayAt(lastX,lastY); if(d)targetDay=d; });
     // moving more than the wiggle before the hold fires aborts the gesture
     // outright — not a drag (never armed) and not a click either (a real
     // move happened), the same as lifting your finger and trying again
@@ -2600,6 +2670,7 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
     // already use, for the same reason.
     function cleanup(){
       clearTimeout(holdTimer);
+      pager?.cancel();
       chip.classList.remove("holding");
       document.body.classList.remove("cal-dragging");
       document.removeEventListener("pointermove",onMove);
@@ -2614,29 +2685,31 @@ function makeAllDayDraggable(chip,item,cells,weekStart){
       }
       // same as the hourly grid: touch already proved intent through the
       // hold, so it shouldn't also need to clear the mouse's wiggle gate
-      if(isTouch||Math.abs(dx)>DRAG_WIGGLE_PX)moved=true;
+      // the strip only moves sideways, but a month drag can go straight down a
+      // week — vertical travel has to count there, or it never starts at all
+      if(isTouch||Math.abs(dx)>DRAG_WIGGLE_PX||(inMonth&&Math.abs(dy)>DRAG_WIGGLE_PX))moved=true;
       if(!moved)return;
       // The chip now actually follows the finger horizontally (it used to
       // just sit still with reduced opacity until drop, then teleport to the
       // new day) — the same "every pixel shows" treatment the hourly grid's
       // own drag already had.
       if(!rect){ const lifted=liftChipForDrag(chip); rect=lifted.rect; ghostEl=lifted.ghostEl; chip.style.cursor="grabbing"; }
+      lastX=e.clientX; lastY=e.clientY;
       chip.style.left=(rect.left+dx)+"px";
-      const c=colAt(e.clientX); if(c>=0)targetCol=c;
+      // the month grid is two-dimensional, so there the chip follows both ways
+      if(inMonth) chip.style.top=(rect.top+dy)+"px";
+      const d=dayAt(e.clientX,e.clientY); if(d)targetDay=d;
+      pager?.step(e.clientX);
     }
     function onUp(e){
       cleanup();
       if(!moved){ if(!cancelled) openCalItem(item); return; }
       if(ghostEl)ghostEl.remove();
       chip.remove();   // reparented to document.body by liftChipForDrag — a re-render won't reach it on its own
-      const delta=targetCol-startCol;
+      const delta=(startDay&&targetDay)?calDayDelta(startDay,targetDay):0;
       if(!delta){ renderTimeline(); return; }   // dropped where it started: nothing changed, but the lifted chip still needs putting back
-      const nd=new Date(weekStart); nd.setDate(weekStart.getDate()+targetCol);
-      const p4=n=>String(n).padStart(2,"0");
-      const dayISO=`${nd.getFullYear()}-${p4(nd.getMonth()+1)}-${p4(nd.getDate())}`;
-      const time=item.deadline.length>10?item.deadline.slice(11):null;
-      const newWhen=dayISO+(time?"T"+time:"");
-      const newEnd=item.endDate?addDaysISO(item.endDate,calDayDelta(item.deadline,newWhen)):undefined;
+      const newWhen=addDaysISO(item.deadline,delta);
+      const newEnd=item.endDate?addDaysISO(item.endDate,delta):undefined;
       commitCalMove(item,newWhen,newEnd);
       renderTimeline();
     }
@@ -5620,7 +5693,11 @@ function setCalMode(mode){
    rather than two that can disagree. */
 function packColumns(events){
   const out=new Map();
-  const sorted=[...events].sort((a,b)=>a.startMin-b.startMin||a.endMin-b.endMin);
+  // Same start: the longer one goes left. Shorter-first put a brief entry
+  // ahead of a long block that began with it, so dragging anything onto a
+  // shared start time shoved every chip already there one column over. The
+  // key settles exact ties, so two renders of one day can never disagree.
+  const sorted=[...events].sort((a,b)=>a.startMin-b.startMin||b.endMin-a.endMin||String(a.key).localeCompare(String(b.key)));
   let cluster=[], clusterEnd=-Infinity;
   const flush=()=>{
     if(!cluster.length)return;
@@ -5631,7 +5708,14 @@ function packColumns(events){
       ev.col=ci;
     });
     const totalCols=colEnds.length;
-    cluster.forEach(ev=>out.set(ev.key,{col:ev.col,totalCols}));
+    // An event widens into every column to its right that nothing overlapping
+    // it uses — a lone entry late in a three-column cluster shouldn't sit in a
+    // third of the width with the rest of its row standing empty.
+    cluster.forEach(ev=>{
+      let span=1;
+      while(ev.col+span<totalCols&&!cluster.some(o=>o.col===ev.col+span&&o.startMin<ev.endMin&&o.endMin>ev.startMin)) span++;
+      out.set(ev.key,{col:ev.col,totalCols,span});
+    });
     cluster=[];
   };
   sorted.forEach(ev=>{
@@ -5646,6 +5730,10 @@ function packColumns(events){
 // re-pack a day without re-deriving it from the DB: filled by renderTimeline,
 // read by beginTimedEventDrag.
 let calTimedIndex={days:[],startISO:null};
+// The chip a timed drag is carrying, if any. A page turned mid-drag re-renders
+// the day it came from whenever the drag passes back through it; that copy is
+// drawn as the origin outline, not as a second live chip.
+let calDragKey=null;
 function packDayTracks(items){
   // widest first: a multi-day bar claims its track before the single-day
   // items around it have to be routed around it, which is what keeps a
@@ -5738,15 +5826,14 @@ function renderMonthView(host){
   weeks.forEach((items,w)=>{
     const trackCount=Math.max(items._trackCount||0,1);
     const weekRow=document.createElement("div"); weekRow.className="month-week"; body.appendChild(weekRow);
-    const weekBgCells=[];
-    const weekStart=new Date(gridStart); weekStart.setDate(gridStart.getDate()+w*7);
     for(let c=0;c<7;c++){
       const day=new Date(gridStart); day.setDate(gridStart.getDate()+w*7+c);
       const bg=document.createElement("div");
       bg.className="month-cell"+(day.getMonth()!==base.getMonth()?" out":"")+(day.getTime()===today.getTime()?" today":"");
+      bg.dataset.date=dkey(day);
       bg.style.gridColumn=`${c+1} / ${c+2}`; bg.style.gridRow=`1 / ${trackCount+1}`;
       bg.innerHTML=`<div class="mc-num">${day.getDate()}</div>`;
-      weekRow.appendChild(bg); weekBgCells.push(bg);
+      weekRow.appendChild(bg);
     }
     items.forEach(it=>{
       let chip;
@@ -5768,12 +5855,12 @@ function renderMonthView(host){
           ck.addEventListener("pointerdown",e=>e.stopPropagation());
           ck.onclick=e=>{ e.stopPropagation(); setOccDone(st.src,st.deadline,!calDone(st)); renderTimeline(); };
         }
-        // Same drag as the all-day banner (week/day view already has this for
-        // exactly the same kind of item) — scoped to this week's own 7 day
-        // cells, so a drag only ever moves within its own row. A step spanning
-        // multiple weeks is several chips (one per week, see place() above),
-        // each still reading/writing the one shared task/experiment record.
-        makeAllDayDraggable(chip,st,weekBgCells,weekStart);
+        // Same drag as the all-day banner, over every day of the month grid —
+        // it was once scoped to this week's own seven cells, so no drag could
+        // ever reach another week. A step spanning multiple weeks is several
+        // chips (one per week, see place() above), each still reading/writing
+        // the one shared task/experiment record.
+        makeAllDayDraggable(chip,st,".month-cell");
       } else {
         const {a,e}=it, def=diaryTypeDef(e.type), dc=diaryColors(a,def);
         chip=document.createElement("div"); chip.className="cal-evt";
@@ -5947,7 +6034,6 @@ function renderTimeline(){
   // (packDayTracks — the same packer month view already uses), and only
   // then does anything actually get drawn, as a direct grid child positioned
   // by its own resolved track — not nested inside a per-day cell at all.
-  let alldayCells=[];
   const alldayItems=[]; // {colStart,span,build():HTMLElement}
   weekTasks.forEach(t=>{
     const tStart=new Date(whenDate(t.deadline).setHours(0,0,0,0));
@@ -5981,7 +6067,7 @@ function renderTimeline(){
         ck.addEventListener("pointerdown",e=>e.stopPropagation());
         ck.addEventListener("click",e=>{ e.stopPropagation(); setOccDone(t.src,t.deadline,!calDone(t)); renderTimeline(); });
       }
-      makeAllDayDraggable(chip,t,alldayCells,ws);
+      makeAllDayDraggable(chip,t,".cal-allday-cell");
       return chip;
     }});
   });
@@ -6018,7 +6104,7 @@ function renderTimeline(){
         ck.addEventListener("pointerdown",ev=>ev.stopPropagation());
         ck.addEventListener("click",ev=>{ ev.stopPropagation(); setDiaryDone(e,!e.done); renderTimeline(); });
         makeAllDayDraggable(chip,{kind:"diary",id:e.id,title:`${an.name} — ${def.label}`,
-          deadline:e.date,endDate:null,duration:null,src:{a:an,e}},alldayCells,ws);
+          deadline:e.date,endDate:null,duration:null,src:{a:an,e}},".cal-allday-cell");
         return chip;
       }});
     });
@@ -6044,9 +6130,10 @@ function renderTimeline(){
   alldayGrid.appendChild(alldayToggle);
   for(let d=0;d<NCOL;d++){
     const cell=document.createElement("div"); cell.className="cal-allday-cell"+(alldayCollapsed?" collapsed":"");
+    cell.dataset.date=isoOf(new Date(ws.getFullYear(),ws.getMonth(),ws.getDate()+d));
     cell.style.gridColumn=`${d+2} / ${d+3}`;
     cell.style.gridRow=`2 / ${trackCount+2}`;
-    alldayGrid.appendChild(cell); alldayCells.push(cell);
+    alldayGrid.appendChild(cell);
   }
   if(!alldayCollapsed) alldayItems.forEach(it=>{
     const chip=it.build();
@@ -6131,14 +6218,15 @@ function renderTimeline(){
       let durationMins=t.duration||60;
       if(!t.duration&&t.endDate) durationMins=Math.max((whenDate(t.endDate)-dt)/60000,30);
       const heightPct=(durationMins/60)*100;
-      const{col:colIdx,totalCols}=timedLayout.get(t.id)||{col:0,totalCols:1};
+      const{col:colIdx,totalCols,span:colSpan=1}=timedLayout.get(t.id)||{col:0,totalCols:1};
       const colPct=100/totalCols;
       const evt=document.createElement("div"); evt.className="cal-evt-timed";
       evt.dataset.dragSrc=t.src.id; evt.dataset.dragWhen=t.deadline;
       // identity for the live re-pack during a drag (see packColumns)
       evt.dataset.layKey=t.id; evt.dataset.layDay=String(di);
+      if(calDragKey===t.id) evt.classList.add("cal-evt-ghost");
       if(calFlashKey&&calFlashKey===t.id) evt.classList.add("cal-evt-found");
-      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
+      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
       const timeStr=dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
       const durLabel=durationMins!==60?` (${durationMins}m)`:"";
       const ckHTML=t.kind==="task"
@@ -6175,14 +6263,15 @@ function renderTimeline(){
         durationMins=Math.max((eh*60+em)-(hh*60+mm),15);
       }
       const heightPct=(durationMins/60)*100;
-      const{col:colIdx,totalCols}=timedLayout.get(e.id)||{col:0,totalCols:1};
+      const{col:colIdx,totalCols,span:colSpan=1}=timedLayout.get(e.id)||{col:0,totalCols:1};
       const colPct=100/totalCols;
       const evt=document.createElement("div"); evt.className="cal-evt-timed";
       evt.dataset.dragSrc=e.id; evt.dataset.dragWhen=`${e.date}T${e.time}`;
       evt.dataset.layKey=e.id; evt.dataset.layDay=String(dayIdx);
+      if(calDragKey===e.id) evt.classList.add("cal-evt-ghost");
       if(calFlashKey&&calFlashKey===e.id) evt.classList.add("cal-evt-found");
       const dc=diaryColors(an,def);
-      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct}% - 4px);background:${dc.fill}dd;color:#fff;border-left:3px solid ${dc.fill};${edgeCSS(dc.edge)}z-index:2`;
+      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);background:${dc.fill}dd;color:#fff;border-left:3px solid ${dc.fill};${edgeCSS(dc.edge)}z-index:2`;
       const timeLabel=e.endTime?`${e.time}–${e.endTime}`:e.time;
       // same fillable circle a task chip already has, and the exact e.done flag
       // an animal's own diary list already reads/writes (dg-done) — it was
@@ -6221,8 +6310,11 @@ function renderTimeline(){
   // wrap, so its offsetTop included everything above the calendar as well.
   // Measuring the gap between the two elements' own boxes is right wherever
   // either of them happens to sit.
-  requestAnimationFrame(()=>{
-    if(keepScroll!=null){ wrap.scrollTop=keepScroll; return; }
+  // A kept position goes back synchronously: a page turned mid-drag reads the
+  // fresh grid's cells the moment this returns, and a frame spent scrolled to
+  // midnight in between is both visible and, for that drag, the wrong hour.
+  if(keepScroll!=null) wrap.scrollTop=keepScroll;
+  else requestAnimationFrame(()=>{
     const now=new Date();
     const todayShown=(()=>{ const t0=new Date(); t0.setHours(0,0,0,0);
       const end=new Date(ws); end.setDate(ws.getDate()+NCOL-1);
@@ -6465,6 +6557,9 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
     // fixed-position, which snapped it visibly smaller right as the drag began
     const lifted=liftChipForDrag(evtEl);
     rect=lifted.rect; ghostEl=lifted.ghostEl;
+    // the dragged chip changes column as well as the ones around it; glide
+    // that too, while top (which follows the pointer) stays instant
+    if(mode==="move"){ evtEl.style.transition="left .12s ease-out,width .12s ease-out"; calDragKey=t.id; }
   }
   // Factored out of onMove so the edge-autoscroll loop below can re-run it on
   // every tick it's active, not only on a real pointermove — a finger parked
@@ -6502,9 +6597,9 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
       dropTarget={date:cell.dataset.date,hour:+cell.dataset.hour,minute:snappedMinuteInHour};
       if(mode==="move"){
         const me=repackLive(cell,cr);
-        const cols=me?me.totalCols:1, ci=me?me.col:0;
+        const cols=me?me.totalCols:1, ci=me?me.col:0, sp=me?me.span:1;
         const w=cr.width/cols;
-        place(cr.left+ci*w+2, Math.max(w-4,12));
+        place(cr.left+ci*w+2, Math.max(w*sp-4,12));
       }
       // after place(), so the pill is centred on where the chip actually is
       // this frame rather than trailing a frame behind its column
@@ -6577,7 +6672,7 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
       const p=layout.get(k); if(!p)return;
       const pct=100/p.totalCols;
       el.style.left=`calc(${p.col*pct}% + 2px)`;
-      el.style.width=`calc(${pct}% - 4px)`;
+      el.style.width=`calc(${pct*(p.span||1)}% - 4px)`;
     });
   }
   function repackLive(cell,cr){
@@ -6620,35 +6715,17 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
       return true;
     });
   }
-  // Day view only ever renders one day's cells, so dragging an event toward
-  // its left/right edge had nowhere to go — Google Calendar's own answer is
-  // to turn the page mid-drag once the finger dwells at the edge, same idea
-  // as edge auto-scroll just on the date axis instead of the time one. A
-  // deliberate dwell (not an instant flip) so passing through the edge on
-  // the way to a mid-day drop doesn't turn the page by accident.
-  const DAY_EDGE_HOLD_MS=550;
-  let dayChangeTimer=null, dayChangeSide=null;
-  function edgeDayChangeStep(){
-    if(calMode!=="day"||mode!=="move"||!gridWrap)return;
-    const wrapRect=gridWrap.getBoundingClientRect();
-    const side=lastX<wrapRect.left+EDGE_ZONE_PX?"prev":lastX>wrapRect.right-EDGE_ZONE_PX?"next":null;
-    if(side===dayChangeSide)return;
-    clearTimeout(dayChangeTimer); dayChangeTimer=null; dayChangeSide=side;
-    if(!side)return;
-    dayChangeTimer=setTimeout(()=>{
-      calWeekOffset+=side==="prev"?-1:1;
-      renderTimeline();
-      // renderTimeline() rebuilds .cal-grid-wrap from scratch — evtEl/ghostEl
-      // survive (liftChipForDrag reparented evtEl outside #timeline, and the
-      // old ghost belonged to the day being left behind anyway), but every
-      // reference to the wrap itself has to move to the fresh one, or the
-      // rest of this drag (scroll edge, cell lookups) would keep acting on a
-      // detached node.
-      gridWrap=document.querySelector(".cal-grid-wrap");
-      dayChangeSide=null;
-      updateDragVisual(lastX,lastY);
-    },DAY_EDGE_HOLD_MS);
-  }
+  // Turning the page mid-drag (see makeCalEdgePager). Only Day view used to
+  // do it, so in Week view a timed event could never be moved into another
+  // week at all.
+  const pager=mode==="move"?makeCalEdgePager(()=>{
+    // renderTimeline() rebuilds .cal-grid-wrap from scratch — evtEl survives
+    // (liftChipForDrag reparented it outside #timeline), but every reference
+    // to the wrap itself has to move to the fresh one, or the rest of this
+    // drag (scroll edge, cell lookups) would keep acting on a detached node.
+    gridWrap=document.querySelector(".cal-grid-wrap");
+    updateDragVisual(lastX,lastY);
+  }):null;
   function onMove(e){
     const dx=e.clientX-startX, dy=e.clientY-startY;
     if(!armed){
@@ -6672,7 +6749,7 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
     if(mode==="move"){
       updateDragVisual(e.clientX,e.clientY);
       edgeAutoScrollStep();
-      edgeDayChangeStep();
+      pager?.step(e.clientX);
     } else if(mode==="resize-bottom"){
       // same idea: the edge tracks the finger continuously, onUp snaps the
       // duration that's actually saved. (newDur/60)*52 below was also a
@@ -6700,7 +6777,8 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
   function cleanup(){
     hideReadout();
     clearTimeout(holdTimer);
-    clearTimeout(dayChangeTimer);
+    pager?.cancel();
+    calDragKey=null;
     gridWrap?._scrollLoop?.stop();
     evtEl.classList.remove("holding");
     document.body.classList.remove("cal-dragging");
