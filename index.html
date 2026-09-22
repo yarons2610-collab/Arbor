@@ -8633,6 +8633,8 @@ function ageWeeks(a){ if(!a.dob)return null; const end=a.sacrificed?new Date(a.s
    An animal can go under more than once (a window, then an injection), and
    "days since surgery" only means something once you know which one — it
    used to count from the first and say nothing about any after it. */
+// "2026-09-02" → "02/09/2026": day/month/year, how dates are read in the lab
+function fmtDMY(iso){ const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||"")); return m?`${m[3]}/${m[2]}/${m[1]}`:String(iso||""); }
 function surgeriesOf(a){
   const today=todayDateStr();
   const out=(a.diary||[]).filter(e=>e.type==="surgery"&&e.date)
@@ -9054,11 +9056,11 @@ function animalCard(a){
     const n=surgs.length>1?`<sup>${i+1}</sup>`:"";
     const d=daysSinceDate(a,sg.date);
     const note=sg.e?diaryNoteOf(sg.e.data||{}):"";
-    const tip=`Surgery${surgs.length>1?" "+(i+1)+" of "+surgs.length:""} — ${sg.date}`+
+    const tip=`Surgery${surgs.length>1?" "+(i+1)+" of "+surgs.length:""} — ${fmtDMY(sg.date)}`+
       (sg.planned?` (planned, in ${-d}d)`:` (${d} day${d===1?"":"s"} ${a.sacrificed?"before sacrifice":"ago"})`)+(note?` · ${note}`:"");
     return sg.planned
-      ?`<span style="color:var(--amber)" title="${escAttr(tip)}">🔪${n} ${sg.date} · planned</span>`
-      :`<span style="color:var(--ink-dim)" title="${escAttr(tip)}">🔪${n} ${sg.date} <span style="color:var(--ink-faint)">· ${d}d post-op</span></span>`;
+      ?`<span style="color:var(--amber)" title="${escAttr(tip)}">🔪${n} ${fmtDMY(sg.date)} · planned</span>`
+      :`<span style="color:var(--ink-dim)" title="${escAttr(tip)}">🔪${n} ${fmtDMY(sg.date)} <span style="color:var(--ink-faint)">· ${d}d post-op</span></span>`;
   }).join("");
   const expanded=animalExpanded.has(a.id);
   card.innerHTML=`
@@ -9074,8 +9076,8 @@ function animalCard(a){
       </span>
     </div>
     <div style="display:flex;gap:8px;margin-top:8px;font-family:var(--mono);font-size:10.5px;flex-wrap:wrap;align-items:center">
-      <button class="adc-btn" data-field="dob"       title="Set date of birth">${a.dob?"🐭 "+a.dob:"🐭 born?"}</button>
-      <button class="adc-btn" data-field="sacrificed" title="Set sacrifice date" style="${a.sacrificed?"":"color:var(--ink-faint)"}">${a.sacrificed?"✝ "+a.sacrificed:"✝ sacrificed?"}</button>
+      <button class="adc-btn" data-field="dob"       title="Set date of birth">${a.dob?"🐭 "+fmtDMY(a.dob):"🐭 born?"}</button>
+      <button class="adc-btn" data-field="sacrificed" title="Set sacrifice date" style="${a.sacrificed?"":"color:var(--ink-faint)"}">${a.sacrificed?"✝ "+fmtDMY(a.sacrificed):"✝ sacrificed?"}</button>
       ${surgHTML}
       ${a.surgeryDetail?`<span style="color:var(--cyan)">${esc(surgerySummary(a))}</span>`:(a.targets?`<span style="color:var(--ink-dim)">→ ${esc(a.targets)}</span>`:"")}
     </div>
@@ -11538,8 +11540,8 @@ const EXCEL_STYLES=`<Styles>`+
   `<Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Top"/><Font ss:FontName="Calibri" ss:Size="11"/></Style>`+
   `<Style ss:ID="hdr"><Alignment ss:Vertical="Center"/><Font ss:FontName="Calibri" ss:Size="11" ss:Bold="1" ss:Color="#FFFFFF"/>`+
     `<Interior ss:Color="#2F5496" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>`+
-  `<Style ss:ID="d"><Alignment ss:Horizontal="Left" ss:Vertical="Top"/><NumberFormat ss:Format="yyyy\\-mm\\-dd"/></Style>`+
-  `<Style ss:ID="dt"><Alignment ss:Horizontal="Left" ss:Vertical="Top"/><NumberFormat ss:Format="yyyy\\-mm\\-dd\\ hh:mm"/></Style>`+
+  `<Style ss:ID="d"><Alignment ss:Horizontal="Left" ss:Vertical="Top"/><NumberFormat ss:Format="dd\\/mm\\/yyyy"/></Style>`+
+  `<Style ss:ID="dt"><Alignment ss:Horizontal="Left" ss:Vertical="Top"/><NumberFormat ss:Format="dd\\/mm\\/yyyy\\ hh:mm"/></Style>`+
   `<Style ss:ID="w"><Alignment ss:Vertical="Top" ss:WrapText="1"/></Style>`+
   `</Styles>`;
 function buildExcelXML(sheets){
@@ -11586,7 +11588,7 @@ function exportFullDatabaseExcel(){
       return (ex.title||"(unnamed)")+(g?` (${g.g.name||"group"})`:""); }).join(", ");
     return [a.name||"",a.tag||"",a.cage||"",a.sex||"",a.strain||"",STATUS[a.termination]||a.termination||"",
       a.dob||"",ageWeeks(a)??"",a.sacrificed||"",
-      surg.map(x=>x.date+(x.planned?" (planned)":"")).join(", "),
+      surg.map(x=>fmtDMY(x.date)+(x.planned?" (planned)":"")).join(", "),
       last?daysSinceDate(a,last.date):"", lw??"",
       yes(a.surgeryDetail&&a.surgeryDetail.headpost),yes(a.surgeryDetail&&a.surgeryDetail.window),
       where,richTextPlain(richBodyHTML(a.comments,a.commentsRich))];
