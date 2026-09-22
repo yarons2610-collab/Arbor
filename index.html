@@ -9199,10 +9199,10 @@ function openEventLogModal(presetIds){
   };
   document.getElementById("el_xlsx").onclick=()=>{
     const evs=events(); if(!evs.length){ toast("Nothing to export"); return; }
-    const rows=[["Date","Time","Animal","Tag","Type","Summary","Done"]];
+    const rows=[["Date","Time","End time","Animal","Tag","Type","Details","Done"]];
     evs.forEach(({a,e})=>{
       const def=diaryTypeDef(e.type);
-      rows.push([e.date, e.time?`${e.time}${e.endTime?"–"+e.endTime:""}`:"", a.name, a.tag||"", def.label, summaryNoTime(e,a), e.done?"Yes":"No"]);
+      rows.push([e.date, e.time||"", e.endTime||"", a.name, a.tag||"", def.label, summaryNoTime(e,a), e.done?"Yes":""]);
     });
     downloadExcel("arbor_event_log.xls",[{name:"Events",rows}]);
     toast(`Exported ${evs.length} events`);
@@ -11448,20 +11448,57 @@ function download(name,content,mime){ window.arbor.saveFile(name,content,mime).c
    current Office/Excel for Windows). Genuine multi-sheet workbooks, hand-buildable as a
    string like the .ics export already is — no vendored xlsx library required. */
 function xmlEsc(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-function excelCellXML(v){
-  if(v==null||v==="") return "<Cell/>";
-  if(typeof v==="number"&&isFinite(v)) return `<Cell><Data ss:Type="Number">${v}</Data></Cell>`;
-  return `<Cell><Data ss:Type="String">${xmlEsc(v)}</Data></Cell>`;
+// A cell holding exactly an ISO date (or date+time) goes in as a real Excel
+// date, so the column sorts and filters as dates rather than as text. Only a
+// date that actually exists — Excel rejects the whole file over a Feb 30.
+const XL_DATE=/^\d{4}-\d{2}-\d{2}$/, XL_DT=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/;
+function xlRealDate(iso){ const d=new Date(iso.slice(0,10)+"T00:00:00");
+  return !isNaN(d)&&d.getFullYear()>=1900&&todayDateStrOf(d)===iso.slice(0,10); }
+function todayDateStrOf(d){ const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
+function excelCellXML(v,style){
+  const st=style?` ss:StyleID="${style}"`:"";
+  if(v==null||v==="") return `<Cell${st}/>`;
+  if(typeof v==="number"&&isFinite(v)) return `<Cell${st}><Data ss:Type="Number">${v}</Data></Cell>`;
+  if(!style&&typeof v==="string"&&xlRealDate(v)){
+    if(XL_DATE.test(v)) return `<Cell ss:StyleID="d"><Data ss:Type="DateTime">${v}T00:00:00.000</Data></Cell>`;
+    if(XL_DT.test(v)) return `<Cell ss:StyleID="dt"><Data ss:Type="DateTime">${v.slice(0,16)}:00.000</Data></Cell>`;
+  }
+  return `<Cell${st}><Data ss:Type="String">${xmlEsc(v)}</Data></Cell>`;
 }
+/* The first row is the header: bold on a coloured band, frozen so it stays
+   put while scrolling, with filter buttons over every column. Columns are
+   sized to what they hold, and a column of long text wraps at a readable
+   width instead of running off to the right or being cut to nothing. */
 function excelSheetXML(sheet){
-  const rows=sheet.rows.map(r=>`<Row>${r.map(excelCellXML).join("")}</Row>`).join("");
+  const rows=sheet.rows, ncol=Math.max(0,...rows.map(r=>r.length));
+  const len=v=>v==null?0:String(v).split("\n").reduce((m,l)=>Math.max(m,l.length),0);
+  const cols=[];
+  for(let c=0;c<ncol;c++){
+    let m=0; rows.forEach((r,i)=>{ m=Math.max(m,len(r[c])+(i===0?2:0)); });
+    const wrap=m>48;
+    cols.push({w:wrap?300:Math.min(Math.max(m*6.4+16,48),300),wrap});
+  }
+  const colXML=cols.map(c=>`<Column ss:Width="${Math.round(c.w)}"/>`).join("");
+  const body=rows.map((r,i)=>`<Row>${r.map((v,c)=>excelCellXML(v,
+    i===0?"hdr":(cols[c].wrap&&typeof v==="string"&&!xlRealDate(v)?"w":null))).join("")}</Row>`).join("");
   const safeName=xmlEsc(String(sheet.name).replace(/[\[\]:*?/\\]/g,"_").slice(0,31)); // Excel sheet-name rules
-  return `<Worksheet ss:Name="${safeName}"><Table>${rows}</Table></Worksheet>`;
+  const opts=`<WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><FreezePanes/><FrozenNoSplit/>`+
+    `<SplitHorizontal>1</SplitHorizontal><TopRowBottomPane>1</TopRowBottomPane><ActivePane>2</ActivePane></WorksheetOptions>`;
+  const filter=(rows.length>1&&ncol)?`<AutoFilter x:Range="R1C1:R${rows.length}C${ncol}" xmlns="urn:schemas-microsoft-com:office:excel"/>`:"";
+  return `<Worksheet ss:Name="${safeName}"><Table>${colXML}${body}</Table>${opts}${filter}</Worksheet>`;
 }
+const EXCEL_STYLES=`<Styles>`+
+  `<Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Top"/><Font ss:FontName="Calibri" ss:Size="11"/></Style>`+
+  `<Style ss:ID="hdr"><Alignment ss:Vertical="Center"/><Font ss:FontName="Calibri" ss:Size="11" ss:Bold="1" ss:Color="#FFFFFF"/>`+
+    `<Interior ss:Color="#2F5496" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders></Style>`+
+  `<Style ss:ID="d"><Alignment ss:Horizontal="Left" ss:Vertical="Top"/><NumberFormat ss:Format="yyyy\\-mm\\-dd"/></Style>`+
+  `<Style ss:ID="dt"><Alignment ss:Horizontal="Left" ss:Vertical="Top"/><NumberFormat ss:Format="yyyy\\-mm\\-dd\\ hh:mm"/></Style>`+
+  `<Style ss:ID="w"><Alignment ss:Vertical="Top" ss:WrapText="1"/></Style>`+
+  `</Styles>`;
 function buildExcelXML(sheets){
   return `<?xml version="1.0"?>\r\n<?mso-application progid="Excel.Sheet"?>\r\n`+
     `<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\r\n`+
-    sheets.map(excelSheetXML).join("\r\n")+`\r\n</Workbook>`;
+    EXCEL_STYLES+"\r\n"+sheets.map(excelSheetXML).join("\r\n")+`\r\n</Workbook>`;
 }
 // sheets: [{name, rows:[[cell,...],...]}, ...] — first row of each is treated as the header by convention, not enforced
 function downloadExcel(filename,sheets){ download(filename,buildExcelXML(sheets),"application/vnd.ms-excel"); }
@@ -11481,107 +11518,90 @@ function downloadExcel(filename,sheets){ download(filename,buildExcelXML(sheets)
 function exportFullDatabaseExcel(){
   const plain=h=>richTextPlain(h||"");
   const attachedTo=(kind,id)=>attachLabel(attachmentsOf({kind,id}));
-  const animalsRows=[["ID","Name","Tag","Cage","Sex","Strain","Born","Sacrificed","Status","Head-post","Cranial window","Experiments","Comments"]];
-  DB.animals.forEach(a=>animalsRows.push([a.id,a.name,a.tag||"",a.cage||"",a.sex||"",a.strain||"",a.dob||"",a.sacrificed||"",
-    a.termination||"",a.surgeryDetail&&a.surgeryDetail.headpost?"Yes":"No",a.surgeryDetail&&a.surgeryDetail.window?"Yes":"No",
-    animalSteps(a.id).map(ex=>ex.title||"(unnamed)").join(", "),
-    richTextPlain(richBodyHTML(a.comments,a.commentsRich))]));
+  // "M2" before "M10", case ignored — the order a person would file them in
+  const byText=(a,b)=>String(a??"").localeCompare(String(b??""),undefined,{numeric:true,sensitivity:"base"});
+  const sortRows=(rows,...keys)=>rows.sort((x,y)=>{ for(const k of keys){ const c=byText(x[k],y[k]); if(c)return c; } return 0; });
+  // a stored timestamp as "YYYY-MM-DDTHH:MM", which the sheet turns into a real date
+  const stamp=ms=>{ if(!ms)return ""; const d=new Date(ms), p=n=>String(n).padStart(2,"0");
+    return `${todayDateStrOf(d)}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+  // coordinates and volumes are typed as text in the editor; numbers here
+  const num=v=>(v===""||v==null)?"":(isFinite(+v)?+v:v);
+  const yes=b=>b?"Yes":"";
+  const STATUS={alive:"Alive",sacrificed:"Sacrificed",early_death:"Early death",excluded:"Excluded"};
+  const noTime=(e,a)=>{ const s=diaryEntrySummary(e,a); if(!e.time)return s;
+    const pre=`${e.time}${e.endTime?"–"+e.endTime:""} · `; return s.startsWith(pre)?s.slice(pre.length):s; };
+  const sheet=(name,header,rows,...sortKeys)=>({name,rows:[header,...sortRows(rows,...sortKeys)]});
 
-  // Done and Repeats earn their columns now that entries can be ticked off and
-  // can run as an open-ended series: without them a sheet of a repeating
-  // entry's occurrences is a list of identical-looking rows with no way to
-  // tell which have actually happened.
-  const diaryRows=[["Animal","Tag","Date","Time","End time","Type","Summary","Done","Repeats","Logged"]];
-  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    diaryRows.push([a.name,a.tag||"",e.date,e.time||"",e.endTime||"",diaryTypeDef(e.type).label,diaryEntrySummary(e,a),
-      e.done?"Yes":"No", e.seriesRule?repeatLabel(e.seriesRule,e.date)||"yes":"",
-      e.created?new Date(e.created).toLocaleString():""]);
-  }));
+  const animals=DB.animals.map(a=>{
+    const surg=surgeriesOf(a), done=surg.filter(x=>!x.planned), last=done[done.length-1];
+    const lw=latestWeight(a);
+    const where=animalSteps(a.id).map(ex=>{ const g=animalGroups(a.id).find(x=>x.st.id===ex.id);
+      return (ex.title||"(unnamed)")+(g?` (${g.g.name||"group"})`:""); }).join(", ");
+    return [a.name||"",a.tag||"",a.cage||"",a.sex||"",a.strain||"",STATUS[a.termination]||a.termination||"",
+      a.dob||"",ageWeeks(a)??"",a.sacrificed||"",
+      surg.map(x=>x.date+(x.planned?" (planned)":"")).join(", "),
+      last?daysSinceDate(a,last.date):"", lw??"",
+      yes(a.surgeryDetail&&a.surgeryDetail.headpost),yes(a.surgeryDetail&&a.surgeryDetail.window),
+      where,richTextPlain(richBodyHTML(a.comments,a.commentsRich))];
+  });
 
-  const injRows=[["Animal","#","Depth","Virus","Type","Site region","AP","ML","DV","Volume (nl)","Target region","Target AP","Target ML","Target DV"]];
-  DB.animals.forEach(a=>(a.surgeryDetail&&a.surgeryDetail.injections||[]).forEach((inj,i)=>{
+  const diary=[];
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>diary.push([a.name||"",a.tag||"",e.date||"",e.time||"",e.endTime||"",
+    diaryTypeDef(e.type).label,noTime(e,a),yes(e.done),e.seriesRule?repeatLabel(e.seriesRule,e.date)||"Yes":"",stamp(e.created)])));
+
+  const inj=[];
+  DB.animals.forEach(a=>(a.surgeryDetail&&a.surgeryDetail.injections||[]).forEach((x,i)=>{
     // one row per depth — the primary dv/volume plus any extras added in the
-    // editor (Row C2), so a multi-depth injection doesn't silently lose data
-    // in the export the way a single dv/volume pair would
-    const deposits=[{dv:inj.dv,volume:inj.volume},...(inj.depths||[])];
-    deposits.forEach((d,di)=>{
-      injRows.push([a.name,i+1,di+1,inj.virus||"",inj.type||"",inj.siteRegion||"",inj.ap,inj.ml,d.dv,d.volume,inj.partnerRegion||"",inj.pAp,inj.pMl,inj.pDv]);
-    });
+    // editor, so a multi-depth injection doesn't lose data
+    [{dv:x.dv,volume:x.volume},...(x.depths||[])].forEach((d,di)=>inj.push([a.name||"",i+1,di+1,x.virus||"",x.type||"",
+      x.siteRegion||"",num(x.ap),num(x.ml),num(d.dv),num(d.volume),x.partnerRegion||"",num(x.pAp),num(x.pMl),num(x.pDv)]));
   }));
 
-  // The Timeline: everything on the calendar. This is what "Tasks" used to be
-  // assumed to mean and never was — that sheet reads DB.tasks, the old outline,
-  // and is now named for what it actually is (below).
-  const timelineRows=[["ID","Kind","Title","When","End","Duration (min)","Repeats","Experiment","Project","Materials","Done occurrences"]];
-  taskList().forEach(t=>{
+  const timeline=taskList().map(t=>{
     const ex=t.experimentId?expById(t.experimentId):null;
     const pr=t.projectId?projById(t.projectId):(ex&&ex.projectId?projById(ex.projectId):null);
-    timelineRows.push([t.id,t.isEvent?"Event":"Task",t.title||"",t.when||"",t.endDate||"",t.duration||"",
-      repeatLabel(t.repeat,t.when)||"",ex?(ex.title||"(unnamed)"):"",pr?(pr.name||"(unnamed)"):"",
-      (t.materials||[]).join(", "),(t.doneOccurrences||[]).length]);
+    return [t.when||"",t.endDate||"",t.duration||"",t.isEvent?"Event":"Task",t.title||"",repeatLabel(t.repeat,t.when)||"",
+      pr?(pr.name||"(unnamed)"):"",ex?(ex.title||"(unnamed)"):"",(t.materials||[]).join(", "),
+      (t.doneOccurrences||[]).length||"",t.notes||""];
   });
 
-  const expRows=[["ID","Title","Project","Status","Question","Deadline","End","Animals","Notes"]];
-  DB.experiments.forEach(ex=>{
-    const pr=ex.projectId?projById(ex.projectId):null;
-    expRows.push([ex.id,ex.title||"",pr?(pr.name||"(unnamed)"):"",ex.status||"",ex.question||"",
-      ex.deadline||"",ex.endDate||"",
-      animalsForStep(ex).map(a=>a.name).join(", "),   // animals hang off ex.links, not an ex.animals array
+  const exps=DB.experiments.map(ex=>{ const pr=ex.projectId?projById(ex.projectId):null;
+    return [pr?(pr.name||"(unnamed)"):"",ex.title||"",ex.status||"",ex.question||"",ex.deadline||"",ex.endDate||"",
+      animalsForStep(ex).map(a=>a.name).sort(byText).join(", "),plain(ex.notes)]; });
 
-      plain(ex.notes)]);
-  });
+  const projs=(DB.projects||[]).map(pr=>[pr.name||"",pr.question||"",
+    DB.experiments.filter(ex=>ex.projectId===pr.id).map(ex=>ex.title||"(unnamed)").sort(byText).join(", "),plain(pr.notes)]);
 
-  const projRows=[["ID","Name","Question","Experiments","Notes"]];
-  (DB.projects||[]).forEach(pr=>projRows.push([pr.id,pr.name||"",pr.question||"",
-    DB.experiments.filter(ex=>ex.projectId===pr.id).map(ex=>ex.title||"(unnamed)").join(", "),plain(pr.notes)]));
+  const notes=(DB.notes||[]).map(n=>[n.title||"",attachedTo("note",n.id),stamp(n.created),stamp(n.updated),plain(richBodyHTML(n.body,n.rich))]);
 
-  const notesRows=[["Title","Attached to","Created","Updated","Body"]];
-  (DB.notes||[]).forEach(n=>notesRows.push([n.title||"",attachedTo("note",n.id),
-    n.created?new Date(n.created).toLocaleString():"",n.updated?new Date(n.updated).toLocaleString():"",
-    plain(richBodyHTML(n.body,n.rich))]));
+  const lib=[...(DB.readings||[]).map(r=>["Paper",r,"reading"]),...(DB.protocols||[]).map(r=>["Protocol",r,"protocol"]),
+    ...(DB.other||[]).map(r=>["Other",r,"other"])].map(([kind,r,k])=>[kind,r.title||"",r.authors||r.writtenBy||"",
+      num(r.year)||r.date||"",r.journal||"",attachedTo(k,r.id),r.link||"",r.fileName||"",plain(r.notes)]);
 
-  const libRows=[["Kind","Title","Authors","Year","Status","Track","Tag","Attached to","Notes"]];
-  [...(DB.readings||[]).map(r=>["Literature",r]),...(DB.protocols||[]).map(r=>["Protocol",r]),
-   ...(DB.other||[]).map(r=>["Other",r])].forEach(([kind,r])=>{
-    libRows.push([kind,r.title||"",r.authors||"",r.year||"",r.status||"",r.track||"",r.tag||"",
-      attachedTo(kind==="Literature"?"reading":kind==="Protocol"?"protocol":"other",r.id),plain(r.notes)]);
-  });
-
-  const tasksRows=[["ID","Name","Soma","Status","Start","End","Notes"]];
-  DB.tasks.forEach(t=>tasksRows.push([t.id,t.title||"",(domById(t.domainId)||{}).name||"",t.status||"",t.deadline||"",t.endDate||"",t.notes||""]));
-
-  const tagsRows=[["Name","Color"]];
-  (DB.tags||[]).forEach(c=>tagsRows.push([c.name,c.color||""]));
-
-  const virusRows=[["Name","Type","Promoter","Titer","Source","Note","Backup tubes","Aliquoted tubes","Box #","Box color","Box location","Need to order?"]];
-  activeViruses().forEach(v=>virusRows.push([v.name,v.type||"",v.promoter||"",v.titer||"",v.source||"",v.note||"",
-    v.backupTubes,v.aliquotTubes,v.boxNumber||"",v.boxColor||"",v.boxLocation||"",v.needOrder?"Yes":""]));
-
-  const siteRows=[["Name","AP","ML","DV"]];
-  (DB.config.siteLib||[]).forEach(s=>siteRows.push([s.name,s.ap,s.ml,s.dv]));
-
-  const taskLibRows=[["Task name","Parameters"]];
-  (DB.config.taskLib||[]).forEach(t=>taskLibRows.push([t.name,(t.params||[]).map(p=>p.label).join(", ")]));
-
-  const invRows=[["Material","Status","Note"]];
-  Object.keys(DB.inventory||{}).forEach(name=>invRows.push([name,(DB.inventory[name]||{}).status||"",(DB.inventory[name]||{}).note||""]));
-
-  downloadExcel("arbor_workspace.xls",[
-    {name:"Animals",rows:animalsRows},
-    {name:"Diary entries",rows:diaryRows},
-    {name:"Injections",rows:injRows},
-    {name:"Timeline",rows:timelineRows},
-    {name:"Experiments",rows:expRows},
-    {name:"Projects",rows:projRows},
-    {name:"Notes",rows:notesRows},
-    {name:"Library",rows:libRows},
-    {name:"Outline tasks",rows:tasksRows},
-    {name:"Tags",rows:tagsRows},
-    {name:"Virus library",rows:virusRows},
-    {name:"Site library",rows:siteRows},
-    {name:"Behavioral tasks",rows:taskLibRows},
-    {name:"Inventory",rows:invRows},
-  ]);
+  const sheets=[
+    sheet("Animals",["Name","Tag","Cage","Sex","Strain","Status","Born","Age (weeks)","Sacrificed","Surgeries",
+      "Days since last surgery","Latest weight (g)","Head-post","Cranial window","Experiments (group)","Comments"],animals,0),
+    sheet("Diary entries",["Animal","Tag","Date","Time","End time","Type","Details","Done","Repeats","Logged"],diary,0,2,3),
+    sheet("Injections",["Animal","Injection #","Depth #","Virus","Virus type","Site region","AP","ML","DV","Volume (nl)",
+      "Target region","Target AP","Target ML","Target DV"],inj,0,1,2),
+    sheet("Timeline",["When","Until","Duration (min)","Kind","Title","Repeats","Project","Experiment","Materials",
+      "Occurrences done","Notes"],timeline,0,4),
+    sheet("Experiments",["Project","Title","Status","Question","Deadline","End","Animals","Notes"],exps,0,1),
+    sheet("Projects",["Name","Question","Experiments","Notes"],projs,0),
+    sheet("Notes",["Title","Attached to","Created","Updated","Text"],notes,0),
+    sheet("Library",["Kind","Title","Authors / written by","Year / date","Journal","Attached to","Link","File","Notes"],lib,0,1),
+    sheet("Tags",["Name","Colour"],(DB.tags||[]).map(c=>[c.name,c.color||""]),0),
+    sheet("Virus library",["Name","Type","Promoter","Titer","Source","Note","Backup tubes","Aliquoted tubes","Box #",
+      "Box colour","Box location","Need to order"],activeViruses().map(v=>[v.name,v.type||"",v.promoter||"",v.titer||"",
+      v.source||"",v.note||"",v.backupTubes??"",v.aliquotTubes??"",v.boxNumber||"",v.boxColor||"",v.boxLocation||"",yes(v.needOrder)]),0),
+    sheet("Site library",["Name","AP","ML","DV"],(DB.config.siteLib||[]).map(x=>[x.name,num(x.ap),num(x.ml),num(x.dv)]),0),
+    sheet("Behavioral tasks",["Task","Parameters"],(DB.config.taskLib||[]).map(t=>[t.name,(t.params||[]).map(p=>p.label).join(", ")]),0),
+    sheet("Inventory",["Material","Status","Note"],Object.keys(DB.inventory||{}).map(k=>[k,(DB.inventory[k]||{}).status||"",(DB.inventory[k]||{}).note||""]),0),
+    // the legacy outline, last — the Timeline above is the schedule
+    sheet("Outline tasks",["Name","Soma","Status","Start","End","Notes"],DB.tasks.map(t=>[t.title||"",(domById(t.domainId)||{}).name||"",
+      t.status||"",t.deadline||"",t.endDate||"",t.notes||""]),0),
+  ].filter(sh=>sh.rows.length>1);   // a sheet with nothing in it is only noise
+  downloadExcel("arbor_workspace.xls",sheets.length?sheets:[{name:"Animals",rows:[["(empty workspace)"]]}]);
 }
 window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); });
 (async function(){
