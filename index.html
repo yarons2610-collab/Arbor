@@ -515,6 +515,22 @@
   .cal-evt-ck{display:inline-block;vertical-align:-1px;width:9px;height:9px;border-radius:50%;
     border:1.3px solid currentColor;background:transparent;margin-right:4px;padding:0;cursor:pointer}
   .cal-evt-ck.on{background:currentColor}
+  /* The circle is 9px — fine for a mouse, a coin-toss for a finger. It carries
+     an invisible hit area past its own edge (clipped only by the chip), and on
+     a touch screen grows itself and that area further, so a tap near it counts.
+     The area stays short on the right, where the title starts. */
+  .cal-evt-ck{position:relative}
+  .cal-evt-ck::after{content:"";position:absolute;inset:-6px -4px -6px -6px}
+  @media (pointer:coarse){
+    .cal-evt-ck{width:13px;height:13px;vertical-align:-2px;margin-right:5px}
+    .cal-evt-ck::after{inset:-12px -6px -12px -12px}
+    .dg-entry .step-dot{width:24px;height:24px}
+  }
+  /* "Mark as done" inside an editor: the whole width of the form, so on a
+     phone it is the easiest thing on the screen to hit rather than the hardest */
+  .done-toggle{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin:0 0 14px;padding:10px 12px;
+    border-radius:9px;border:1.5px solid var(--line2);background:var(--bg2);color:var(--ink-dim);font-size:13px;font-weight:600;cursor:pointer}
+  .done-toggle.on{border-color:var(--gcamp);color:var(--gcamp);background:rgba(84,224,138,.1)}
   .cal-evt-evicon{font-size:9px;margin-right:2px}
   .cal-evt .es{font-family:var(--mono);font-size:9px;opacity:.8}
   /* A light rim, not a dark one. Two blocks of similar colour against each
@@ -4272,8 +4288,14 @@ function taskEditor(t,after,occWhen,occEndDate){
     valueOf:(kind,id)=>kind+":"+id,
     selected:taskTargetValue(t)
   });
+  // Which occurrence a tick here belongs to: the one this was opened on, or a
+  // one-off task's own time. A repeating task opened without an occurrence (from
+  // a project's list) has no single one to tick, so it gets no button.
+  const doneKey=((!wasRecurring||occWhen!=null)&&t.when)?t.when:null;
+  const doneLabel=on=>on?"✓ Done — tap to undo":(wasRecurring?"○ Mark this occurrence done":"○ Mark as done");
   modal(`<h3>${t.isEvent?"Event":"Task"}</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
+    ${doneKey?`<button type="button" id="tk_done" class="done-toggle${occDone(t,doneKey)?" on":""}">${doneLabel(occDone(t,doneKey))}</button>`:""}
     <div class="drow">
       <div class="fld" style="flex:1"><label>When</label>
         <button type="button" id="tk_start" class="datebtn ${t.when?"":"datebtn-empty"}">${t.when?fmtWhenFull(t.when):"📅 start"}</button></div>
@@ -4440,7 +4462,24 @@ function taskEditor(t,after,occWhen,occEndDate){
   // exactly how it stood before any of these handlers touched it, so the
   // detach/split/exclude below starts from a clean, untouched base.
   const revert=()=>{ for(const k of Object.keys(t))delete t[k]; Object.assign(t,before); };
+  // Same tick the chip's circle sets, applied at once like the circle — closing
+  // with ✕ keeps it. revert() (a "this"/"following" answer below) restores the
+  // snapshot taken when this opened, so the tick is carried into that too.
+  const doneBtn=document.getElementById("tk_done");
+  if(doneBtn) doneBtn.onclick=()=>{
+    const on=!occDone(t,doneKey);
+    setOccDone(t,doneKey,on);
+    before.doneOccurrences=[...(t.doneOccurrences||[])];
+    doneBtn.classList.toggle("on",on); doneBtn.textContent=doneLabel(on);
+    render();
+  };
   document.getElementById("tk_save").onclick=()=>{
+    // a one-off task moved to a new time by hand is still the same task — its
+    // tick moves with it instead of staying behind on the old time
+    if(!wasRecurring&&doneKey&&t.when!==doneKey&&occDone(t,doneKey)){
+      t.doneOccurrences=(t.doneOccurrences||[]).filter(w=>w!==doneKey);
+      if(t.when)t.doneOccurrences.push(t.when);
+    }
     t.title=document.getElementById("tk_name").value;
     t.notes=document.getElementById("tk_notes").value.trim();
     persist();
@@ -9281,7 +9320,9 @@ function paintDiary(container,a,opts){
       <label style="margin-top:4px;display:flex;align-items:center;gap:5px"><input type="checkbox" class="dg-f-savelib" style="width:auto"> save task name to library</label>`
       : renderTypeFields(type,d);
     const dtVal=(entryDate||selDate)+(entryTime?"T"+entryTime:"");
+    const isDone=editingId?!!(a.diary.find(e=>e.id===editingId)||{}).done:false;
     return `<div class="dg-form">
+      <button type="button" class="done-toggle dg-f-done${isDone?" on":""}">${isDone?"✓ Done":"○ Mark as done"}</button>
       <div class="dg-row">
         <div><label>Date &amp; start time</label>
           <button type="button" class="datebtn dg-f-datetime ${dtVal?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${dtVal?fmtWhenFull(dtVal):"set date"}</button>
@@ -9303,6 +9344,9 @@ function paintDiary(container,a,opts){
     // entry and nothing else — Cancel/Save should close it, not fall back to
     // the calendar/list view underneath, which is what the animal detail
     // panel's own inline widget (no modal, opts.closeOnDone unset) wants instead.
+    // held on the form like every other field, and written on Save
+    const doneTgl=host.querySelector(".dg-f-done");
+    if(doneTgl) doneTgl.onclick=()=>{ const on=doneTgl.classList.toggle("on"); doneTgl.textContent=on?"✓ Done":"○ Mark as done"; };
     host.querySelector(".dg-cancel").onclick=()=>{
       formType=null; editingId=null;
       if(opts.closeOnDone){ closeModal(); return; }
@@ -9407,6 +9451,7 @@ function paintDiary(container,a,opts){
         });
       }
       data.note=host.querySelector(".dg-f-note").value.trim();
+      const doneVal=!!host.querySelector(".dg-f-done")?.classList.contains("on");
       const rep=readDiaryRepeat(host,"dg");
       // everything after the edit is applied, in one place, so the paths that
       // have to stop and ask a question first can all end the same way
@@ -9432,7 +9477,7 @@ function paintDiary(container,a,opts){
            rather than a rule (see the series notes above). */
         const wasTime=editing.time||"", wasEnd=editing.endTime||"";
         editing.data=data; editing.date=entryDate; editing.time=entryTime;
-        editing.endTime=entryEndTime; editing.edited=Date.now();
+        editing.endTime=entryEndTime; editing.edited=Date.now(); editing.done=doneVal;
         // A repeat can be set, changed or cleared on an entry that already
         // exists, not only on a new one. Every occurrence is a real record, so
         // "change the rule" means rewriting the ones after this — never the
@@ -9475,6 +9520,8 @@ function paintDiary(container,a,opts){
       }
       else {
         const n=pushDiarySeries(a,{type,date:entryDate,time:entryTime,endTime:entryEndTime,data},rep);
+        // the tick is for the entry being logged, not for a whole new series
+        if(doneVal){ const first=a.diary[a.diary.length-n]; if(first) first.done=true; }
         if(n>1) toast(`${n} ${diaryTypeDef(type).label} entries added`);
       }
       finishSave();
