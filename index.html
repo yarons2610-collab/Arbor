@@ -1167,6 +1167,8 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   calMode:"week",
   // How an experiment's combined task+diary list is ordered and clustered.
   expTaskSort:"alpha", expTaskGroup:"none", notesSort:"updated_desc",
+  // Notes list filter: search text, and the experiments/projects picked (any of them).
+  notesFilter:{q:"",links:[]},
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
@@ -8057,11 +8059,47 @@ const NOTES_SORTS={
   created_asc:(a,b)=>(a.created||0)-(b.created||0),
   title:(a,b)=>String(a.title||"").localeCompare(String(b.title||"")),
 };
+/* Which notes are listed: those belonging to ANY of the picked experiments or
+   projects — a project counts its own experiments' notes as well — narrowed by
+   the search text. A note carries no owner field of its own; the tie lives on
+   the experiment's or project's links, read through attachmentsOf exactly as
+   the Library's own filter reads it. Kept in config beside the sort, and
+   always replaced rather than mutated, since a fresh config shares its
+   default object with DEFAULT_CONFIG. */
+function notesFilter(){
+  const f=DB.config.notesFilter||{};
+  const links=(Array.isArray(f.links)?f.links:[])
+    .filter(v=>v==="none"||!!expOrProjById(v.slice(2)));   // an owner since deleted just drops out
+  return {q:f.q||"",links};
+}
+function setNotesFilter(patch){ DB.config.notesFilter={...notesFilter(),...patch}; persist(); renderNotes(); }
+function noteInFilter(n,{q,links}){
+  if(links.length){
+    const owners=attachmentsOf({kind:"note",id:n.id});
+    const hit=links.some(v=>{
+      if(v==="none")return !owners.length;
+      const id=v.slice(2);
+      return owners.some(o=>o.id===id||(v[0]==="p"&&o.projectId===id));
+    });
+    if(!hit)return false;
+  }
+  const t=q.trim().toLowerCase();
+  return !t||(n.title||"").toLowerCase().includes(t)||noteBodyPreview(n).toLowerCase().includes(t);
+}
 function renderNotes(){
   const host=document.getElementById("notes"); host.innerHTML="";
+  const nf=notesFilter();
   const top=document.createElement("div");
-  top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap";
+  top.style.cssText="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap";
   top.innerHTML=`
+    <input type="text" id="n_search" value="${escAttr(nf.q)}" placeholder="Search notes" dir="auto"
+      style="flex:1 1 160px;max-width:280px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
+    <select id="n_belongs" class="af-sel" style="max-width:240px">
+      <option value="">＋ Experiment or project…</option>
+      ${nf.links.includes("none")?"":`<option value="none">Not linked to anything</option>`}
+      ${partOfOptionsHTML({valueOf:(k,id)=>k+":"+id,selected:null,
+        exclude:nf.links.filter(v=>v!=="none").map(v=>v.slice(2))})}
+    </select>
     <div class="af-sortbar"><span class="af-label af-sort">↕ Sort</span>
       <select id="n_sort" class="af-sel af-sort">${[
         ["updated_desc","Last updated (newest)"],["updated_asc","Last updated (oldest)"],
@@ -8072,16 +8110,51 @@ function renderNotes(){
   host.appendChild(top);
   top.querySelector("#addNote").onclick=()=>noteModal();
   top.querySelector("#n_sort").addEventListener("change",e=>{ DB.config.notesSort=e.target.value; persist(); renderNotes(); });
+  top.querySelector("#n_belongs").addEventListener("change",e=>{
+    const v=e.target.value; if(!v)return;
+    setNotesFilter({links:[...nf.links,v]});
+  });
+  top.querySelector("#n_search").addEventListener("input",e=>{
+    const pos=e.target.selectionStart;
+    setNotesFilter({q:e.target.value});
+    const ni=document.getElementById("n_search");
+    if(ni){ ni.focus(); ni.setSelectionRange(pos,pos); }
+  });
+  const filtering=nf.links.length||nf.q.trim();
+  if(nf.links.length){
+    const chips=document.createElement("div"); chips.className="acond-bar"; chips.style.marginBottom="12px";
+    chips.innerHTML=nf.links.map((v,i)=>{
+      const found=v==="none"?null:expOrProjById(v.slice(2));
+      const label=v==="none"?"Not linked to anything":entityLabel(found);
+      return `<span class="acond">${esc(label)}<button type="button" class="acond-x" data-i="${i}" title="Remove">✕</button></span>`;
+    }).join("")+(nf.links.length>1?`<button type="button" class="acond-add" id="n_clearlinks">clear</button>`:"");
+    chips.querySelectorAll(".acond-x").forEach(b=>b.onclick=()=>
+      setNotesFilter({links:nf.links.filter((_,i)=>i!==+b.dataset.i)}));
+    const clr=chips.querySelector("#n_clearlinks"); if(clr) clr.onclick=()=>setNotesFilter({links:[]});
+    host.appendChild(chips);
+  }
   if(!DB.notes.length){
     host.appendChild(Object.assign(document.createElement("div"),
       {className:"empty",textContent:"Nothing here yet — a place for anything that doesn't belong to an animal or an experiment."}));
     return;
   }
+  const shown=DB.notes.filter(n=>noteInFilter(n,nf));
+  if(filtering){
+    host.appendChild(Object.assign(document.createElement("div"),{
+      style:"font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-bottom:10px",
+      textContent:`${shown.length} of ${DB.notes.length} note${DB.notes.length!==1?"s":""}`}));
+  }
+  if(!shown.length){
+    host.appendChild(Object.assign(document.createElement("div"),{className:"empty",textContent:"No notes match."}));
+    return;
+  }
   const list=document.createElement("div"); list.className="lit-list"; host.appendChild(list);
-  [...DB.notes].sort(NOTES_SORTS[DB.config.notesSort]||NOTES_SORTS.updated_desc).forEach(n=>{
+  shown.sort(NOTES_SORTS[DB.config.notesSort]||NOTES_SORTS.updated_desc).forEach(n=>{
     const open=notesExpanded.has(n.id);
     const row=document.createElement("div"); row.className="lit-row";
     const preview=noteBodyPreview(n);
+    // what it belongs to, the same badge a Library row wears
+    const owner=attachLabel(attachmentsOf({kind:"note",id:n.id}));
     row.innerHTML=`<button class="note-expand" title="${open?"Collapse":"View"}" style="border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:11px;flex:0 0 auto;padding:2px 4px">${open?"▾":"▸"}</button>
       <div class="lit-main" style="cursor:pointer;display:flex;align-items:center;gap:8px">
         ${n.drawing?`<img src="${n.drawing}" style="width:28px;height:28px;object-fit:cover;border-radius:5px;border:1px solid var(--line2);flex:0 0 auto;background:#fff">`:""}
@@ -8090,6 +8163,7 @@ function renderNotes(){
           ${preview?`<div class="lit-link" dir="auto">${esc(preview.slice(0,140))}</div>`:""}
         </div>
       </div>
+      ${owner?`<span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);border:1px solid var(--line2);border-radius:5px;padding:1px 6px;flex:0 0 auto" dir="auto">${esc(owner)}</span>`:""}
       <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto;white-space:nowrap">${n.updated?new Date(n.updated).toLocaleDateString():""}</span>
       <button class="lit-del" title="Delete">✕</button>`;
     row.querySelector(".note-expand").onclick=e=>{
