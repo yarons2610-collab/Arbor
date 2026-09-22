@@ -10414,7 +10414,7 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
 
   function bindSeg(fid,setter){ document.getElementById(fid).onclick=e=>{const b=e.target.closest("button");if(!b)return;
     setter(b.dataset.v==="1"); document.querySelectorAll(`#${fid} button`).forEach(x=>x.classList.toggle("on",x===b)); updatePreview();}; }
-  bindSeg(`${p}_hp`,v=>setFixtureData("headpost",v)); bindSeg(`${p}_win`,v=>setFixtureData("window",v));
+  bindSeg(`${p}_hp`,v=>setFixtureData("headpost",v)); bindSeg(`${p}_win`,v=>{ setFixtureData("window",v); if(v)applyDefaultWinSite(); });
   document.querySelectorAll(`#${p}_hp button`).forEach(b=>b.classList.toggle("on",(b.dataset.v==="1")===hp));
   document.querySelectorAll(`#${p}_win button`).forEach(b=>b.classList.toggle("on",(b.dataset.v==="1")===win));
   updateWinCoordVisibility();
@@ -10434,6 +10434,17 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
       winApEl.value=winAp; winMlEl.value=winMl; updatePreview();
     });
   }
+  // A window almost always goes over M1, so that is where one starts: the
+  // first site-library entry named M1, filled in only while no centre has been
+  // set — never over coordinates already there, and still just a starting point.
+  function applyDefaultWinSite(){
+    if(String(winAp).trim()!==""||String(winMl).trim()!=="")return;
+    const site=(DB.config.siteLib||[]).find(x=>/^\s*M1\b/i.test(x.name||"")); if(!site)return;
+    winAp=String(site.ap); winMl=String(site.ml);
+    winApEl.value=winAp; winMlEl.value=winMl;
+    if(winSiteEl) winSiteEl.value=site.name;
+  }
+  if(win) applyDefaultWinSite();
   winApEl.addEventListener("input",()=>{winAp=winApEl.value; updatePreview();});
   winMlEl.addEventListener("input",()=>{winMl=winMlEl.value; updatePreview();});
   winDiamEl.addEventListener("input",()=>{winDiam=winDiamEl.value; updatePreview();});
