@@ -10200,7 +10200,8 @@ function procedureSectionHTML(p){
     <div id="${p}_wincoord" style="display:flex;gap:6px;align-items:center;margin:-2px 0 10px">
       <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 auto">window center</span>
       <select id="${p}_winsite" style="flex:0 0 auto;max-width:160px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:12px">
-        <option value="">site…</option>${(DB.config.siteLib||[]).map(x=>`<option value="${escAttr(x.name)}">${esc(x.name)}</option>`).join("")}</select>
+        <option value="">site…</option>${(()=>{ const m=winDefaultSite();
+          return m.builtin?`<option value="__m1">M1 (AP +${m.ap}, ML +${m.ml})</option>`:""; })()}${(DB.config.siteLib||[]).map(x=>`<option value="${escAttr(x.name)}">${esc(x.name)}</option>`).join("")}</select>
       <input id="${p}_winap" placeholder="AP" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
       <input id="${p}_winml" placeholder="ML" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
       <input id="${p}_windiam" placeholder="⌀ mm" style="flex:0 0 auto;width:64px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
@@ -10215,6 +10216,15 @@ function procedureSectionHTML(p){
 // OWN full draft (which may include fields beyond just the procedure, like an
 // animal's name/cage) before tearing down and rebuilding around the library.
 // Returns {getSnapshot(), refresh()}.
+// Where a cranial window's centre starts: M1. The site library's own M1 entry
+// when it has one; otherwise the standard M1 coordinates, offered in the
+// window's picker without being written back into the library — a library
+// the user trimmed stays trimmed (see migrate()).
+function winDefaultSite(){
+  const lib=(DB.config.siteLib||[]).find(x=>/^\s*M1\b/i.test(x.name||""));
+  return lib?{value:lib.name,name:lib.name,ap:lib.ap,ml:lib.ml,builtin:false}
+            :{value:"__m1",name:"M1",ap:0.8,ml:1.5,builtin:true};
+}
 function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   opts=opts||{};
   let hp=!!initial.headpost, win=!!initial.window;
@@ -10426,10 +10436,12 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   // surface, it has no depth.
   const winSiteEl=document.getElementById(`${p}_winsite`);
   if(winSiteEl){
+    const m1=winDefaultSite();
     const match=(DB.config.siteLib||[]).find(x=>String(x.ap)===String(winAp)&&String(x.ml)===String(winMl));
     if(match)winSiteEl.value=match.name;
+    else if(m1.builtin&&String(m1.ap)===String(winAp)&&String(m1.ml)===String(winMl))winSiteEl.value="__m1";
     winSiteEl.addEventListener("change",()=>{
-      const site=(DB.config.siteLib||[]).find(x=>x.name===winSiteEl.value); if(!site)return;
+      const site=winSiteEl.value==="__m1"?m1:(DB.config.siteLib||[]).find(x=>x.name===winSiteEl.value); if(!site)return;
       winAp=String(site.ap); winMl=String(site.ml);
       winApEl.value=winAp; winMlEl.value=winMl; updatePreview();
     });
@@ -10439,10 +10451,10 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   // set — never over coordinates already there, and still just a starting point.
   function applyDefaultWinSite(){
     if(String(winAp).trim()!==""||String(winMl).trim()!=="")return;
-    const site=(DB.config.siteLib||[]).find(x=>/^\s*M1\b/i.test(x.name||"")); if(!site)return;
+    const site=winDefaultSite();
     winAp=String(site.ap); winMl=String(site.ml);
     winApEl.value=winAp; winMlEl.value=winMl;
-    if(winSiteEl) winSiteEl.value=site.name;
+    if(winSiteEl) winSiteEl.value=site.value;
   }
   if(win) applyDefaultWinSite();
   winApEl.addEventListener("input",()=>{winAp=winApEl.value; updatePreview();});
