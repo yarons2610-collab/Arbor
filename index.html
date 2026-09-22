@@ -784,6 +784,11 @@
     text-overflow:ellipsis;white-space:nowrap}
   .ct-count{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);
     border:1px solid var(--line2);border-radius:20px;padding:0 7px;flex:0 0 auto}
+  .ct-name{cursor:pointer}
+  .ct-name:hover{text-decoration:underline}
+  .ct-open{border:1px solid var(--line2);background:transparent;color:var(--ink-dim);border-radius:6px;
+    padding:0 6px;font-size:12px;line-height:18px;cursor:pointer;flex:0 0 auto}
+  .ct-open:hover{color:var(--ink);border-color:var(--gcamp)}
   .ct-body{flex:1;padding:4px 4px 2px;display:flex;flex-direction:column;gap:1px}
   .ct-animal{display:flex;align-items:center;gap:6px;width:100%;text-align:left;border:0;background:transparent;
     color:var(--ink);padding:3px 6px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:12px}
@@ -1188,7 +1193,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
-  animalFilters:{tag:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",search:"",sort:"name",groupBy:"none",conds:[],panelOpen:false},
+  animalFilters:{tag:"all",cage:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",search:"",sort:"name",groupBy:"none",conds:[],panelOpen:false},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // Named, colour-coded event categories — tasks already get an implicit
   // colour from whatever project they're attached to, but an event (isEvent:
@@ -1927,6 +1932,7 @@ function migrate(){                       // backfill fields added in later vers
   animalExperiment=DB.config.animalFilters.experiment||"all";
   animalGroup=DB.config.animalFilters.group||"all";
   animalTag=DB.config.animalFilters.tag||"all";
+  animalCage=DB.config.animalFilters.cage||"all";
   animalProject=DB.config.animalFilters.project||"all";
   calMode=DB.config.calMode||"week";
   animalEntry=DB.config.animalFilters.entry||"all";
@@ -8453,19 +8459,22 @@ function noteModal(id,over){
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
-let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name", animalGroupBy="none";
+let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalCage="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name", animalGroupBy="none";
+// Set when a cage (or tag) tile was opened into its own list, so the list can
+// offer the way back to the tiles it came from. Session-only.
+let animalOpenedFrom=null;
 let animalFiltersOpen=false;
 // How many filters are actually doing something — shown on the button so a
 // collapsed panel can never hide the fact that the list is being narrowed.
 function animalActiveFilterCount(){
-  return [animalTag,animalExperiment,animalProject,animalGroup,animalStatus,animalEntry]
+  return [animalTag,animalCage,animalExperiment,animalProject,animalGroup,animalStatus,animalEntry]
     .filter(v=>v&&v!=="all").length + animalConds.length;
 }
 function clearAnimalFilters(){
-  animalTag=animalExperiment=animalProject=animalGroup=animalStatus=animalEntry="all";
-  animalConds=[];
+  animalTag=animalCage=animalExperiment=animalProject=animalGroup=animalStatus=animalEntry="all";
+  animalConds=[]; animalOpenedFrom=null;
   Object.assign(DB.config.animalFilters,
-    {tag:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",conds:[]});
+    {tag:"all",cage:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",conds:[]});
   persist(); renderAnimals();
 }
 // Conditions on the values inside diary entries. An animal satisfies one if
@@ -8825,6 +8834,11 @@ function renderAnimals(){
   const groupNames=[...new Set(DB.experiments
     .filter(st=>animalExperiment==="all"||st.id===animalExperiment)
     .flatMap(st=>(st.groupDefs||[]).map(g=>g.name).filter(Boolean)))].sort((a,b)=>a.localeCompare(b));
+  // numeric-aware, so cage 2 comes before cage 10; a picked cage that no
+  // longer has anyone in it stays listed, so the select can still show it
+  const cageNames=[...new Set([...DB.animals.map(a=>a.cage).filter(Boolean),
+    ...(animalCage!=="all"&&animalCage!=="none"?[animalCage]:[])])]
+    .sort((x,y)=>String(x).localeCompare(String(y),undefined,{numeric:true}));
   const bar=document.createElement("div");
   bar.style.cssText="margin-bottom:16px";
   // Each filter is one cell holding its own title and dropdown. They used to
@@ -8860,6 +8874,7 @@ function renderAnimals(){
     <div class="af-panel" ${animalFiltersOpen?"":"hidden"}>
     <div class="af-grid">
       ${DB.tags.length?col("Tag","a_tag",animalTag,[["all","All tags"],["none","No tag"],...[...DB.tags].sort((a,b)=>a.name.localeCompare(b.name)).map(c=>[c.name,c.name])]):""}
+      ${cageNames.length?col("Cage","a_cage",animalCage,[["all","All cages"],["none","No cage"],...cageNames.map(c=>[c,c])]):""}
       ${expNames.length?col("Experiment","a_exp",animalExperiment,[["all","All experiments"],["none","Unattached"],...expNames]):""}
       ${DB.projects.length?col("Project","a_project",animalProject,[["all","All projects"],["none","No project"],...DB.projects.map(p=>[p.id,p.name||"(unnamed project)"])]):""}
       ${groupNames.length?col("Group","a_group",animalGroup,[["all","All groups"],...groupNames.map(g=>[g,g])]):""}
@@ -8889,6 +8904,7 @@ function renderAnimals(){
     animalConds.splice(+b.dataset.i,1); DB.config.animalFilters.conds=animalConds; persist(); renderAnimals(); });
   const onPick=(id,fn)=>{ const el=bar.querySelector("#"+id); if(el)el.addEventListener("change",e=>fn(e.target.value)); };
   onPick("a_tag",v=>{ animalTag=v; DB.config.animalFilters.tag=v; persist(); renderAnimals(); });
+  onPick("a_cage",v=>{ animalCage=v; DB.config.animalFilters.cage=v; persist(); renderAnimals(); });
   onPick("a_exp",v=>{ animalExperiment=v; DB.config.animalFilters.experiment=v; persist(); renderAnimals(); });
   onPick("a_project",v=>{ animalProject=v; DB.config.animalFilters.project=v; persist(); renderAnimals(); });
   onPick("a_group",v=>{ animalGroup=v; DB.config.animalFilters.group=v; persist(); renderAnimals(); });
@@ -8937,6 +8953,7 @@ function renderAnimals(){
       .some(v=>v && String(v).toLowerCase().includes(q));
   }
   const inTag=(a,name)=>name==="all"||(name==="none"?!a.tag:a.tag===name);
+  const inCage=(a,c)=>c==="all"||(c==="none"?!a.cage:a.cage===c);
   // "has an entry of this type" — the options come from diaryTypeDefs(), so a
   // type you add yourself is filterable the moment it exists
   const inEntry=(a,key)=>key==="all"||(key==="none"
@@ -8962,7 +8979,7 @@ function renderAnimals(){
     return animalSteps(a.id).some(st=>st.projectId===pid);
   };
   let list=DB.animals.filter(a=>
-    inTag(a,animalTag) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
+    inTag(a,animalTag) && inCage(a,animalCage) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
     (animalStatus==="all"||a.termination===animalStatus) &&
     inEntry(a,animalEntry) &&
     animalConds.every(c=>condMatches(a,c)) &&
@@ -8987,6 +9004,29 @@ function renderAnimals(){
     <span style="color:var(--gcamp)">${cnt(a=>a.termination==="alive")} alive</span>`;
   host.appendChild(sum);
 
+  /* One cage — picked in the filter, or opened from its tile — gets a heading
+     of its own over the full list of who is in it, with the way back to the
+     tiles when that is where it was opened from. A tag tile opens the same
+     way, through the tag filter. */
+  if(animalOpenedFrom&&((animalOpenedFrom.kind==="cage"?animalCage:animalTag)==="all")) animalOpenedFrom=null;
+  const focusKind=animalOpenedFrom?animalOpenedFrom.kind:(animalCage!=="all"?"cage":null);
+  if(focusKind){
+    const v=focusKind==="cage"?animalCage:animalTag;
+    const label=v==="none"?(focusKind==="cage"?"No cage":"No tag"):v;
+    const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="6px";
+    h.innerHTML=`<span style="font-size:14px">${focusKind==="cage"?"▤":"🏷"}</span>
+      <h2>${focusKind==="cage"&&v!=="none"?"Cage ":""}${esc(label)}</h2>
+      <span class="count">${list.length} animal${list.length!==1?"s":""}</span>
+      <button type="button" class="btn ghost" id="a_unfocus" style="margin-left:auto;font-size:12px">${
+        animalOpenedFrom?`← Back to ${focusKind==="cage"?"cages":"tags"}`:"✕ All cages"}</button>`;
+    h.querySelector("#a_unfocus").onclick=()=>{
+      if(focusKind==="cage"){ animalCage="all"; DB.config.animalFilters.cage="all"; }
+      else{ animalTag="all"; DB.config.animalFilters.tag="all"; }
+      if(animalOpenedFrom){ animalGroupBy=animalOpenedFrom.groupBy; DB.config.animalFilters.groupBy=animalGroupBy; }
+      animalOpenedFrom=null; persist(); renderAnimals();
+    };
+    host.appendChild(h);
+  }
   // Flat \u2014 no grouping layer above the animal list. Picking a specific
   // experiment still gets its own header, since that's the one case where
   // the list is otherwise unlabeled.
@@ -9030,6 +9070,7 @@ function renderAnimals(){
           <span class="ct-mark" style="${tagColor?`background:${tagColor}`:""}">${tagColor?"":(animalGroupBy==="cage"?"▤":"🏷")}</span>
           <span class="ct-name"${name===emptyLabel?' style="color:var(--ink-faint)"':""}>${esc(name)}</span>
           <span class="ct-count">${members.length}</span>
+          <button type="button" class="ct-open" title="Open as a list">⤢</button>
         </div>
         <div class="ct-body">${members.map(a=>{
           const w=latestWeight(a), aw=ageWeeks(a);
@@ -9041,6 +9082,19 @@ function renderAnimals(){
         <div class="ct-foot">${alive}/${members.length} alive${
           (nM||nF)?` · ${nM}♂ ${nF}♀`:""}${strains.length===1?` · ${esc(strains[0])}`:strains.length>1?` · ${strains.length} strains`:""}</div>`;
       tile.querySelectorAll(".ct-animal").forEach(b=>b.onclick=()=>animalModal(b.dataset.id));
+      // the cage's name (or ⤢) opens it: the full list of who is in it, as a
+      // real filter — so it narrows the same way picking it in Filter does
+      const openTile=()=>{
+        const v=name===emptyLabel?"none":name;
+        animalOpenedFrom={kind:animalGroupBy==="cage"?"cage":"tag",groupBy:animalGroupBy};
+        if(animalGroupBy==="cage"){ animalCage=v; DB.config.animalFilters.cage=v; }
+        else{ animalTag=v; DB.config.animalFilters.tag=v; }
+        animalGroupBy="none"; DB.config.animalFilters.groupBy="none";
+        persist(); renderAnimals();
+        document.getElementById("animals")?.scrollIntoView({block:"start"});
+      };
+      tile.querySelector(".ct-open").onclick=openTile;
+      tile.querySelector(".ct-name").onclick=openTile;
       grid.appendChild(tile);
     });
   }
