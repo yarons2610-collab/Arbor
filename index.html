@@ -10201,7 +10201,7 @@ function procedureSectionHTML(p){
       <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 auto">window center</span>
       <select id="${p}_winsite" style="flex:0 0 auto;max-width:160px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:12px">
         <option value="">site…</option>${(()=>{ const m=winDefaultSite();
-          return m.builtin?`<option value="__m1">M1 (AP +${m.ap}, ML +${m.ml})</option>`:""; })()}${(DB.config.siteLib||[]).map(x=>`<option value="${escAttr(x.name)}">${esc(x.name)}</option>`).join("")}</select>
+          return m.builtin?`<option value="__m1">M1, left (AP +${m.ap}, ML ${m.ml})</option>`:""; })()}${(DB.config.siteLib||[]).map(x=>`<option value="${escAttr(x.name)}">${esc(x.name)}</option>`).join("")}</select>
       <input id="${p}_winap" placeholder="AP" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
       <input id="${p}_winml" placeholder="ML" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
       <input id="${p}_windiam" placeholder="⌀ mm" style="flex:0 0 auto;width:64px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
@@ -10216,14 +10216,16 @@ function procedureSectionHTML(p){
 // OWN full draft (which may include fields beyond just the procedure, like an
 // animal's name/cage) before tearing down and rebuilding around the library.
 // Returns {getSnapshot(), refresh()}.
-// Where a cranial window's centre starts: M1. The site library's own M1 entry
-// when it has one; otherwise the standard M1 coordinates, offered in the
-// window's picker without being written back into the library — a library
-// the user trimmed stays trimmed (see migrate()).
+// Where a cranial window's centre starts: the LEFT M1 — the lab's standard
+// window. Negative ML is the left hemisphere (CCF ML grows to the right; see
+// bregma2ccf). The site library's own M1 entry is used only when it is a left
+// one; otherwise left M1's standard coordinates are offered in the window's
+// picker without being written back into the library — a library the user
+// trimmed stays trimmed (see migrate()).
 function winDefaultSite(){
-  const lib=(DB.config.siteLib||[]).find(x=>/^\s*M1\b/i.test(x.name||""));
+  const lib=(DB.config.siteLib||[]).find(x=>/^\s*M1\b/i.test(x.name||"")&&+x.ml<0);
   return lib?{value:lib.name,name:lib.name,ap:lib.ap,ml:lib.ml,builtin:false}
-            :{value:"__m1",name:"M1",ap:0.8,ml:1.5,builtin:true};
+            :{value:"__m1",name:"M1 (left)",ap:0.8,ml:-1.5,builtin:true};
 }
 function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   opts=opts||{};
