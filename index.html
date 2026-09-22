@@ -1557,6 +1557,20 @@ function setSaveState(s,detail){
 // real pause in typing, and never fires more often than SYNC_MIN_GAP.
 const SYNC_IDLE=2500, SYNC_MIN_GAP=8000;
 let syncTimer=null, lastSyncAt=0, syncInFlight=false, syncPending=false, syncBackoffUntil=0;
+/* A failed push retries on its own. It used to wait for the next edit to try
+   again, so a sync warning sat there however long the network had been back —
+   it only ever went away "after making a change". Backs off 15s, 30s, 60s,
+   then every 2 minutes. */
+let syncFailures=0;
+// While a sync warning is up it stays up until a push actually lands — never
+// swapped for "✓ saved" just because another attempt has been queued.
+function syncWarningShown(){
+  const s=document.getElementById("saveState")?.dataset.state;
+  return s==="syncwarn"||s==="throttled"||(s==="failed"&&syncFailures>0);
+}
+function showLocalSaved(){
+  if(storageOK===false||!syncWarningShown()) setSaveState(storageOK?"saved":"failed",storageFailDetail());
+}
 // true from the moment any local edit is queued until it's actually landed on
 // the Gist — autoPull() below must never overwrite DB while this is true, or
 // an edit that hasn't been pushed yet gets silently discarded under it.
@@ -1663,7 +1677,7 @@ function scheduleSync(){
   clearTimeout(syncTimer);
   const now=Date.now();
   const wait=Math.max(SYNC_IDLE, lastSyncAt+SYNC_MIN_GAP-now, syncBackoffUntil-now);
-  setSaveState(storageOK?"saved":"failed",storageFailDetail());
+  showLocalSaved();
   syncTimer=setTimeout(runSync,wait);
 }
 async function runSync(){
@@ -1689,7 +1703,7 @@ async function runSync(){
       if(editingInProgress()){
         // don't yank the DOM out from under an active edit — this device's
         // own change stays queued (localDirty untouched) and retries shortly
-        syncPending=true; setSaveState(storageOK?"saved":"failed",storageFailDetail());
+        syncPending=true; showLocalSaved();
         return;
       }
       // Take what landed on the Gist, keeping anything created here that has
@@ -1714,7 +1728,7 @@ async function runSync(){
     const pushedVersion=await gistSave(JSON.stringify(DB));
     if(pushedVersion) lastSyncedRemoteVersion=pushedVersion;
     lastSyncedIds=snapshotIds(DB); saveSyncMark();
-    lastSyncAt=Date.now(); syncBackoffUntil=0; localDirty=false; setSaveState("synced");
+    lastSyncAt=Date.now(); syncBackoffUntil=0; syncFailures=0; localDirty=false; setSaveState("synced");
   }catch(e){
     lastSyncAt=Date.now();
     // 403/429 from GitHub means "slow down", not "you are broken" — back off and
@@ -1726,6 +1740,9 @@ async function runSync(){
       syncPending=true;
       setSaveState("throttled");
     } else {
+      syncFailures++;
+      syncBackoffUntil=Date.now()+Math.min(15000*2**(syncFailures-1),120000);
+      syncPending=true;   // finally{} below queues the retry
       setSaveState("failed",msg.slice(0,90));
     }
     console.warn("Gist save failed",e);
@@ -1786,6 +1803,27 @@ async function autoPull(){
   try{
     const remote=await gistLoad();
     if(!remote||!remote.domains)return;
+    if(lastSyncedRemoteVersion===null){
+      // This session has never reached the Gist: boot fell back to this
+      // device's own copy (offline, or GitHub unreachable at that moment),
+      // which is what "showing local copy, not synced" says. Reconcile the way
+      // boot would have, not by adopting the remote outright — that local
+      // copy can hold edits from a session that closed before its push went
+      // through. Before this, the warning only cleared once an edit happened
+      // to push.
+      restoreSyncMark();
+      const agreed=snapshotIds(remote);
+      const remoteJSON=JSON.stringify(remote);
+      DB=mergeLocalAdditions(remote,DB); migrate();
+      lastSyncedRemoteVersion=remote.__gistVersion;
+      lastSyncedIds=agreed; saveSyncMark();
+      undoStack.length=0;
+      try{ await window.arbor.save(DB); }catch(e){}
+      render(); syncTopCollapsed();
+      if(JSON.stringify(DB)!==remoteJSON){ localDirty=true; setSaveState("saved"); scheduleSync(); }
+      else setSaveState("synced");
+      return;
+    }
     if(remote.__gistVersion===lastSyncedRemoteVersion)return;   // the Gist has not moved since we last synced
     // No merge here on purpose: this only runs with nothing unpushed, so the
     // local copy is exactly what we last agreed on, and anything the remote
@@ -1805,6 +1843,13 @@ function scheduleAutoPull(){
 }
 function stopAutoPull(){ clearInterval(pullTimer); pullTimer=null; }
 document.addEventListener("visibilitychange",()=>{ if(!document.hidden) autoPull(); });
+// Coming back online is the moment a stalled sync can succeed — don't make it
+// wait out a backoff that was sized for a network that was down.
+window.addEventListener("online",()=>{
+  if(!gistToken())return;
+  if(syncPending||localDirty){ syncBackoffUntil=0; scheduleSync(); }
+  else autoPull();
+});
 function migrate(){                       // backfill fields added in later versions
   if(!DB.readings)DB.readings=[];
   // Protocols are literature's twin: a titled pointer to where the method lives.
