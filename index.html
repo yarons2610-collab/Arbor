@@ -271,6 +271,14 @@
   .lit-main{flex:1;min-width:0}
   .lit-title{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .lit-link{font-family:var(--mono);font-size:10px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* What a note belongs to sits beside its title, and a long project name was
+     taking most of the row — on a phone the note's own name was down to a word
+     or two. Capped here, and given its own line under the title there. */
+  .note-owner{flex:0 1 auto;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @media (max-width:640px){
+    .lit-row{flex-wrap:wrap}
+    .note-owner{order:9;flex-basis:100%;max-width:100%;margin-left:26px}
+  }
   .lit-row button,.lit-row a.lit-file{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:12px;cursor:pointer;flex:0 0 auto;text-decoration:none;line-height:1.5}
   .lit-row button:hover,.lit-row a.lit-file:hover{color:var(--ink)}
   .lit-row .lit-del:hover{color:var(--overdue)}
@@ -8282,7 +8290,7 @@ function renderNotes(){
           ${preview?`<div class="lit-link" dir="auto">${esc(preview.slice(0,140))}</div>`:""}
         </div>
       </div>
-      ${owner?`<span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);border:1px solid var(--line2);border-radius:5px;padding:1px 6px;flex:0 0 auto" dir="auto">${esc(owner)}</span>`:""}
+      ${owner?`<span class="note-owner" style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);border:1px solid var(--line2);border-radius:5px;padding:1px 6px" dir="auto" title="${escAttr(owner)}">${esc(owner)}</span>`:""}
       <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto;white-space:nowrap">${n.updated?new Date(n.updated).toLocaleDateString():""}</span>
       <button class="lit-del" title="Delete">✕</button>`;
     row.querySelector(".note-expand").onclick=e=>{
