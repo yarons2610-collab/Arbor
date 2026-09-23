@@ -557,6 +557,8 @@
      the re-packed day slid across that spot all printed on top of it: text
      over text. Beneath the ordinary chips (z-index 2), so anything that now
      fills the space simply covers it. */
+  /* the tail of an event that began the day before — same colour, dashed edge */
+  .cal-evt-cont{border-left-style:dashed!important}
   .cal-evt-ghost{pointer-events:none;background:transparent!important;border:1.5px dashed rgba(255,255,255,.3)!important;box-shadow:none!important;filter:none!important;z-index:1!important}
   .cal-evt-ghost>*{visibility:hidden}
   /* While a chip is dragged the rest of its day re-packs around it. Gliding
@@ -5783,6 +5785,29 @@ function setCalMode(mode){
    a live drag packs a hypothetical version of the same day with it, so what
    you see mid-drag and what you get on drop come from one implementation
    rather than two that can disagree. */
+/* A timed task that runs past midnight is drawn as one box per day — 18:00 to
+   the end of Monday, then midnight to 02:00 on Tuesday — the way a calendar
+   shows a night shift. It used to be drawn twice over: once as an all-day bar,
+   and once as a single box on the starting day whose height was the WHOLE
+   duration, so an eight-hour event painted straight down over every hour below
+   it. Anything longer than a day stays in the all-day banner, where a
+   multi-day bar is what actually reads. */
+function timedSegments(t){
+  if(!hasTime(t.deadline))return [];
+  const start=whenDate(t.deadline);
+  let dur=+t.duration||0;
+  if(!dur&&t.endDate) dur=Math.max((whenDate(t.endDate)-start)/60000,30);
+  if(!dur) dur=60;
+  if(dur>24*60) return [];
+  const startISO=t.deadline.slice(0,10), out=[];
+  let mins=start.getHours()*60+start.getMinutes(), left=dur, i=0;
+  while(left>0&&i<3){
+    const take=Math.min(left,1440-mins);
+    out.push({i,date:i?addDaysISO(startISO,i).slice(0,10):startISO,startMin:mins,endMin:mins+take,totalMin:dur});
+    left-=take; mins=0; i++;
+  }
+  return out;
+}
 function packColumns(events){
   const out=new Map();
   // Same start: the longer one goes left. Shorter-first put a brief entry
@@ -6130,9 +6155,10 @@ function renderTimeline(){
   weekTasks.forEach(t=>{
     const tStart=new Date(whenDate(t.deadline).setHours(0,0,0,0));
     const tEnd=t.endDate?new Date(whenDate(t.endDate).setHours(0,0,0,0)):tStart;
-    // skip same-day timed tasks (start time, optionally an end time for duration) — they render in the hourly grid instead.
-    // a timed task whose endDate falls on a different day is a genuine multi-day span, so it still gets a banner chip.
-    if(hasTime(t.deadline)&&tEnd.getTime()===tStart.getTime()) return;
+    // A timed task that fits in the hour grid is not a banner bar: same day,
+    // or running past midnight into the next, where it is drawn as one box per
+    // day (see timedSegments). Only a span longer than a day gets a bar.
+    if(hasTime(t.deadline)&&timedSegments(t).length) return;
     // One bar spanning the days it covers, rather than a separate chip per day
     // with only the first one labelled.
     let first=-1,last=-1;
@@ -6255,17 +6281,11 @@ function renderTimeline(){
   calTimedIndex={days:[],startISO:isoOf(ws)};
   for(let d=0;d<NCOL;d++){
     const day=new Date(ws); day.setDate(ws.getDate()+d); day.setHours(0,0,0,0);
-    const taskEvents=weekTasks.filter(t=>{
-      if(!hasTime(t.deadline)) return false;
-      const dd=whenDate(t.deadline); dd.setHours(0,0,0,0);
-      return dd.getTime()===day.getTime();
-    }).map(t=>{
-      const dt=whenDate(t.deadline);
-      const startMin=dt.getHours()*60+dt.getMinutes();
-      let durationMins=t.duration||60;
-      if(!t.duration&&t.endDate) durationMins=Math.max((whenDate(t.endDate)-dt)/60000,30);
-      return {key:t.id,startMin,endMin:startMin+Math.max(durationMins,14)};
-    });
+    // each day sees only the part of an event that falls on it, so a box
+    // running to midnight never packs against tomorrow's morning
+    const taskEvents=weekTasks.flatMap(t=>timedSegments(t)
+      .filter(sg=>sg.date===isoOf(day))
+      .map(sg=>({key:sg.i?`${t.id}#${sg.i}`:t.id,startMin:sg.startMin,endMin:Math.max(sg.endMin,sg.startMin+14)})));
     const diaryEvents=diaryTimedEvents.filter(x=>x.dayIdx===d).map(x=>{
       const [hh,mm]=x.e.time.split(":").map(Number);
       const startMin=hh*60+(mm||0);
@@ -6296,48 +6316,57 @@ function renderTimeline(){
       cell.dataset.hour=h; cell.dataset.date=`${day.getFullYear()}-${pad3(day.getMonth()+1)}-${pad3(day.getDate())}`;
       grid.appendChild(cell); hourCells.push({cell,day});
     }
-    // place timed tasks in correct hour cell
+    // place timed tasks in correct hour cell — one box per day for anything
+    // that runs past midnight (see timedSegments)
     weekTasks.forEach(t=>{
-      if(!hasTime(t.deadline)) return;
-      const dt=whenDate(t.deadline); if(dt.getHours()!==h) return;
-      const day=new Date(dt); day.setHours(0,0,0,0);
-      const di=[0,1,2,3,4,5,6].find(d=>{ const wd=new Date(ws); wd.setDate(ws.getDate()+d); return wd.getTime()===day.getTime(); });
-      if(di===undefined) return;
-      const col=calColor(t);
-      const overdue=dueClass(t.deadline,calDone(t)?"done":"",t.endDate)==="overdue";
-      const mins=dt.getMinutes(); const topPct=(mins/60)*100;
-      // duration: use t.duration (minutes) if set, else endDate span, else 60 min default
-      let durationMins=t.duration||60;
-      if(!t.duration&&t.endDate) durationMins=Math.max((whenDate(t.endDate)-dt)/60000,30);
-      const heightPct=(durationMins/60)*100;
-      const{col:colIdx,totalCols,span:colSpan=1}=timedLayout.get(t.id)||{col:0,totalCols:1};
-      const colPct=100/totalCols;
-      const evt=document.createElement("div"); evt.className="cal-evt-timed";
-      evt.dataset.dragSrc=t.src.id; evt.dataset.dragWhen=t.deadline;
-      // identity for the live re-pack during a drag (see packColumns)
-      evt.dataset.layKey=t.id; evt.dataset.layDay=String(di);
-      if(calDragKey===t.id) evt.classList.add("cal-evt-ghost");
-      if(calFlashKey&&calFlashKey===t.id) evt.classList.add("cal-evt-found");
-      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
-      const timeStr=dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
-      const durLabel=durationMins!==60?` (${durationMins}m)`:"";
-      const ckHTML=t.kind==="task"
-        ?`<button type="button" class="cal-evt-ck${calDone(t)?" on":""}" title="${calDone(t)?"Done — click to undo":"Mark done"}"></button>`:"";
-      evt.innerHTML=`<div class="cal-evt-resize cal-evt-resize-top"></div><div class="et">${ckHTML}${eventIconHTML(t.src)}${esc(t.title)}</div><div class="es">${timeStr}${durLabel}</div><div class="cal-evt-resize cal-evt-resize-bottom"></div>`;
-      // Pointer Events (not mousedown) so this works from touch too — mobile never
-      // fires mousemove/mouseup during a touch-drag gesture, which is why dragging
-      // had no effect at all on the phone (the whole feature was mouse-only).
-      evt.addEventListener("pointerdown",e=>{
-        e.stopPropagation();
-        const mode=resizeModeFor(e);
-        beginTimedEventDrag(mode,t,evt,e,wrap);
+      timedSegments(t).forEach(sg=>{
+        if(Math.floor(sg.startMin/60)!==h) return;
+        const di=Math.round((new Date(sg.date+"T00:00:00")-ws)/864e5);
+        if(di<0||di>=NCOL) return;
+        const dt=whenDate(t.deadline);
+        const col=calColor(t);
+        const overdue=dueClass(t.deadline,calDone(t)?"done":"",t.endDate)==="overdue";
+        const topPct=((sg.startMin%60)/60)*100;
+        const heightPct=((sg.endMin-sg.startMin)/60)*100;
+        const layKey=sg.i?`${t.id}#${sg.i}`:t.id;
+        const{col:colIdx,totalCols,span:colSpan=1}=timedLayout.get(layKey)||{col:0,totalCols:1};
+        const colPct=100/totalCols;
+        const evt=document.createElement("div"); evt.className="cal-evt-timed"+(sg.i?" cal-evt-cont":"");
+        evt.dataset.dragSrc=t.src.id; evt.dataset.dragWhen=t.deadline;
+        // identity for the live re-pack during a drag (see packColumns)
+        evt.dataset.layKey=layKey; evt.dataset.layDay=String(di);
+        if(calDragKey===layKey) evt.classList.add("cal-evt-ghost");
+        if(calFlashKey&&calFlashKey===t.id) evt.classList.add("cal-evt-found");
+        evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
+        const clock=m=>{ const d=new Date(sg.date+"T00:00:00"); d.setMinutes(m); return d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); };
+        const timeStr=sg.i?`… until ${clock(sg.endMin)}`
+          :dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})+(sg.totalMin!==60?` (${sg.totalMin}m)`:"");
+        const ckHTML=(t.kind==="task"&&!sg.i)
+          ?`<button type="button" class="cal-evt-ck${calDone(t)?" on":""}" title="${calDone(t)?"Done — click to undo":"Mark done"}"></button>`:"";
+        evt.innerHTML=`${sg.i?"":`<div class="cal-evt-resize cal-evt-resize-top"></div>`}<div class="et">${ckHTML}${sg.i?"↳ ":""}${eventIconHTML(t.src)}${esc(t.title)}</div><div class="es">${timeStr}</div>${sg.i?"":`<div class="cal-evt-resize cal-evt-resize-bottom"></div>`}`;
+        if(sg.i){
+          // the tail of something that started yesterday: the same event, so it
+          // opens the same editor, but only the box holding the real start time
+          // can be dragged or resized
+          evt.style.cursor="pointer";
+          evt.addEventListener("click",()=>openCalItem(t));
+        } else {
+          // Pointer Events (not mousedown) so this works from touch too — mobile never
+          // fires mousemove/mouseup during a touch-drag gesture, which is why dragging
+          // had no effect at all on the phone (the whole feature was mouse-only).
+          evt.addEventListener("pointerdown",e=>{
+            e.stopPropagation();
+            const mode=resizeModeFor(e);
+            beginTimedEventDrag(mode,t,evt,e,wrap);
+          });
+          if(t.kind==="task"){
+            const ck=evt.querySelector(".cal-evt-ck");
+            ck.addEventListener("pointerdown",e=>e.stopPropagation());
+            ck.addEventListener("click",e=>{ e.stopPropagation(); setOccDone(t.src,t.deadline,!calDone(t)); renderTimeline(); });
+          }
+        }
+        hourCells[di].cell.appendChild(evt);
       });
-      if(t.kind==="task"){
-        const ck=evt.querySelector(".cal-evt-ck");
-        ck.addEventListener("pointerdown",e=>e.stopPropagation());
-        ck.addEventListener("click",e=>{ e.stopPropagation(); setOccDone(t.src,t.deadline,!calDone(t)); renderTimeline(); });
-      }
-      hourCells[di].cell.appendChild(evt);
     });
     // Timed diary entries in the same hourly grid, with the same drag and resize
     // tasks have — they were read-only, which made half the calendar movable and
