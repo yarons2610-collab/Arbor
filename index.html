@@ -4069,16 +4069,49 @@ function readDiaryRepeat(root,prefix){
   const r=diaryPendingRule[prefix];
   return (r&&r.every)?r:null;
 }
+/* Aftercare, defined on the type itself: "a surgery schedules two post-op
+   checks, one a day". Every rule is {type, after, count, every, time} — which
+   type to schedule, how many days later the first one lands, how many there
+   are and how far apart, optionally at a time of day. The entries it creates
+   are ordinary entries: editable, tickable, deletable, and they carry
+   autoFrom so a second save of the same entry can't double-book them. */
+function scheduleRelatedEntries(a,entry){
+  const def=diaryTypeDef(entry.type), rules=(def&&def.related)||[];
+  let made=0;
+  rules.forEach(r=>{
+    // diaryTypeDef() hands back a fallback for an unknown key rather than
+    // nothing, so ask the real list: a rule left pointing at a type that has
+    // since been deleted must schedule nothing at all
+    if(!r||!r.type||!(DB.config.diaryTypes||[]).some(x=>x.key===r.type))return;
+    const count=Math.max(1,+r.count||1), every=Math.max(1,+r.every||1), after=+r.after||0;
+    for(let i=0;i<count;i++){
+      const date=addDaysISO(entry.date,after+i*every).slice(0,10);
+      if((a.diary||[]).some(e=>e.type===r.type&&e.date===date&&e.autoFrom===entry.id))continue;
+      a.diary.push({id:uid("d_"),type:r.type,date,time:r.time||null,endTime:null,data:{},
+        created:Date.now(),edited:null,autoFrom:entry.id});
+      made++;
+    }
+  });
+  return made;
+}
 function pushDiarySeries(a,base,rep,seriesId){
   let dates=rep?diaryRepeatDates(base.date,rep,rep.until):[base.date];
   if(rep&&!rep.until) dates=dates.slice(0,DIARY_OPEN_MAX);
   const sid=dates.length>1?(seriesId||uid("ds_")):null;
+  const made=[];
   dates.forEach(date=>{
-    a.diary.push({...base,id:sid?diaryOccId(sid,date):uid("d_"),date,
+    const e={...base,id:sid?diaryOccId(sid,date):uid("d_"),date,
       data:JSON.parse(JSON.stringify(base.data||{})),
       created:Date.now(),edited:null,
-      ...(sid?{seriesId:sid,seriesRule:{...rep}}:{})});
+      ...(sid?{seriesId:sid,seriesRule:{...rep}}:{})};
+    a.diary.push(e); made.push(e);
   });
+  // every occurrence brings its own aftercare; a follow-up never schedules
+  // follow-ups of its own, or one rule pair could fill the diary forever
+  if(!base.autoFrom){
+    const n=made.reduce((sum,e)=>sum+scheduleRelatedEntries(a,e),0);
+    if(n) toast(`＋${n} follow-up ${n===1?"entry":"entries"} scheduled`);
+  }
   return dates.length;
 }
 // The occurrences of one series from a given date onward, oldest first.
@@ -7627,6 +7660,31 @@ function renderDiaryTypesLib(){
   host.appendChild(hdr);
 
   const wrap = document.createElement("div"); wrap.id = "dtlib_rows"; host.appendChild(wrap);
+  /* Aftercare, per type: "when a surgery is logged, also schedule two post-op
+     checks, one a day, at 09:00". Each row is one rule; the entries it creates
+     are ordinary diary entries (see scheduleRelatedEntries). */
+  const BTNS="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer";
+  function relatedHTML(t,i){
+    const opts=sel=>diaryTypeDefs().map(x=>`<option value="${escAttr(x.key)}" ${x.key===sel?"selected":""}>${esc(x.icon||"")} ${esc(x.label||"(unnamed)")}</option>`).join("");
+    const rows=(t.related||[]).map((r,ri)=>`
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-dim)">
+        <select class="ldr_type" data-ti="${i}" data-ri="${ri}" style="${IST};flex:0 0 auto">${opts(r.type)}</select>
+        <span>starting</span>
+        <input type="number" class="ldr_after" data-ti="${i}" data-ri="${ri}" min="0" step="1" value="${r.after??1}" style="width:46px;${IST};padding:5px 6px">
+        <span>day(s) later,</span>
+        <input type="number" class="ldr_count" data-ti="${i}" data-ri="${ri}" min="1" step="1" value="${r.count??1}" style="width:46px;${IST};padding:5px 6px">
+        <span>time(s), every</span>
+        <input type="number" class="ldr_every" data-ti="${i}" data-ri="${ri}" min="1" step="1" value="${r.every??1}" style="width:46px;${IST};padding:5px 6px">
+        <span>day(s)</span>
+        <input type="time" class="ldr_time" data-ti="${i}" data-ri="${ri}" value="${escAttr(r.time||"")}" title="Time of day — leave empty for no set time" style="${IST};flex:0 0 auto">
+        <button class="ldr_del" data-ti="${i}" data-ri="${ri}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
+      </div>`).join("");
+    return `<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:9px">
+      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:6px">When one is logged, also schedule</div>
+      ${rows||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">nothing — entries of this type schedule nothing else</div>`}
+      <button class="ldt_addrel" data-ti="${i}" style="${BTNS}">＋ add follow-up</button>
+    </div>`;
+  }
   function paintDTRows(){
     const dt = diaryTypeDefs(); // sorted for display; data-ti below still points at the real DB.config.diaryTypes index
     wrap.innerHTML = dt.length ? dt.map(t => { const i=DB.config.diaryTypes.indexOf(t); return `
@@ -7679,6 +7737,7 @@ function renderDiaryTypesLib(){
           </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">no custom fields — just the free-text Note will show</div>`}
         <button class="ldt_addfield" data-ti="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add field</button>
         `}
+        ${relatedHTML(t,i)}
       </div>`; }).join("")
     : `<div class="empty" style="padding:20px 0">No entry types yet — add one above.</div>`;
   }
@@ -7707,6 +7766,12 @@ function renderDiaryTypesLib(){
     if(e.target.classList.contains("ldf_label")) {
       const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.label = e.target.value; persist(); }
     }
+    if(/^ldr_(after|count|every|time)$/.test([...e.target.classList].find(c=>c.startsWith("ldr_"))||"")) {
+      const r=(t.related||[])[+e.target.dataset.ri]; if(!r)return;
+      const k=[...e.target.classList].find(c=>c.startsWith("ldr_")).slice(4);
+      r[k]=k==="time"?e.target.value:Math.max(k==="after"?0:1,+e.target.value||0);
+      persist(); return;
+    }
     if(e.target.classList.contains("ldf_options")) {
       const f = (t.fields||[])[+e.target.dataset.fi];
       if(f){ f.options = e.target.value.split(",").map(s=>s.trim()).filter(Boolean); persist(); }
@@ -7729,6 +7794,12 @@ function renderDiaryTypesLib(){
     }
     if(e.target.classList.contains("ldf_multiline")) {
       const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.multiline = e.target.checked; persist(); }
+    }
+    if(e.target.classList.contains("ldr_type")) {
+      const r=(t.related||[])[+e.target.dataset.ri]; if(r){ r.type=e.target.value; persist(); }
+    }
+    if(e.target.classList.contains("ldr_time")) {
+      const r=(t.related||[])[+e.target.dataset.ri]; if(r){ r.time=e.target.value; persist(); }
     }
   });
   wrap.addEventListener("click", e => {
@@ -7779,6 +7850,16 @@ function renderDiaryTypesLib(){
     } else if(delF){
       const t = (DB.config.diaryTypes||[])[+delF.dataset.ti]; if(!t) return;
       t.fields.splice(+delF.dataset.fi,1); persist(); paintDTRows();
+    }
+    const addRel=e.target.closest(".ldt_addrel"), delRel=e.target.closest(".ldr_del");
+    if(addRel){
+      const t=(DB.config.diaryTypes||[])[+addRel.dataset.ti]; if(!t)return;
+      const first=(diaryTypeDefs()[0]||{}).key; if(!first)return;
+      (t.related=t.related||[]).push({type:first,after:1,count:1,every:1,time:""});
+      persist(); paintDTRows();
+    } else if(delRel){
+      const t=(DB.config.diaryTypes||[])[+delRel.dataset.ti]; if(!t)return;
+      (t.related||[]).splice(+delRel.dataset.ri,1); persist(); paintDTRows();
     }
   });
 }
