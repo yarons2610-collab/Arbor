@@ -474,9 +474,14 @@
   .cal-allday-gutter{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:4px 4px 4px 6px;font-family:var(--mono);font-size:9px;color:var(--ink-faint);display:flex;align-items:flex-start;justify-content:flex-end}
   .cal-allday-cell{border-right:1px solid var(--line);border-bottom:2px solid var(--line2);padding:3px 3px;min-height:28px;display:flex;flex-direction:column;gap:2px;overflow:visible}
   .cal-allday-cell.collapsed{display:none}
-  .cal-allday-toggle{cursor:pointer;font-family:var(--mono)}
+  /* A <button> with no background of its own is painted by the browser —
+     grey face, ridged border, nothing to do with the rest of this app. Same
+     surface and rims as the row it belongs to, with the app's own hover. */
+  .cal-allday-toggle{cursor:pointer;font-family:var(--mono);-webkit-appearance:none;appearance:none;
+    background:transparent;border:0;border-right:1px solid var(--line);border-bottom:1px solid var(--line);
+    color:var(--ink-faint);letter-spacing:.04em;transition:color .12s ease,background .12s ease}
   .cal-allday-toggle.collapsed{padding:1px 4px;font-size:8px;min-height:0}
-  .cal-allday-toggle:hover{color:var(--ink)}
+  .cal-allday-toggle:hover{color:var(--gcamp);background:var(--panel2)}
   .cal-evt-span{position:relative;z-index:2}
   /* hour rows */
   /* pinch-zoom, not none, for the same reason as cal-hour-cell just below
