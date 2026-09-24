@@ -2960,7 +2960,7 @@ function bindDateButton(btn, getVal, setVal, minuteStep, dateOnly){
 // end time, which is always the same day as its start time. Shares the same
 // visual drum styling as openCalendar's time picker, just without the date
 // grid half, since "which day" isn't a question here.
-function openTimePicker(anchor, value, onPick, minuteStep){
+function openTimePicker(anchor, value, onPick, minuteStep, clearLabel){
   closeCalendar();
   minuteStep=minuteStep||5;
   let selH = value!=null ? +value.slice(0,2) : -1;
@@ -2977,7 +2977,7 @@ function openTimePicker(anchor, value, onPick, minuteStep){
           <div class="drum-m" style="flex:1;height:80px;overflow-y:scroll;scroll-snap-type:y mandatory">${mins}</div>
         </div>
       </div>
-      <div class="cal-btns"><button data-x="clear">No end time</button><button class="ok" data-x="done">Done</button></div>`;
+      <div class="cal-btns"><button data-x="clear">${esc(clearLabel||"No end time")}</button><button class="ok" data-x="done">Done</button></div>`;
     function drawSel(){
       pop.querySelector(".drum-h").querySelectorAll(".drum-item").forEach(el=>{
         const h=+el.dataset.v; el.classList.toggle("sel",h===selH); el.onclick=()=>{ selH=h; drawSel(); };
@@ -7716,8 +7716,8 @@ function renderDiaryTypesLib(){
         <span>day(s), until there are</span>
         <input type="number" class="ldr_count" data-ti="${i}" data-ri="${ri}" min="1" step="1" value="${r.count??1}" style="width:46px;${IST};padding:5px 6px">
         <span>in all, at</span>
-        <input type="time" class="ldr_time" data-ti="${i}" data-ri="${ri}" value="${escAttr(r.time||"")}" title="Leave empty to use the same time as the entry itself" style="${IST};flex:0 0 auto">
-        <span style="color:var(--ink-faint)">${r.time?"":"(same time as the entry)"}</span>
+        <button type="button" class="datebtn datebtn-sm ldr_timebtn${r.time?"":" datebtn-empty"}" data-ti="${i}" data-ri="${ri}"
+          title="Pick a time — or clear it to use the same time as the entry itself"><span style="opacity:.55;margin-right:6px">🕐</span>${r.time||"same time as the entry"}</button>
         <button class="ldr_del" data-ti="${i}" data-ri="${ri}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
       </div>
       <div class="ldr_preview" style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:3px 0 0 4px">${esc(relPreview(r))}</div>
@@ -7846,11 +7846,7 @@ function renderDiaryTypesLib(){
     if(e.target.classList.contains("ldr_type")) {
       const r=(t.related||[])[+e.target.dataset.ri]; if(r){ r.type=e.target.value; persist(); }
     }
-    if(e.target.classList.contains("ldr_time")) {
-      // a committed time changes both the example and whether the row still
-      // says "same time as the entry", so this one does repaint
-      const r=(t.related||[])[+e.target.dataset.ri]; if(r){ r.time=e.target.value; persist(); paintDTRows(); }
-    }
+
   });
   wrap.addEventListener("click", e => {
     const addTask = e.target.closest("#dtlib_addtask"), delTask = e.target.closest(".lt2_del"),
@@ -7900,6 +7896,15 @@ function renderDiaryTypesLib(){
     } else if(delF){
       const t = (DB.config.diaryTypes||[])[+delF.dataset.ti]; if(!t) return;
       t.fields.splice(+delF.dataset.fi,1); persist(); paintDTRows();
+    }
+    // the same drum picker every other time in the app is set with, rather
+    // than a field that could only be typed into
+    const relTime=e.target.closest(".ldr_timebtn");
+    if(relTime){
+      const t=(DB.config.diaryTypes||[])[+relTime.dataset.ti]; if(!t)return;
+      const r=(t.related||[])[+relTime.dataset.ri]; if(!r)return;
+      openTimePicker(relTime, r.time||null, v=>{ r.time=v||""; persist(); paintDTRows(); }, 5, "Same time as the entry");
+      return;
     }
     const addRel=e.target.closest(".ldt_addrel"), delRel=e.target.closest(".ldr_del");
     if(addRel){
