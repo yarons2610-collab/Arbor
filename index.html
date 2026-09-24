@@ -4097,6 +4097,32 @@ function scheduleRelatedEntries(a,entry){
   });
   return made;
 }
+// The entries that exist only because these ones were logged (see
+// scheduleRelatedEntries) — nobody scheduled them by hand, so deleting what
+// they follow should offer to take them along.
+function followUpsOf(a,rows){
+  const ids=new Set(rows.map(r=>r.id));
+  return (a.diary||[]).filter(e=>e.autoFrom&&ids.has(e.autoFrom)&&!ids.has(e.id));
+}
+/* Asks only when there is something to ask about: with no follow-ups this is
+   the plain confirm it always was, and the caller does the deleting either
+   way. Three answers, because "delete the surgery but keep the post-op
+   checks I have already filled in" is a real thing to want. */
+function askDeleteWithFollowUps(a,rows,onGo,plainPrompt){
+  const kids=followUpsOf(a,rows);
+  if(!kids.length){ if(!plainPrompt||confirm(plainPrompt)) onGo(rows); return; }
+  const many=kids.length>1, label=many?`${kids.length} follow-up entries`:"1 follow-up entry";
+  modal(`<h3>Delete entry</h3>
+    <p style="color:var(--ink-dim);font-size:13px;line-height:1.6;margin:0 0 14px">
+      This scheduled ${label} (${kids.slice(0,4).map(e=>esc(diaryTypeDef(e.type).label)+" "+esc(fmtDMY(e.date))).join(", ")}${kids.length>4?", …":""}).</p>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button type="button" class="btn danger" id="dfu_all" style="text-align:left;justify-content:flex-start">Delete this and ${many?"them":"it"}</button>
+      <button type="button" class="btn ghost" id="dfu_one" style="text-align:left;justify-content:flex-start">Delete this only, keep ${many?"them":"it"}</button>
+    </div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`,{center:true});
+  document.getElementById("dfu_all").onclick=()=>{ closeModal(); onGo([...rows,...kids]); };
+  document.getElementById("dfu_one").onclick=()=>{ closeModal(); onGo(rows); };
+}
 function pushDiarySeries(a,base,rep,seriesId){
   let dates=rep?diaryRepeatDates(base.date,rep,rep.until):[base.date];
   if(rep&&!rep.until) dates=dates.slice(0,DIARY_OPEN_MAX);
@@ -9842,11 +9868,11 @@ function paintDiary(container,a,opts){
         formType=null; editingId=null; persist(); notifyChange(); draw();
         toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted"); };
       if(entry.seriesId&&diarySeriesCount(a,entry.seriesId)>1){
-        occurrenceScopeModal(scope=>finish(diarySeriesFrom(a,entry,scope)),
+        occurrenceScopeModal(scope=>askDeleteWithFollowUps(a,diarySeriesFrom(a,entry,scope),finish),
           {title:"Repeating entry",prompt:"Delete which of them?",noun:"entry"});
         return;
       }
-      if(confirm("Delete this diary entry?")) finish([entry]);
+      askDeleteWithFollowUps(a,[entry],finish,"Delete this diary entry?");
       return;
     }
     const viewBtn=e.target.closest(".dg-view"), editBtn=e.target.closest(".dg-edit"), delBtn=e.target.closest(".dg-del");
@@ -9863,21 +9889,19 @@ function paintDiary(container,a,opts){
       // task asks. This used to be a confirm() whose Cancel meant "delete just
       // this one" — so Cancel didn't cancel, and either button deleted
       // something, which is the opposite of what a confirm dialog promises.
+      const wipe=rows=>{
+        const ids=new Set(rows.map(x=>x.id));
+        a.diary=a.diary.filter(x=>!ids.has(x.id));
+        if(entry.seriesId) closeOpenSeriesIfTailRemoved(a,entry.seriesId,rows.map(x=>x.date));
+        persist(); notifyChange(); draw();
+        toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
+      };
       if(entry.seriesId&&diarySeriesCount(a,entry.seriesId)>1){
-        occurrenceScopeModal(scope=>{
-          const doomed=diarySeriesFrom(a,entry,scope);
-          const ids=new Set(doomed.map(x=>x.id));
-          a.diary=a.diary.filter(x=>!ids.has(x.id));
-          closeOpenSeriesIfTailRemoved(a,entry.seriesId,doomed.map(x=>x.date));
-          persist(); notifyChange(); draw();
-          toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
-        },{title:"Repeating entry",prompt:"Delete which of them?",noun:"entry"});
+        occurrenceScopeModal(scope=>askDeleteWithFollowUps(a,diarySeriesFrom(a,entry,scope),wipe),
+          {title:"Repeating entry",prompt:"Delete which of them?",noun:"entry"});
         return;
       }
-      if(confirm("Delete this diary entry?")){
-        a.diary=a.diary.filter(x=>x.id!==entry.id);
-        persist(); notifyChange(); draw();
-      }
+      askDeleteWithFollowUps(a,[entry],wipe,"Delete this diary entry?");
     }
   });
 
