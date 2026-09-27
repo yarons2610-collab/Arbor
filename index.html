@@ -1440,8 +1440,11 @@ async function loadDB(){
         let localCopy=null;
         try{ localCopy=await window.arbor.load(); }catch(e){}
         const agreed=snapshotIds(remote);   // what the Gist actually holds
+        const agreedBase=snapshotBase(remote);
         const before=JSON.stringify(remote.schedule||[]).length;
         DB=(localCopy&&localCopy.domains)?mergeLocalAdditions(remote,localCopy):remote;
+        lastSyncedBase=agreedBase;
+        applyLocalView();   // this device's own filters/zoom, not the last device's
         migrate();
         lastSyncedRemoteVersion=version;
         const carried=JSON.stringify(DB.schedule||[]).length!==before;
@@ -1652,6 +1655,62 @@ function restoreSyncMark(){
     lastSyncedIds=ids;
   }catch(e){}
 }
+/* What the two sides last agreed on, record by record. Deciding a merge needs
+   three copies, not two: the remote, this device's, and the one they last
+   agreed on. Without the third, a merge cannot tell an edit made here from a
+   record this device simply holds an older copy of — so the only safe thing
+   it could do was take the remote's version of everything that already
+   existed, quietly dropping an edit made here whenever the other device
+   pushed anything at all. Memory only: after a reload there is nothing
+   unpushed to reason about that boot's own reconciliation doesn't cover. */
+let lastSyncedBase=null;
+// an animal without its diary: the diary is merged entry by entry, so an
+// animal's own fields are compared and replaced without it
+function animalFields(a){ const {diary,...rest}=a||{}; return rest; }
+function snapshotBase(db){
+  const rec={};
+  MERGE_KEYS.forEach(k=>{
+    const m=new Map();
+    (db[k]||[]).forEach(x=>{ if(x&&x.id) m.set(x.id,JSON.stringify(k==="animals"?animalFields(x):x)); });
+    rec[k]=m;
+  });
+  const diary=new Map();
+  (db.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) diary.set(e.id,JSON.stringify(e)); }));
+  return {rec,diary,config:JSON.stringify(db.config||{}),inventory:JSON.stringify(db.inventory||{})};
+}
+function baseJSON(base,coll,id){
+  if(!base)return undefined;
+  const m=coll==="diary"?base.diary:base.rec[coll];
+  return m?m.get(id):undefined;
+}
+// true only when this device actually changed the record since that copy —
+// a record it never touched is left to whatever the remote says
+function changedHere(base,coll,id,obj){
+  const was=baseJSON(base,coll,id);
+  return was!==undefined&&was!==JSON.stringify(obj);
+}
+/* View state is this device's own, not the workspace's: which filters are on,
+   what is typed in a search box, which calendar zoom, what is collapsed. It
+   lived in the synced config, so two devices open at once each shoved their
+   view onto the other — a phone's filters landing on the laptop mid-sentence,
+   the calendar jumping zoom while being read. Kept here instead, and put back
+   over whatever a pull brings in. */
+const LOCAL_VIEW_KEYS=["calMode","calFilters","calAlldayCollapsed","topCollapsed",
+  "animalFilters","notesFilter","notesSort","expTaskSort","expTaskGroup","expViewBy"];
+const VIEW_STATE_KEY="arbor_view_state";
+function saveLocalView(){
+  try{
+    const o={}; LOCAL_VIEW_KEYS.forEach(k=>{ if(DB.config&&DB.config[k]!==undefined) o[k]=DB.config[k]; });
+    localStorage.setItem(VIEW_STATE_KEY,JSON.stringify(o));
+  }catch(e){}
+}
+function applyLocalView(){
+  try{
+    const o=JSON.parse(localStorage.getItem(VIEW_STATE_KEY)||"null");
+    if(!o||!DB.config)return;
+    LOCAL_VIEW_KEYS.forEach(k=>{ if(o[k]!==undefined) DB.config[k]=o[k]; });
+  }catch(e){}
+}
 function snapshotIds(db){
   const out={diary:new Set()};
   MERGE_KEYS.forEach(k=>{ out[k]=new Set((db[k]||[]).map(x=>x&&x.id).filter(Boolean)); });
@@ -1665,8 +1724,40 @@ function snapshotIds(db){
    Only records created since the last agreed copy come over. One that was in
    that copy and is missing from the remote was deleted on another device, and
    must stay deleted rather than being resurrected by its absence. */
+/* Config lists nobody can tell apart by id alone — both devices may have
+   added to the same one, and taking either side whole would drop the other's. */
+const KEYED_CONFIG_LISTS=[{key:"diaryTypes",idOf:x=>x&&x.key},{key:"taskLib",idOf:x=>x&&x.name},
+  {key:"eventTypes",idOf:x=>x&&x.id},{key:"procedureLib",idOf:x=>x&&x.id},
+  {key:"siteLib",idOf:x=>x&&x.name},{key:"virusLib",idOf:x=>x&&x.name}];
+/* config was taken from the remote wholesale, so an entry type added here, or
+   a follow-up rule just written, vanished the moment the other device pushed.
+   Merged key by key on the same three-way rule the records use, with the
+   keyed lists above unioned so neither side's additions are lost — and
+   neither side's deletions undone, since anything in the agreed copy that is
+   gone here stays gone. */
+function mergeConfig(remoteCfg,localCfg,base){
+  const out={...(remoteCfg||{})};
+  let baseCfg=null; try{ baseCfg=base?JSON.parse(base.config||"null"):null; }catch(e){}
+  Object.keys(localCfg||{}).forEach(k=>{
+    if(!baseCfg||JSON.stringify(baseCfg[k])!==JSON.stringify(localCfg[k])) out[k]=localCfg[k];
+  });
+  KEYED_CONFIG_LISTS.forEach(({key,idOf})=>{
+    const r=(remoteCfg||{})[key], l=(localCfg||{})[key];
+    if(!Array.isArray(r)||!Array.isArray(l))return;
+    const merged=Array.isArray(out[key])?[...out[key]]:[];
+    const have=new Set(merged.map(idOf));
+    const knownBefore=new Set((baseCfg&&Array.isArray(baseCfg[key])?baseCfg[key]:[]).map(idOf));
+    [...r,...l].forEach(x=>{
+      const id=idOf(x);
+      if(id==null||have.has(id)||knownBefore.has(id))return;   // already there, or deleted on purpose
+      have.add(id); merged.push(x);
+    });
+    out[key]=merged;
+  });
+  return out;
+}
 function mergeLocalAdditions(remote,local){
-  const known=lastSyncedIds;
+  const known=lastSyncedIds, base=lastSyncedBase;
   const isNew=(k,id)=>!known||!known[k]||!known[k].has(id);
   // Deletions made here since that agreed copy, and not yet pushed. The merge
   // starts from the remote, which still has them, so without replaying them a
@@ -1681,6 +1772,20 @@ function mergeLocalAdditions(remote,local){
     if(gone.size) remote[k]=remote[k].filter(x=>!(x&&gone.has(x.id)));
     const have=new Set(remote[k].map(x=>x&&x.id));
     local[k].forEach(x=>{ if(x&&x.id&&!have.has(x.id)&&isNew(k,x.id)) remote[k].push(x); });
+    // An edit made here since the agreed copy replaces the remote's copy of
+    // that record. One this device never touched keeps the remote's version;
+    // when both changed the same record the one about to push wins, which is
+    // the person currently looking at the screen. Animals are merged by their
+    // own fields only — their diary is merged entry by entry below, and
+    // taking a whole animal would throw away entries added on the other side.
+    const at=new Map(); remote[k].forEach((x,i)=>{ if(x&&x.id) at.set(x.id,i); });
+    local[k].forEach(x=>{
+      if(!x||!x.id)return;
+      const i=at.get(x.id); if(i==null)return;
+      if(k==="animals"){
+        if(changedHere(base,k,x.id,animalFields(x))) Object.assign(remote[k][i],animalFields(x));
+      } else if(changedHere(base,k,x.id,x)) remote[k][i]=x;
+    });
   });
   // diary entries hang off their animal, so they need the same test a level down
   const liveDiary=new Set();
@@ -1695,7 +1800,28 @@ function mergeLocalAdditions(remote,local){
     ra.diary=ra.diary||[];
     const have=new Set(ra.diary.map(e=>e&&e.id));
     la.diary.forEach(e=>{ if(e&&e.id&&!have.has(e.id)&&isNew("diary",e.id)) ra.diary.push(e); });
+    // and an entry edited here — a weight corrected, a follow-up ticked off —
+    // keeps that edit rather than reverting to the remote's copy
+    const at=new Map(); ra.diary.forEach((e,i)=>{ if(e&&e.id) at.set(e.id,i); });
+    la.diary.forEach(e=>{
+      if(!e||!e.id)return;
+      const i=at.get(e.id); if(i==null)return;
+      if(changedHere(base,"diary",e.id,e)) ra.diary[i]=e;
+    });
   });
+  remote.config=mergeConfig(remote.config,local.config,base);
+  // inventory is keyed by material name rather than id, so it gets the same
+  // three-way treatment a key at a time, deletions included
+  let baseInv=null; try{ baseInv=base?JSON.parse(base.inventory||"null"):null; }catch(e){}
+  const inv={...(remote.inventory||{})}, localInv=local.inventory||{};
+  Object.keys(localInv).forEach(k=>{
+    if(!baseInv||JSON.stringify(baseInv[k])!==JSON.stringify(localInv[k])) inv[k]=localInv[k];
+  });
+  if(baseInv) Object.keys(baseInv).forEach(k=>{ if(!(k in localInv)) delete inv[k]; });
+  remote.inventory=inv;
+  // this device's own read-through cache of the shared virus file, not
+  // anything the workspace owns
+  if(local.sharedVirusCache) remote.sharedVirusCache=local.sharedVirusCache;
   return remote;
 }
 
@@ -1750,8 +1876,10 @@ async function runSync(){
       // merged state as agreed was a quiet lie — the additions carried over
       // had never reached the Gist, so the next conflict read their absence
       // there as "deleted on another device" and dropped them for good.
-      const agreed=snapshotIds(remote);
-      DB=mergeLocalAdditions(remote,DB); migrate();
+      const agreed=snapshotIds(remote), agreedBase=snapshotBase(remote);
+      DB=mergeLocalAdditions(remote,DB);
+      lastSyncedBase=agreedBase;
+      applyLocalView(); migrate();
       lastSyncedRemoteVersion=remote.__gistVersion;
       lastSyncedIds=agreed; saveSyncMark();
       undoStack.length=0;   // those entries describe records this pull replaced
@@ -1763,7 +1891,7 @@ async function runSync(){
     }
     const pushedVersion=await gistSave(JSON.stringify(DB));
     if(pushedVersion) lastSyncedRemoteVersion=pushedVersion;
-    lastSyncedIds=snapshotIds(DB); saveSyncMark();
+    lastSyncedIds=snapshotIds(DB); lastSyncedBase=snapshotBase(DB); saveSyncMark();
     lastSyncAt=Date.now(); syncBackoffUntil=0; syncFailures=0; localDirty=false; setSaveState("synced");
   }catch(e){
     lastSyncAt=Date.now();
@@ -1789,6 +1917,7 @@ async function runSync(){
 }
 function persist(){
   DB.updatedAt=Date.now(); localDirty=true;
+  saveLocalView();   // filters/zoom/collapse stay on this device (see LOCAL_VIEW_KEYS)
   clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160);
 }
 async function flushSave(){
@@ -1848,9 +1977,11 @@ async function autoPull(){
       // through. Before this, the warning only cleared once an edit happened
       // to push.
       restoreSyncMark();
-      const agreed=snapshotIds(remote);
+      const agreed=snapshotIds(remote), agreedBase=snapshotBase(remote);
       const remoteJSON=JSON.stringify(remote);
-      DB=mergeLocalAdditions(remote,DB); migrate();
+      DB=mergeLocalAdditions(remote,DB);
+      lastSyncedBase=agreedBase;
+      applyLocalView(); migrate();
       lastSyncedRemoteVersion=remote.__gistVersion;
       lastSyncedIds=agreed; saveSyncMark();
       undoStack.length=0;
@@ -1864,7 +1995,8 @@ async function autoPull(){
     // No merge here on purpose: this only runs with nothing unpushed, so the
     // local copy is exactly what we last agreed on, and anything the remote
     // no longer has was deleted elsewhere and should stay that way.
-    DB=remote; migrate(); lastSyncedRemoteVersion=remote.__gistVersion;
+    lastSyncedBase=snapshotBase(remote);
+    DB=remote; applyLocalView(); migrate(); lastSyncedRemoteVersion=remote.__gistVersion;
     lastSyncedIds=snapshotIds(DB); saveSyncMark();
     undoStack.length=0;   // those entries describe records this pull just replaced
     try{ await window.arbor.save(DB); }catch(e){}          // keep the local disk copy in step too
@@ -11137,7 +11269,7 @@ function showGistSetup(){
       msg("Verified ✓ — looking for existing Arbor data…","var(--gcamp)");
       try{
         const remote=await gistLoad();
-        if(remote&&remote.domains){DB=remote;migrate();lastSyncedRemoteVersion=remote.__gistVersion;render();
+        if(remote&&remote.domains){DB=remote;lastSyncedBase=snapshotBase(remote);applyLocalView();migrate();lastSyncedRemoteVersion=remote.__gistVersion;render();
           msg("Connected as @"+login+" — loaded your existing workspace ✓","var(--gcamp)");}
         else{msg("Connected as @"+login+" — saving current workspace…","var(--gcamp)");
           lastSyncedRemoteVersion=await gistSave(JSON.stringify(DB));}
