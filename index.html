@@ -148,23 +148,11 @@
   .color-cell.on{outline:2px solid var(--gcamp);outline-offset:1px}
   .color-cell.on::after{content:"✓";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     font-size:11px;color:#fff;text-shadow:0 1px 2px #000}
-  .color-strays{margin-top:8px}
-  .color-straylabel{font-family:var(--mono);font-size:9px;color:var(--ink-faint);display:block;margin-bottom:3px}
   .color-key{display:flex;gap:12px;margin-top:12px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
   .color-key span{display:flex;align-items:center;gap:5px}
   .color-key i{width:11px;height:11px;border-radius:50%;display:inline-block}
   .color-key-used{border:1.5px dashed var(--ink-dim)}
   .color-key-on{border:2px solid var(--gcamp)}
-  .color-legend{margin-top:8px;max-height:168px;overflow:auto;display:flex;flex-direction:column;gap:1px;
-    border-top:1px solid var(--line);padding-top:7px}
-  .color-row{display:flex;align-items:center;gap:7px;background:transparent;border:0;color:var(--ink-dim);
-    font-size:11.5px;padding:3px 4px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;width:100%}
-  .color-row:hover{background:var(--panel);color:var(--ink)}
-  .color-row.on{color:var(--gcamp)}
-  .color-dot{width:12px;height:12px;border-radius:50%;background:var(--c);flex:0 0 auto;border:1px solid rgba(255,255,255,.25)}
-  .color-names{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .color-names b{font-weight:600;color:var(--ink-faint);font-size:10px;font-family:var(--mono);margin-right:4px}
-  .color-none{margin-top:8px;font-size:11.5px;color:var(--ink-faint);border-top:1px solid var(--line);padding-top:8px}
   .color-foot{display:flex;justify-content:flex-end;margin-top:9px;border-top:1px solid var(--line);padding-top:8px;
     font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
   .color-foot label{display:flex;align-items:center;gap:6px;cursor:pointer}
@@ -3230,6 +3218,20 @@ function hslHex(h,sPct,lPct){
   const hex=v=>Math.round((v+m)*255).toString(16).padStart(2,"0");
   return "#"+hex(r)+hex(g)+hex(b);
 }
+// Which square on the grid a colour belongs to. A colour picked before this
+// grid existed, or typed in by hand, is rarely exactly one of them — it marks
+// the nearest instead, so the grid carries every mark itself. Weighted the way
+// the eye weights the channels.
+function nearestGridColor(hex,grid){
+  const p=(c,i)=>parseInt(c.slice(i,i+2),16);
+  const r=p(hex,1), g=p(hex,3), b=p(hex,5);
+  let best=grid[0], bd=Infinity;
+  grid.forEach(c=>{
+    const d=0.3*(p(c,1)-r)**2+0.59*(p(c,3)-g)**2+0.11*(p(c,5)-b)**2;
+    if(d<bd){ bd=d; best=c; }
+  });
+  return best;
+}
 function colorGrid(){
   const rows=COLOR_SHADES.map(sh=>COLOR_HUES.map(h=>hslHex(h,sh.s,sh.l)));
   rows.push([...COLOR_NEUTRALS]);
@@ -3256,35 +3258,33 @@ function openColorPicker(anchor,value,onPick){
   const cur=(value||"").toLowerCase().slice(0,7);
   const usage=colorUsage();
   const named=c=>(usage.get(c)||[]).map(x=>`${x.what}: ${x.name}`).join(" · ");
-  const rows=colorGrid();
-  const onGrid=new Set(rows.flat());
-  // colours already in use (or in use right here) that the grid doesn't
-  // contain — older picks, or something typed in by hand. They keep their own
-  // row rather than being scattered through the ordered ones.
-  const strays=[...new Set([...usage.keys(),...(cur?[cur]:[])])].filter(c=>!onGrid.has(c)).sort();
-  const cell=c=>`<button type="button" class="color-cell${c===cur?" on":""}${usage.has(c)?" used":""}" data-c="${escAttr(c)}"
-      style="--c:${escAttr(c)}" title="${escAttr(c+(usage.has(c)?" — "+named(c):" — not used yet"))}"></button>`;
-  // the legend reads by kind, then by name, so it is a list of decisions
-  // rather than a list of colours
-  const ORDER=["Entry type","Event category","Experiment","Project","Tag","Event","Task"];
-  const entries=[];
-  usage.forEach((list,c)=>list.forEach(u=>entries.push({c,...u})));
-  entries.sort((a,b)=>(ORDER.indexOf(a.what)-ORDER.indexOf(b.what))||a.name.localeCompare(b.name));
+  const rows=colorGrid(), flat=rows.flat();
+  /* Every colour in use marks the square nearest it, and the one in use here
+     marks its own — the grid carries all of it. A separate row of "already in
+     use" swatches below the grid, and a legend under that, were the same
+     information three times over in three different orders. What holds a
+     colour is in the square's own tooltip. */
+  const usedAt=new Map();
+  usage.forEach((list,c)=>{
+    const k=flat.includes(c)?c:nearestGridColor(c,flat);
+    if(!usedAt.has(k))usedAt.set(k,[]);
+    usedAt.get(k).push(...list);
+  });
+  const curCell=cur?(flat.includes(cur)?cur:nearestGridColor(cur,flat)):null;
+  const cell=c=>{
+    const held=usedAt.get(c);
+    const names=held?held.map(x=>`${x.what}: ${x.name}`).join(" · "):"";
+    return `<button type="button" class="color-cell${c===curCell?" on":""}${held?" used":""}" data-c="${escAttr(c)}"
+      style="--c:${escAttr(c)}" title="${escAttr(c+(names?" — "+names:" — not used yet"))}"></button>`;
+  };
   const pop=document.createElement("div"); pop.className="color-pop";
   pop.innerHTML=`
     <div class="color-grid">${rows.map(r=>`<div class="color-rowline">${r.map(cell).join("")}</div>`).join("")}</div>
-    ${strays.length?`<div class="color-strays"><span class="color-straylabel">already in use</span>
-      <div class="color-rowline">${strays.map(cell).join("")}</div></div>`:""}
     <div class="color-key"><span><i class="color-key-used"></i> used elsewhere</span><span><i class="color-key-on"></i> this one</span></div>
-    ${entries.length?`<div class="color-legend">${entries.map(e=>`
-      <button type="button" class="color-row${e.c===cur?" on":""}" data-c="${escAttr(e.c)}" title="Use this colour">
-        <span class="color-dot" style="--c:${escAttr(e.c)}"></span>
-        <span class="color-names"><b>${esc(e.what)}</b> ${esc(e.name)}</span></button>`).join("")}</div>`
-      :`<div class="color-none">Nothing has a colour yet.</div>`}
     <div class="color-foot"><label>custom<input type="color" class="color-custom" value="${escAttr(cur||"#54e08a")}"></label></div>`;
   const take=c=>{ onPick(c); closeColorPicker(); };
   pop.addEventListener("click",ev=>{
-    const cell=ev.target.closest(".color-cell,.color-row");
+    const cell=ev.target.closest(".color-cell");
     if(cell) take(cell.dataset.c);
   });
   pop.querySelector(".color-custom").addEventListener("input",ev=>onPick(ev.target.value));
