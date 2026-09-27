@@ -133,16 +133,23 @@
   .colorbtn{background:var(--c);border:1px solid var(--line2);border-radius:6px;padding:0;cursor:pointer;flex:0 0 auto}
   .colorbtn:hover{border-color:var(--gcamp)}
   .color-pop{position:fixed;z-index:95;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;
-    padding:11px;box-shadow:0 24px 60px -22px #000;width:262px}
-  .color-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
-  .color-cell{width:24px;height:24px;border-radius:50%;background:var(--c);border:1px solid rgba(255,255,255,.2);
-    padding:0;cursor:pointer;position:relative}
-  /* taken already: a dashed ring, so a colour that means something somewhere
-     else is never picked by accident */
-  .color-cell.used::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.5px dashed var(--ink-dim)}
+    padding:11px;box-shadow:0 24px 60px -22px #000;width:296px}
+  /* Twelve hues across, five shades down, neutrals under them — squares in
+     rows, so the options read as a spectrum rather than a scatter. */
+  .color-grid{display:flex;flex-direction:column;gap:3px}
+  .color-rowline{display:flex;gap:3px}
+  .color-cell{flex:1 1 0;height:19px;min-width:0;border-radius:3px;background:var(--c);
+    border:1px solid rgba(255,255,255,.14);padding:0;cursor:pointer;position:relative}
+  .color-cell:hover{transform:scale(1.18);z-index:2;border-color:#fff}
+  /* taken already: a dashed outline, so a colour that means something
+     somewhere else is never picked by accident */
+  .color-cell.used{outline:1.5px dashed var(--ink-dim);outline-offset:1px}
   /* the one in use here: a solid ring and a tick, told apart at a glance */
-  .color-cell.on::after{content:"✓";position:absolute;inset:-4px;border-radius:50%;border:2px solid var(--gcamp);
-    display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;text-shadow:0 1px 2px #000}
+  .color-cell.on{outline:2px solid var(--gcamp);outline-offset:1px}
+  .color-cell.on::after{content:"✓";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-size:11px;color:#fff;text-shadow:0 1px 2px #000}
+  .color-strays{margin-top:8px}
+  .color-straylabel{font-family:var(--mono);font-size:9px;color:var(--ink-faint);display:block;margin-bottom:3px}
   .color-key{display:flex;gap:12px;margin-top:12px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
   .color-key span{display:flex;align-items:center;gap:5px}
   .color-key i{width:11px;height:11px;border-radius:50%;display:inline-block}
@@ -156,6 +163,7 @@
   .color-row.on{color:var(--gcamp)}
   .color-dot{width:12px;height:12px;border-radius:50%;background:var(--c);flex:0 0 auto;border:1px solid rgba(255,255,255,.25)}
   .color-names{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .color-names b{font-weight:600;color:var(--ink-faint);font-size:10px;font-family:var(--mono);margin-right:4px}
   .color-none{margin-top:8px;font-size:11.5px;color:var(--ink-faint);border-top:1px solid var(--line);padding-top:8px}
   .color-foot{display:flex;justify-content:flex-end;margin-top:9px;border-top:1px solid var(--line);padding-top:8px;
     font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
@@ -3195,24 +3203,37 @@ function colorUsage(){
     if(!out.has(k))out.set(k,[]);
     out.get(k).push({what,name:(name||"").trim()||"(unnamed)"});
   };
-  (DB.tags||[]).forEach(x=>add(x.color,"Tag",x.name));
+  // Only the colours that are a label for something. A virus's colour, its
+  // box colour and an injection marker stand for a real thing rather than a
+  // category, so listing them said nothing and buried the ones that matter.
   (DB.config.diaryTypes||[]).forEach(x=>add(x.color,"Entry type",x.label));
   (DB.config.eventTypes||[]).forEach(x=>add(x.color,"Event category",x.name));
   (DB.experiments||[]).forEach(x=>add(x.color,"Experiment",x.title));
   (DB.projects||[]).forEach(x=>add(x.color,"Project",x.name));
-  (DB.domains||[]).forEach(x=>add(x.color,"Soma",x.name));
-  activeViruses().forEach(x=>add(x.color,"Virus",x.name));
-  (DB.config.virusLib||[]).forEach(x=>add(x.boxColor,"Virus box",x.name));
+  (DB.tags||[]).forEach(x=>add(x.color,"Tag",x.name));
   taskList().forEach(t=>{ if(t.color) add(t.color,t.isEvent?"Event":"Task",t.title); });
-  (DB.animals||[]).forEach(a=>(a.surgeryDetail&&a.surgeryDetail.injections||[])
-    .forEach(inj=>add(inj.color,"Injection",a.name+(inj.virus?" · "+inj.virus:""))));
   return out;
 }
-// Built when the picker opens, not at load: INJ_COLORS is declared further
-// down this file, and reading it up here died before the rest of the script
-// had even been evaluated.
-function colorPalette(){
-  return [...new Set([...GCAL_COLORS.map(c=>c[0]),...DOMAIN_PALETTE,...INJ_COLORS].map(c=>c.toLowerCase()))];
+/* A grid you can reason about: twelve hues across, five shades of each down,
+   and a row of neutrals under them. The first version simply listed the app's
+   three old palettes and then appended every colour already in use, which had
+   no order at all — you could not see what your options were, only what
+   happened to exist. */
+const COLOR_HUES=[0,25,45,70,140,170,195,215,250,280,310,335];
+const COLOR_SHADES=[{s:70,l:78},{s:72,l:64},{s:68,l:52},{s:60,l:40},{s:52,l:30}];
+const COLOR_NEUTRALS=["#ffffff","#e6e9ee","#c9cfd8","#aab3c0","#8a94a3","#6d7787",
+                      "#525b69","#3a4252","#262c38","#161a22","#0b0e14","#000000"];
+function hslHex(h,sPct,lPct){
+  const s=sPct/100, l=lPct/100;
+  const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs(((h/60)%2)-1)), m=l-c/2;
+  const [r,g,b]=h<60?[c,x,0]:h<120?[x,c,0]:h<180?[0,c,x]:h<240?[0,x,c]:h<300?[x,0,c]:[c,0,x];
+  const hex=v=>Math.round((v+m)*255).toString(16).padStart(2,"0");
+  return "#"+hex(r)+hex(g)+hex(b);
+}
+function colorGrid(){
+  const rows=COLOR_SHADES.map(sh=>COLOR_HUES.map(h=>hslHex(h,sh.s,sh.l)));
+  rows.push([...COLOR_NEUTRALS]);
+  return rows;
 }
 // A swatch button standing in for the browser's own colour field, which could
 // say nothing about what a colour already means. Keeps a real `value`, so every
@@ -3235,17 +3256,30 @@ function openColorPicker(anchor,value,onPick){
   const cur=(value||"").toLowerCase().slice(0,7);
   const usage=colorUsage();
   const named=c=>(usage.get(c)||[]).map(x=>`${x.what}: ${x.name}`).join(" · ");
-  const swatches=[...new Set([...colorPalette(),...usage.keys(),...(cur?[cur]:[])])];
-  const used=[...usage.keys()].sort((a,b)=>named(a).localeCompare(named(b)));
+  const rows=colorGrid();
+  const onGrid=new Set(rows.flat());
+  // colours already in use (or in use right here) that the grid doesn't
+  // contain — older picks, or something typed in by hand. They keep their own
+  // row rather than being scattered through the ordered ones.
+  const strays=[...new Set([...usage.keys(),...(cur?[cur]:[])])].filter(c=>!onGrid.has(c)).sort();
+  const cell=c=>`<button type="button" class="color-cell${c===cur?" on":""}${usage.has(c)?" used":""}" data-c="${escAttr(c)}"
+      style="--c:${escAttr(c)}" title="${escAttr(c+(usage.has(c)?" — "+named(c):" — not used yet"))}"></button>`;
+  // the legend reads by kind, then by name, so it is a list of decisions
+  // rather than a list of colours
+  const ORDER=["Entry type","Event category","Experiment","Project","Tag","Event","Task"];
+  const entries=[];
+  usage.forEach((list,c)=>list.forEach(u=>entries.push({c,...u})));
+  entries.sort((a,b)=>(ORDER.indexOf(a.what)-ORDER.indexOf(b.what))||a.name.localeCompare(b.name));
   const pop=document.createElement("div"); pop.className="color-pop";
   pop.innerHTML=`
-    <div class="color-grid">${swatches.map(c=>`
-      <button type="button" class="color-cell${c===cur?" on":""}${usage.has(c)?" used":""}" data-c="${escAttr(c)}"
-        style="--c:${escAttr(c)}" title="${escAttr(c+(usage.has(c)?" — "+named(c):" — not used yet"))}"></button>`).join("")}</div>
-    <div class="color-key"><span><i class="color-key-used"></i> already used</span><span><i class="color-key-on"></i> this one</span></div>
-    ${used.length?`<div class="color-legend">${used.map(c=>`
-      <button type="button" class="color-row${c===cur?" on":""}" data-c="${escAttr(c)}" title="Use this colour">
-        <span class="color-dot" style="--c:${escAttr(c)}"></span><span class="color-names">${esc(named(c))}</span></button>`).join("")}</div>`
+    <div class="color-grid">${rows.map(r=>`<div class="color-rowline">${r.map(cell).join("")}</div>`).join("")}</div>
+    ${strays.length?`<div class="color-strays"><span class="color-straylabel">already in use</span>
+      <div class="color-rowline">${strays.map(cell).join("")}</div></div>`:""}
+    <div class="color-key"><span><i class="color-key-used"></i> used elsewhere</span><span><i class="color-key-on"></i> this one</span></div>
+    ${entries.length?`<div class="color-legend">${entries.map(e=>`
+      <button type="button" class="color-row${e.c===cur?" on":""}" data-c="${escAttr(e.c)}" title="Use this colour">
+        <span class="color-dot" style="--c:${escAttr(e.c)}"></span>
+        <span class="color-names"><b>${esc(e.what)}</b> ${esc(e.name)}</span></button>`).join("")}</div>`
       :`<div class="color-none">Nothing has a colour yet.</div>`}
     <div class="color-foot"><label>custom<input type="color" class="color-custom" value="${escAttr(cur||"#54e08a")}"></label></div>`;
   const take=c=>{ onPick(c); closeColorPicker(); };
