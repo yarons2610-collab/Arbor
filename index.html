@@ -130,6 +130,37 @@
   .datebtn:hover{border-color:var(--gcamp)}
   .datebtn-sm{padding:5px 8px;font-size:11.5px}
   .datebtn.datebtn-empty{color:var(--ink-faint)}
+  .colorbtn{background:var(--c);border:1px solid var(--line2);border-radius:6px;padding:0;cursor:pointer;flex:0 0 auto}
+  .colorbtn:hover{border-color:var(--gcamp)}
+  .color-pop{position:fixed;z-index:95;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;
+    padding:11px;box-shadow:0 24px 60px -22px #000;width:262px}
+  .color-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+  .color-cell{width:24px;height:24px;border-radius:50%;background:var(--c);border:1px solid rgba(255,255,255,.2);
+    padding:0;cursor:pointer;position:relative}
+  /* taken already: a dashed ring, so a colour that means something somewhere
+     else is never picked by accident */
+  .color-cell.used::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1.5px dashed var(--ink-dim)}
+  /* the one in use here: a solid ring and a tick, told apart at a glance */
+  .color-cell.on::after{content:"✓";position:absolute;inset:-4px;border-radius:50%;border:2px solid var(--gcamp);
+    display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;text-shadow:0 1px 2px #000}
+  .color-key{display:flex;gap:12px;margin-top:12px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
+  .color-key span{display:flex;align-items:center;gap:5px}
+  .color-key i{width:11px;height:11px;border-radius:50%;display:inline-block}
+  .color-key-used{border:1.5px dashed var(--ink-dim)}
+  .color-key-on{border:2px solid var(--gcamp)}
+  .color-legend{margin-top:8px;max-height:168px;overflow:auto;display:flex;flex-direction:column;gap:1px;
+    border-top:1px solid var(--line);padding-top:7px}
+  .color-row{display:flex;align-items:center;gap:7px;background:transparent;border:0;color:var(--ink-dim);
+    font-size:11.5px;padding:3px 4px;border-radius:6px;cursor:pointer;text-align:left;font-family:inherit;width:100%}
+  .color-row:hover{background:var(--panel);color:var(--ink)}
+  .color-row.on{color:var(--gcamp)}
+  .color-dot{width:12px;height:12px;border-radius:50%;background:var(--c);flex:0 0 auto;border:1px solid rgba(255,255,255,.25)}
+  .color-names{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .color-none{margin-top:8px;font-size:11.5px;color:var(--ink-faint);border-top:1px solid var(--line);padding-top:8px}
+  .color-foot{display:flex;justify-content:flex-end;margin-top:9px;border-top:1px solid var(--line);padding-top:8px;
+    font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+  .color-foot label{display:flex;align-items:center;gap:6px;cursor:pointer}
+  .color-custom{width:26px;height:26px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer}
   .cal-pop{position:fixed;z-index:90;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:12px;box-shadow:0 24px 60px -22px #000;width:256px}
   .emoji-btn{width:36px;height:32px;font-size:16px;text-align:center;background:var(--bg2);border:1px solid var(--line2);border-radius:6px;cursor:pointer}
   .emoji-pop{position:fixed;z-index:90;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:8px;box-shadow:0 24px 60px -22px #000;width:220px}
@@ -971,6 +1002,8 @@
        by openCalendar/openTimePicker) leaves it hugging whichever edge of a
        narrow phone screen the button happens to be near, which reads as
        stranded rather than a deliberate dialog */
+    .color-pop{position:fixed!important;left:50%!important;top:50%!important;transform:translate(-50%,-50%);
+      width:90vw!important;max-width:330px!important;max-height:84vh;max-height:84dvh;overflow:auto}
     .cal-pop{position:fixed!important;left:50%!important;right:auto!important;
       top:50%!important;bottom:auto!important;transform:translate(-50%,-50%);
       width:88vw!important;max-width:320px!important;
@@ -3150,6 +3183,100 @@ function openTimePicker(anchor, value, onPick, minuteStep, clearLabel){
   document.addEventListener("mousedown",out,true);
   _calEls={pop,out};
 }
+/* Every colour already spoken for, and what it belongs to. A colour here is a
+   label — this tag, that entry type, this experiment — so picking one blind is
+   how two things end up the same colour and a legend quietly stops meaning
+   anything. Read fresh each time the picker opens. */
+function colorUsage(){
+  const out=new Map();
+  const add=(c,what,name)=>{
+    if(!c||!String(c).startsWith("#"))return;
+    const k=String(c).toLowerCase().slice(0,7);
+    if(!out.has(k))out.set(k,[]);
+    out.get(k).push({what,name:(name||"").trim()||"(unnamed)"});
+  };
+  (DB.tags||[]).forEach(x=>add(x.color,"Tag",x.name));
+  (DB.config.diaryTypes||[]).forEach(x=>add(x.color,"Entry type",x.label));
+  (DB.config.eventTypes||[]).forEach(x=>add(x.color,"Event category",x.name));
+  (DB.experiments||[]).forEach(x=>add(x.color,"Experiment",x.title));
+  (DB.projects||[]).forEach(x=>add(x.color,"Project",x.name));
+  (DB.domains||[]).forEach(x=>add(x.color,"Soma",x.name));
+  activeViruses().forEach(x=>add(x.color,"Virus",x.name));
+  (DB.config.virusLib||[]).forEach(x=>add(x.boxColor,"Virus box",x.name));
+  taskList().forEach(t=>{ if(t.color) add(t.color,t.isEvent?"Event":"Task",t.title); });
+  (DB.animals||[]).forEach(a=>(a.surgeryDetail&&a.surgeryDetail.injections||[])
+    .forEach(inj=>add(inj.color,"Injection",a.name+(inj.virus?" · "+inj.virus:""))));
+  return out;
+}
+// Built when the picker opens, not at load: INJ_COLORS is declared further
+// down this file, and reading it up here died before the rest of the script
+// had even been evaluated.
+function colorPalette(){
+  return [...new Set([...GCAL_COLORS.map(c=>c[0]),...DOMAIN_PALETTE,...INJ_COLORS].map(c=>c.toLowerCase()))];
+}
+// A swatch button standing in for the browser's own colour field, which could
+// say nothing about what a colour already means. Keeps a real `value`, so every
+// place that used to read one off the input still reads it off this.
+function colorBtnHTML(value,opts){
+  opts=opts||{};
+  const v=(value&&String(value).startsWith("#"))?value:(opts.fallback||"#54e08a");
+  const size=opts.size||28;
+  return `<button type="button" class="colorbtn${opts.cls?" "+opts.cls:""}" ${opts.attrs||""} value="${escAttr(v)}" data-color="${escAttr(v)}"
+    title="${escAttr(opts.title||"Pick a colour")}" style="--c:${escAttr(v)};width:${size}px;height:${size}px${opts.round?";border-radius:50%":""}${opts.style?";"+opts.style:""}"></button>`;
+}
+function setColorBtn(btn,c){
+  if(!btn||!c)return;
+  btn.value=c; btn.dataset.color=c; btn.style.setProperty("--c",c);
+}
+let _colorEls=null;
+function closeColorPicker(){ if(_colorEls){ _colorEls.pop.remove(); document.removeEventListener("mousedown",_colorEls.out,true); _colorEls=null; } }
+function openColorPicker(anchor,value,onPick){
+  closeColorPicker(); closeEmojiPicker(); closeCalendar();
+  const cur=(value||"").toLowerCase().slice(0,7);
+  const usage=colorUsage();
+  const named=c=>(usage.get(c)||[]).map(x=>`${x.what}: ${x.name}`).join(" · ");
+  const swatches=[...new Set([...colorPalette(),...usage.keys(),...(cur?[cur]:[])])];
+  const used=[...usage.keys()].sort((a,b)=>named(a).localeCompare(named(b)));
+  const pop=document.createElement("div"); pop.className="color-pop";
+  pop.innerHTML=`
+    <div class="color-grid">${swatches.map(c=>`
+      <button type="button" class="color-cell${c===cur?" on":""}${usage.has(c)?" used":""}" data-c="${escAttr(c)}"
+        style="--c:${escAttr(c)}" title="${escAttr(c+(usage.has(c)?" — "+named(c):" — not used yet"))}"></button>`).join("")}</div>
+    <div class="color-key"><span><i class="color-key-used"></i> already used</span><span><i class="color-key-on"></i> this one</span></div>
+    ${used.length?`<div class="color-legend">${used.map(c=>`
+      <button type="button" class="color-row${c===cur?" on":""}" data-c="${escAttr(c)}" title="Use this colour">
+        <span class="color-dot" style="--c:${escAttr(c)}"></span><span class="color-names">${esc(named(c))}</span></button>`).join("")}</div>`
+      :`<div class="color-none">Nothing has a colour yet.</div>`}
+    <div class="color-foot"><label>custom<input type="color" class="color-custom" value="${escAttr(cur||"#54e08a")}"></label></div>`;
+  const take=c=>{ onPick(c); closeColorPicker(); };
+  pop.addEventListener("click",ev=>{
+    const cell=ev.target.closest(".color-cell,.color-row");
+    if(cell) take(cell.dataset.c);
+  });
+  pop.querySelector(".color-custom").addEventListener("input",ev=>onPick(ev.target.value));
+  pop.querySelector(".color-custom").addEventListener("change",ev=>take(ev.target.value));
+  document.body.appendChild(pop);
+  const r=anchor.getBoundingClientRect(); const pw=pop.offsetWidth||250, ph=pop.offsetHeight||240;
+  pop.style.left=Math.max(8,Math.min(r.left,window.innerWidth-pw-10))+"px";
+  pop.style.top=((r.bottom+ph+8<window.innerHeight)?r.bottom+6:Math.max(8,r.top-ph-6))+"px";
+  const out=e=>{ if(!pop.contains(e.target)&&e.target!==anchor) closeColorPicker(); };
+  document.addEventListener("mousedown",out,true);
+  _colorEls={pop,out};
+}
+/* One handler for every swatch in the app: open the shared picker, write the
+   choice onto the button, then fire the very events the browser's colour field
+   used to fire — so each place keeps the one-line handler it already had and
+   none of them need to know this picker exists. Capture phase, because several
+   of these sit inside something else clickable (a category chip). */
+document.addEventListener("click",e=>{
+  const btn=e.target.closest&&e.target.closest(".colorbtn"); if(!btn)return;
+  e.preventDefault(); e.stopPropagation();
+  openColorPicker(btn,btn.dataset.color,c=>{
+    setColorBtn(btn,c);
+    btn.dispatchEvent(new Event("input",{bubbles:true}));
+    btn.dispatchEvent(new Event("change",{bubbles:true}));
+  });
+},true);
 // Grid popover for picking an emoji — a native <select> only ever shows one
 // per row (tall, narrow, wastes most of the popup on whitespace); a grid
 // fits the whole curated set in a compact square instead.
@@ -4524,13 +4651,13 @@ function taskEditor(t,after,occWhen,occEndDate){
     <div class="fld"><label>Colour</label>
       ${t.isEvent?`<div id="tk_cat_chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
-        <input type="color" id="tk_cat_newcolor" value="${GCAL_COLORS[(DB.config.eventTypes||[]).length%GCAL_COLORS.length][0]}" style="width:28px;height:28px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
+        ${colorBtnHTML(GCAL_COLORS[(DB.config.eventTypes||[]).length%GCAL_COLORS.length][0],{attrs:'id="tk_cat_newcolor"',title:"Colour for the new category"})}
         <input id="tk_cat_newname" placeholder="new category…" style="flex:1;min-width:100px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px">
         <button type="button" id="tk_cat_add" class="btn ghost" style="font-size:12px;flex:0 0 auto">＋ Add</button>
       </div>`:""}
       <div style="display:flex;align-items:center;gap:8px">
         <span class="tag" id="tk_color_auto" data-c="" style="cursor:pointer;${!t.color&&!t.eventTypeId?"box-shadow:0 0 0 2px var(--ink-dim)":""}">Automatic</span>
-        <input type="color" id="tk_color_pick" value="${t.color||GCAL_COLORS[0][0]}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer">
+        ${colorBtnHTML(t.color||GCAL_COLORS[0][0],{attrs:'id="tk_color_pick"',size:30})}
       </div></div>
     <div class="fld"><label>Notes</label><textarea id="tk_notes" rows="3">${esc(t.notes||"")}</textarea></div>
     ${t.isEvent?"":`<div class="fld"><label>Part of</label>
@@ -4608,7 +4735,7 @@ function taskEditor(t,after,occWhen,occEndDate){
       const types=DB.config.eventTypes||[];
       catChipsHost.innerHTML=types.length?types.map(et=>`
         <span class="cat-chip${t.eventTypeId===et.id?" on":""}" data-id="${escAttr(et.id)}" style="display:inline-flex;align-items:center;gap:5px;border:1px solid ${t.eventTypeId===et.id?"var(--gcamp)":"var(--line2)"};background:var(--panel2);border-radius:20px;padding:3px 8px 3px 3px;cursor:pointer;font-size:11.5px;color:var(--ink-dim)">
-          <input type="color" class="cat-chip-color" data-id="${escAttr(et.id)}" value="${et.color&&et.color.startsWith("#")?et.color:"#7db4ff"}" style="width:18px;height:18px;border:none;border-radius:50%;padding:0;cursor:pointer;flex:0 0 auto">
+          ${colorBtnHTML(et.color,{cls:"cat-chip-color",attrs:`data-id="${escAttr(et.id)}"`,size:18,round:true,fallback:"#7db4ff",title:"Colour for this category"})}
           <span class="cat-chip-name" data-id="${escAttr(et.id)}" title="double-click to rename">${esc(et.name||"(unnamed)")}</span>
           <button type="button" class="cat-chip-del" data-id="${escAttr(et.id)}" title="delete category" style="border:0;background:transparent;color:var(--ink-faint);cursor:pointer;padding:0 2px;font-size:11px;line-height:1">✕</button>
         </span>`).join("")
@@ -4655,7 +4782,7 @@ function taskEditor(t,after,occWhen,occEndDate){
       t.eventTypeId=et.id; t.color=null;
       persist();
       newNameEl.value="";
-      newColorEl.value=GCAL_COLORS[DB.config.eventTypes.length%GCAL_COLORS.length][0];
+      setColorBtn(newColorEl,GCAL_COLORS[DB.config.eventTypes.length%GCAL_COLORS.length][0]);
       paintCatChips(); tkColorAuto.style.boxShadow="";
     }
     document.getElementById("tk_cat_add").onclick=addCategory;
@@ -4816,7 +4943,7 @@ function experimentModal(st,after){
   modal(`<h3>Experiment</h3>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Name</label><input id="sm_name" value="${escAttr(st.title)}" autofocus></div>
-      <input type="color" id="sm_color" value="${st.color||"#7db4ff"}" style="width:34px;height:34px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto;align-self:flex-end;margin-bottom:2px">
+      ${colorBtnHTML(st.color,{attrs:'id="sm_color"',size:34,fallback:"#7db4ff",style:"align-self:flex-end;margin-bottom:2px"})}
     </div>
     <div class="fld"><label>Project</label>
       <select id="sm_proj"><option value="">No project</option>${[...DB.projects].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).map(pr=>
@@ -4917,7 +5044,7 @@ function projectModal(pr,after){
   modal(`<h3>Project</h3>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Name</label><input id="pm_name" value="${escAttr(pr.name)}" autofocus></div>
-      <input type="color" id="pm_color" value="${pr.color||"#7db4ff"}" style="width:34px;height:34px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto;align-self:flex-end;margin-bottom:2px">
+      ${colorBtnHTML(pr.color,{attrs:'id="pm_color"',size:34,fallback:"#7db4ff",style:"align-self:flex-end;margin-bottom:2px"})}
     </div>
     <div class="fld"><label>Research question</label>
       <textarea id="pm_q" rows="2">${esc(pr.question||"")}</textarea></div>
@@ -7476,8 +7603,8 @@ function renderVirusLib(){
           <input class="lv_backup" data-vi="${i}" type="number" min="0" inputmode="numeric" value="${v.backupTubes!=null?v.backupTubes:""}" placeholder="backup tubes" style="flex:0 0 auto;width:92px;${IST}">
           <input class="lv_aliquot" data-vi="${i}" type="number" min="0" inputmode="numeric" value="${v.aliquotTubes!=null?v.aliquotTubes:""}" placeholder="aliquoted tubes" style="flex:0 0 auto;width:104px;${IST}">
           <input class="lv_boxnum" data-vi="${i}" value="${escAttr(v.boxNumber||"")}" placeholder="box #" style="flex:0 0 auto;width:64px;${IST}">
-          <input class="lv_color" data-vi="${i}" type="color" value="${v.color&&v.color.startsWith("#")?v.color:INJ_COLORS[i%INJ_COLORS.length]}" title="default marker colour for this virus" style="width:28px;height:28px;border:1px solid var(--line2);border-radius:6px;background:var(--panel2);padding:1px;cursor:pointer;flex:0 0 auto">
-          <input class="lv_boxcolor" data-vi="${i}" type="color" value="${v.boxColor&&v.boxColor.startsWith("#")?v.boxColor:"#54e08a"}" title="box color" style="width:28px;height:28px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
+          ${colorBtnHTML(v.color,{cls:"lv_color",attrs:`data-vi="${i}"`,fallback:INJ_COLORS[i%INJ_COLORS.length],title:"Default marker colour for this virus"})}
+          ${colorBtnHTML(v.boxColor,{cls:"lv_boxcolor",attrs:`data-vi="${i}"`,title:"Box colour"})}
           <input class="lv_boxloc" data-vi="${i}" value="${escAttr(v.boxLocation||"")}" placeholder="box location (e.g. -80 shelf 2)" style="flex:1;min-width:140px;${IST}">
           <label class="lv_orderwrap" title="Flag this virus as needing a reorder — purely a note to self, nothing else in the app reacts to it" style="display:flex;align-items:center;gap:5px;flex:0 0 auto;border:1px solid ${v.needOrder?"#8a6a2f":"var(--line2)"};background:${v.needOrder?"linear-gradient(180deg,#3a2e14,#302410)":"var(--panel2)"};color:${v.needOrder?"#ffd166":"var(--ink-dim)"};border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;white-space:nowrap">
             <input type="checkbox" class="lv_order" data-vi="${i}" ${v.needOrder?"checked":""} style="width:auto;margin:0">order more?</label>
@@ -7762,7 +7889,7 @@ function renderTagsLib(host){
       const n=DB.animals.filter(a=>a.tag===c.name).length;
       return `
       <div style="display:flex;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)">
-        <input type="color" class="ltag_color" data-ci="${i}" value="${c.color&&c.color.startsWith("#")?c.color:"#54e08a"}" style="width:28px;height:28px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
+        ${colorBtnHTML(c.color,{cls:"ltag_color",attrs:`data-ci="${i}"`,title:"Colour for this tag"})}
         <input class="ltag_name" data-ci="${i}" value="${escAttr(c.name)}" placeholder="Tag name (e.g. virus validation)" style="flex:1;min-width:140px;${IST}">
         <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 auto">${n} animal${n!==1?"s":""}</span>
         <button class="ltag_del" data-ci="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕</button>
@@ -7870,7 +7997,7 @@ function renderDiaryTypesLib(){
     wrap.innerHTML = dt.length ? dt.map(t => { const i=DB.config.diaryTypes.indexOf(t); return `
       <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:9px;flex-wrap:wrap">
-          <input type="color" class="ldt_color" data-ti="${i}" value="${t.color&&t.color.startsWith("#")?t.color:"#54e08a"}" style="width:30px;height:30px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
+          ${colorBtnHTML(t.color,{cls:"ldt_color",attrs:`data-ti="${i}"`,size:30,title:"Colour for this entry type"})}
           <button type="button" class="emoji-btn ldt_iconbtn" data-ti="${i}" title="pick an icon">${esc(t.icon||"🔖")}</button>
           <input class="ldt_label" data-ti="${i}" value="${escAttr(t.label)}" placeholder="Type name (e.g. Cage change)" style="flex:1;min-width:140px;${IST}">
           <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto" title="How long an entry of this type runs on the Timeline when it has no explicit end time">
@@ -10609,7 +10736,7 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
           <button class="inj-dn" data-i="${i}" style="${BS};padding:0 7px;font-size:9px">▼</button>
         </div>
         <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 18px;text-align:center">${i+1}</span>
-        <input type="color" data-i="${i}" data-f="color" value="${inj.color||INJ_COLORS[i%INJ_COLORS.length]}" title="marker colour" style="width:28px;height:28px;border:1px solid var(--line2);border-radius:6px;background:var(--bg2);padding:2px;cursor:pointer;flex:0 0 auto">
+        ${colorBtnHTML(inj.color,{attrs:`data-i="${i}" data-f="color"`,fallback:INJ_COLORS[i%INJ_COLORS.length],title:"Marker colour for this injection"})}
         <select data-i="${i}" data-f="type" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 7px;font-size:12px;flex:0 0 auto">
           <option value="retro"  ${inj.type==="retro" ?"selected":""}>retro</option>
           <option value="antero" ${inj.type==="antero"?"selected":""}>antero</option>
