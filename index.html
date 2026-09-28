@@ -3238,6 +3238,57 @@ function nearestGridColor(hex,grid){
   });
   return best;
 }
+function hexToHsl(hex){
+  const p=i=>parseInt(hex.slice(i,i+2),16)/255;
+  const r=p(1),g=p(3),b=p(5), mx=Math.max(r,g,b), mn=Math.min(r,g,b), d=mx-mn;
+  let h=0;
+  if(d){ h=mx===r?((g-b)/d+(g<b?6:0)):mx===g?((b-r)/d+2):((r-g)/d+4); h*=60; }
+  const l=(mx+mn)/2, sat=d?d/(1-Math.abs(2*l-1)):0;
+  return {h,s:sat*100,l:l*100};
+}
+function hexMix(a,b,amt){
+  const p=(h,i)=>parseInt(h.slice(i,i+2),16);
+  const v=i=>Math.round(p(a,i)+(p(b,i)-p(a,i))*amt).toString(16).padStart(2,"0");
+  return "#"+v(1)+v(3)+v(5);
+}
+/* An experiment with no colour of its own wears a shade of its project's, so a
+   chip says which project from across the room and which experiment once you
+   look at it. Spread across a band of lightness around the project's own
+   colour; an explicit pick on the experiment always wins over this. */
+function expShade(ex){
+  if(!ex) return "#7db4ff";
+  if(ex.color) return ex.color;
+  const pr=ex.projectId?projById(ex.projectId):null;
+  if(!pr||!pr.color) return "#7db4ff";
+  const sibs=DB.experiments.filter(x=>x.projectId===pr.id)
+    .sort((a,b)=>(a.created||0)-(b.created||0)||String(a.id).localeCompare(String(b.id)));
+  const i=Math.max(0,sibs.findIndex(x=>x.id===ex.id)), n=Math.max(sibs.length,1);
+  const {h,s,l}=hexToHsl(pr.color);
+  const span=Math.min(32,12+n*5);
+  const t=n===1?0:(i/(n-1))-0.5;                       // -0.5 … +0.5 across the band
+  return hslHex(h,Math.max(35,Math.min(85,s)),Math.max(34,Math.min(76,l+t*span)));
+}
+/* Lab work is solid; the rest of life is hollow. A personal event keeps its
+   category's colour but gives up its fill — an outline and a rail instead — so
+   "is this the lab or my own time" is answered by the shape of the chip, and
+   hue is left free to say which project, experiment or entry type something
+   belongs to. */
+function chipSkinTimed(isEvent,col,overdue){
+  const edge=overdue?"var(--overdue)":col;
+  return isEvent
+    ? `background:${col}1f;color:${hexMix(col,"#ffffff",0.55)};border:1.5px solid ${col}aa;border-left:4px solid ${edge};`
+    : `background:${col}dd;color:#fff;border-left:3px solid ${edge}dd;`;
+}
+// the all-day strip and month view draw everything as a light wash already, so
+// there an event drops the wash entirely rather than gaining one
+function chipSkinBar(isEvent,col,overdue){
+  const edge=overdue?"var(--overdue)":col;
+  return isEvent
+    ? `background:transparent;border:1px solid ${col}aa;border-left:3px solid ${edge};color:${hexMix(col,"#ffffff",0.5)}`
+    : `background:${col}22;border-left:3px solid ${edge};color:${overdue?"var(--overdue)":col}`;
+}
+// whether a calendar item is one of life's rather than the lab's
+function calIsEvent(x){ return !!(x&&x.kind==="task"&&x.src&&x.src.isEvent); }
 function colorGrid(){
   const rows=COLOR_SHADES.map(sh=>COLOR_HUES.map(h=>hslHex(h,sh.s,sh.l)));
   rows.push([...COLOR_NEUTRALS]);
@@ -3772,7 +3823,7 @@ function taskColorOf(t){
   // experiment a task would otherwise borrow one from.
   if(t.isEvent&&t.eventTypeId){ const et=eventTypeById(t.eventTypeId); if(et)return et.color; }
   const e=t.experimentId?expById(t.experimentId):null;
-  if(e) return e.color;
+  if(e) return expShade(e);
   // a task attached straight to a project borrows the project's colour, the
   // same way one attached to an experiment borrows the experiment's
   const pr=t.projectId?projById(t.projectId):null;
@@ -4260,7 +4311,7 @@ function taskProjectId(t){
   return e&&e.projectId||null;
 }
 function allSteps(){ return DB.experiments; }
-function stepColor(st){ return st.color||"#7db4ff"; }
+function stepColor(st){ return expShade(st); }
 function addExperiment(){
   const ex={id:uid("st_"),color:DOMAIN_PALETTE[DB.experiments.length%DOMAIN_PALETTE.length],
     title:"",question:"",description:"",hypothesis:"",exclusions:"",outcome:"",
@@ -4983,7 +5034,10 @@ function experimentModal(st,after){
   modal(`<h3>Experiment</h3>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Name</label><input id="sm_name" value="${escAttr(st.title)}" autofocus></div>
-      ${colorBtnHTML(st.color,{attrs:'id="sm_color"',size:34,fallback:"#7db4ff",style:"align-self:flex-end;margin-bottom:2px"})}
+      ${colorBtnHTML(st.color||expShade(st),{attrs:'id="sm_color"',size:34,fallback:"#7db4ff",style:"align-self:flex-end;margin-bottom:2px"})}
+      <label style="display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);flex:0 0 auto;align-self:flex-end;margin-bottom:8px;cursor:pointer"
+        title="Take a shade of the project's own colour, so experiments in one project read as a family">
+        <input type="checkbox" id="sm_color_auto" style="width:auto" ${st.color?"":"checked"}>shade of project</label>
     </div>
     <div class="fld"><label>Project</label>
       <select id="sm_proj"><option value="">No project</option>${[...DB.projects].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).map(pr=>
@@ -5018,7 +5072,9 @@ function experimentModal(st,after){
 
   const save=()=>{
     st.title=document.getElementById("sm_name").value;
-    st.color=document.getElementById("sm_color").value;
+    // unticked means this experiment keeps its own pick; ticked leaves the
+    // colour empty, which is what makes expShade() derive it from the project
+    st.color=document.getElementById("sm_color_auto").checked?null:document.getElementById("sm_color").value;
     st.question=document.getElementById("sm_q").value;
     st.description=document.getElementById("sm_desc").value;
     st.hypothesis=document.getElementById("sm_hyp").value;
@@ -5026,6 +5082,14 @@ function experimentModal(st,after){
     st.outcome=document.getElementById("sm_out").value;
     persist();
   };
+  const smAuto=document.getElementById("sm_color_auto"), smColor=document.getElementById("sm_color");
+  if(smAuto&&smColor){
+    smColor.addEventListener("change",()=>{ smAuto.checked=false; save(); });
+    smAuto.addEventListener("change",()=>{
+      save();
+      if(smAuto.checked) setColorBtn(smColor,expShade(st));   // show the shade it just adopted
+    });
+  }
   bindDateButton(document.getElementById("sm_start"), ()=>st.deadline||"", v=>{ st.deadline=v||null; persist(); });
   bindDateButton(document.getElementById("sm_end"),   ()=>st.endDate||"",  v=>{ st.endDate=v||null;  persist(); });
   document.getElementById("sm_proj").addEventListener("change",e=>{
@@ -5085,6 +5149,8 @@ function projectModal(pr,after){
     <div class="drow">
       <div class="fld" style="flex:1"><label>Name</label><input id="pm_name" value="${escAttr(pr.name)}" autofocus></div>
       ${colorBtnHTML(pr.color,{attrs:'id="pm_color"',size:34,fallback:"#7db4ff",style:"align-self:flex-end;margin-bottom:2px"})}
+      <button type="button" class="btn ghost" id="pm_recolour" style="font-size:11.5px;flex:0 0 auto;align-self:flex-end;margin-bottom:2px"
+        title="Give every experiment in this project a shade of this colour">🎨 Shade its experiments</button>
     </div>
     <div class="fld"><label>Research question</label>
       <textarea id="pm_q" rows="2">${esc(pr.question||"")}</textarea></div>
@@ -5099,6 +5165,19 @@ function projectModal(pr,after){
     pr.question=document.getElementById("pm_q").value;
     pr.notes=document.getElementById("pm_notes").value;
     persist();
+  };
+  // Adopting the family: clearing each experiment's own colour is what makes
+  // expShade() derive one, so this is a release rather than a bulk overwrite —
+  // any experiment can take its own colour back in its own editor.
+  document.getElementById("pm_recolour").onclick=()=>{
+    const kids=DB.experiments.filter(ex=>ex.projectId===pr.id);
+    if(!kids.length){ toast("No experiments in this project yet"); return; }
+    const own=kids.filter(ex=>ex.color).length;
+    if(own&&!confirm(`Give all ${kids.length} experiment${kids.length!==1?"s":""} in "${pr.name||"this project"}" a shade of its colour? ${own} ${own===1?"has a colour":"have colours"} of their own, which will be replaced.`))return;
+    save();                       // whatever hue is on screen is the one they take
+    kids.forEach(ex=>{ ex.color=null; });
+    persist(); render();
+    toast(`${kids.length} experiment${kids.length!==1?"s":""} now shaded from this project`);
   };
   mountLinkEditor(document.getElementById("pm_links"),pr,()=>{});
   document.getElementById("pm_del").onclick=()=>{
@@ -6331,7 +6410,7 @@ function renderMonthView(host){
       if(it.kind==="step"){
         const st=it.st, col=calColor(st);
         chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
-        chip.style.cssText=`background:${col}22;border-left:3px solid ${col};color:${col}`;
+        chip.style.cssText=chipSkinBar(calIsEvent(st),col,false);
         // A plain task gets a checkmark right on the chip; an experiment does
         // not — it is already accountable through its outcome field.
         const ckHTML=st.kind==="task"
@@ -6546,7 +6625,7 @@ function renderTimeline(){
       const col=calColor(t);
       const overdue=dueClass(t.deadline,calDone(t)?"done":"",t.endDate)==="overdue";
       const chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
-      chip.style.cssText=`background:${col}22;border-left:3px solid ${overdue?"var(--overdue)":col};color:${overdue?"var(--overdue)":col}`;
+      chip.style.cssText=chipSkinBar(calIsEvent(t),col,overdue);
       const ckHTML=t.kind==="task"
         ?`<button type="button" class="cal-evt-ck${calDone(t)?" on":""}" title="${calDone(t)?"Done — click to undo":"Mark done"}"></button>`:"";
       chip.innerHTML=`<div class="et">${ckHTML}${eventIconHTML(t.src)}${esc(t.title)}</div>`;
@@ -6711,7 +6790,7 @@ function renderTimeline(){
         evt.dataset.layKey=layKey; evt.dataset.layDay=String(di);
         if(calDragKey===layKey) evt.classList.add("cal-evt-ghost");
         if(calFlashKey&&calFlashKey===t.id) evt.classList.add("cal-evt-found");
-        evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);background:${col}dd;color:#fff;border-left:3px solid ${overdue?"var(--overdue)":col}dd;z-index:2`;
+        evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);${chipSkinTimed(calIsEvent(t),col,overdue)}z-index:2`;
         const clock=m=>{ const d=new Date(sg.date+"T00:00:00"); d.setMinutes(m); return d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); };
         const timeStr=sg.i?`… until ${clock(sg.endMin)}`
           :dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})+(sg.totalMin!==60?` (${sg.totalMin}m)`:"");
