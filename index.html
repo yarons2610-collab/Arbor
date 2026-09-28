@@ -3264,9 +3264,20 @@ function expShade(ex){
     .sort((a,b)=>(a.created||0)-(b.created||0)||String(a.id).localeCompare(String(b.id)));
   const i=Math.max(0,sibs.findIndex(x=>x.id===ex.id)), n=Math.max(sibs.length,1);
   const {h,s,l}=hexToHsl(pr.color);
-  const span=Math.min(32,12+n*5);
-  const t=n===1?0:(i/(n-1))-0.5;                       // -0.5 … +0.5 across the band
-  return hslHex(h,Math.max(35,Math.min(85,s)),Math.max(34,Math.min(76,l+t*span)));
+  /* Rungs of lightness to hand out, four apart, none within 7 of the project's
+     own — so no experiment ever comes back wearing the project's colour, which
+     is what "shade its experiments" looked like it had done for a project
+     holding one or two. Stopping at 64 keeps white chip text readable, and
+     spreading across whatever rungs remain means a pale or a dark project
+     can't push several experiments onto the same clamped value, which is how
+     three of them used to come out identical. */
+  const stops=[];
+  for(let L=30;L<=64;L+=4) if(Math.abs(L-l)>=7) stops.push(L);
+  if(!stops.length) stops.push(l>50?34:60);            // a project colour with nowhere to stand beside it
+  const at=n===1?Math.floor(stops.length*0.35):Math.round(i*(stops.length-1)/(n-1));
+  // neighbours step in saturation too, so two rungs never read as one colour
+  const S=Math.max(22,Math.min(92,s+(i%2?7:-7)));
+  return hslHex(h,S,stops[Math.max(0,Math.min(stops.length-1,at))]);
 }
 /* Lab work is solid; the rest of life is hollow. A personal event keeps its
    category's colour but gives up its fill — an outline and a rail instead — so
@@ -5152,6 +5163,7 @@ function projectModal(pr,after){
       <button type="button" class="btn ghost" id="pm_recolour" style="font-size:11.5px;flex:0 0 auto;align-self:flex-end;margin-bottom:2px"
         title="Give every experiment in this project a shade of this colour">🎨 Shade its experiments</button>
     </div>
+    <div id="pm_shades" style="margin:-6px 0 14px"></div>
     <div class="fld"><label>Research question</label>
       <textarea id="pm_q" rows="2">${esc(pr.question||"")}</textarea></div>
     <div class="fld"><label>Notes</label>
@@ -5166,6 +5178,24 @@ function projectModal(pr,after){
     pr.notes=document.getElementById("pm_notes").value;
     persist();
   };
+  /* What the family actually looks like, here in the editor rather than only
+     out on the Timeline — the shades are the whole point of the button above,
+     and they were invisible until you went looking for them. */
+  function drawShades(){
+    const host=document.getElementById("pm_shades"); if(!host)return;
+    const kids=DB.experiments.filter(ex=>ex.projectId===pr.id)
+      .sort((a,b)=>(a.created||0)-(b.created||0)||String(a.id).localeCompare(String(b.id)));
+    if(!kids.length){ host.innerHTML=`<div style="font-size:11px;color:var(--ink-faint)">No experiments in this project yet.</div>`; return; }
+    host.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:8px">${kids.map(ex=>{
+      const own=!!ex.color;
+      return `<span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-dim)">
+        <span style="width:16px;height:16px;border-radius:4px;background:${escAttr(expShade(ex))};border:1px solid var(--line2);flex:0 0 auto"></span>
+        ${esc(ex.title||"(unnamed experiment)")}${own?`<span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">own colour</span>`:""}</span>`;
+    }).join("")}</div>`;
+  }
+  drawShades();
+  // the strip follows the project's own colour as it is picked
+  document.getElementById("pm_color").addEventListener("change",()=>{ save(); drawShades(); });
   // Adopting the family: clearing each experiment's own colour is what makes
   // expShade() derive one, so this is a release rather than a bulk overwrite —
   // any experiment can take its own colour back in its own editor.
@@ -5176,7 +5206,7 @@ function projectModal(pr,after){
     if(own&&!confirm(`Give all ${kids.length} experiment${kids.length!==1?"s":""} in "${pr.name||"this project"}" a shade of its colour? ${own} ${own===1?"has a colour":"have colours"} of their own, which will be replaced.`))return;
     save();                       // whatever hue is on screen is the one they take
     kids.forEach(ex=>{ ex.color=null; });
-    persist(); render();
+    persist(); render(); drawShades();
     toast(`${kids.length} experiment${kids.length!==1?"s":""} now shaded from this project`);
   };
   mountLinkEditor(document.getElementById("pm_links"),pr,()=>{});
