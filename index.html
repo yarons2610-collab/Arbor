@@ -305,6 +305,13 @@
      rest below the fold. */
   /* Quick find: one box over the whole workspace, because the alternative is
      remembering which page a thing lives on before you can look for it. */
+  /* Every list page gets the same search box in the same place, rather than
+     three pages having one, five having none, and each looking different. */
+  .list-search{flex:1 1 150px;max-width:260px;background:var(--panel2);border:1px solid var(--line2);
+    border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px;font-family:inherit}
+  .list-search:focus{outline:none;border-color:var(--gcamp)}
+  .empty-box{display:flex;flex-direction:column;align-items:center;gap:10px;padding:34px 16px;
+    color:var(--ink-faint);font-family:var(--mono);font-size:12px;text-align:center}
   .qf-input{width:100%;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);
     border-radius:9px;padding:11px 13px;font-size:15px;font-family:inherit}
   .qf-input:focus{outline:none;border-color:var(--gcamp)}
@@ -1295,7 +1302,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // How an experiment's combined task+diary list is ordered and clustered.
   expTaskSort:"alpha", expTaskGroup:"none", notesSort:"updated_desc",
   // Notes list filter: search text, and the experiments/projects picked (any of them).
-  notesFilter:{q:"",links:[]}, notesView:"cards", notesGroup:"owner",
+  notesFilter:{q:"",links:[]}, notesView:"cards", notesGroup:"owner", matSubTab:"diarytypes",
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
@@ -1787,7 +1794,7 @@ function changedHere(base,coll,id,obj){
    the calendar jumping zoom while being read. Kept here instead, and put back
    over whatever a pull brings in. */
 const LOCAL_VIEW_KEYS=["calMode","calFilters","calAlldayCollapsed","topCollapsed",
-  "animalFilters","notesFilter","notesSort","notesView","notesGroup","expTaskSort","expTaskGroup","expViewBy"];
+  "animalFilters","notesFilter","notesSort","notesView","notesGroup","matSubTab","expTaskSort","expTaskGroup","expViewBy"];
 const VIEW_STATE_KEY="arbor_view_state";
 function saveLocalView(){
   try{
@@ -2171,6 +2178,7 @@ function migrate(){                       // backfill fields added in later vers
   animalGroup=DB.config.animalFilters.group||"all";
   animalTag=DB.config.animalFilters.tag||"all";
   animalCage=DB.config.animalFilters.cage||"all";
+  matSubTab=DB.config.matSubTab||"diarytypes";
   animalProject=DB.config.animalFilters.project||"all";
   calMode=DB.config.calMode||"week";
   animalEntry=DB.config.animalFilters.entry||"all";
@@ -3037,6 +3045,38 @@ function makeAllDayDraggable(chip,item,cellSel){
    how to open itself, so finding and getting there are the same action —
    before this, every page had its own search box and none of them could see
    the others. */
+/* One empty state, one voice, and the thing you would do next as a button —
+   each page used to write its own sentence in its own size. */
+function emptyBox(message,actionLabel,onAction){
+  const el=document.createElement("div"); el.className="empty-box";
+  el.innerHTML=`<div>${esc(message)}</div>`;
+  if(actionLabel&&onAction){
+    const b=document.createElement("button"); b.type="button"; b.className="btn accent";
+    b.style.fontSize="12px"; b.textContent=actionLabel; b.onclick=onAction;
+    el.appendChild(b);
+  }
+  return el;
+}
+/* The search box each list page shows. Re-rendering on every keystroke is what
+   the Animals page already does; putting focus and caret back is what makes
+   that survivable. */
+function listSearchHTML(value,placeholder){
+  return `<input type="text" class="list-search" value="${escAttr(value||"")}" placeholder="${escAttr(placeholder)}" dir="auto">`;
+}
+function wireListSearch(bar,setValue){
+  const el=bar.querySelector(".list-search"); if(!el)return;
+  el.addEventListener("input",e=>{
+    const pos=e.target.selectionStart, v=e.target.value;
+    setValue(v);
+    const again=document.querySelector(".list-search");
+    if(again){ again.focus(); try{ again.setSelectionRange(pos,pos); }catch(_){} }
+  });
+}
+function matchesSearch(q,...fields){
+  const t=String(q||"").trim().toLowerCase();
+  if(!t)return true;
+  return fields.some(f=>f!=null&&String(f).toLowerCase().includes(t));
+}
 function quickFindHits(q){
   const t=q.trim().toLowerCase(); if(!t)return [];
   const hits=[];
@@ -7627,7 +7667,7 @@ function addMaterial(name){ name=(name||"").trim(); if(!name)return false; if(!D
 function linkMaterialTask(name,taskId){ const t=taskById(taskId); if(!t)return; t.materials=[...new Set([...(t.materials||[]),name])]; persist(); }
 function unlinkMaterialTask(name,taskId){ const t=taskById(taskId); if(t&&t.materials)t.materials=t.materials.filter(m=>m!==name); persist(); }
 /* ---------- MATERIALS — sub-tabbed: Inventory / Viruses / Injection Sites ---------- */
-let matSubTab = "diarytypes";
+let matSubTab = "diarytypes";   // replaced on boot by the device's own choice
 let matExpanded = new Set();
 
 // materialNames: ONLY items referenced by tasks or explicitly added to inventory.
@@ -7649,12 +7689,16 @@ function renderMaterials(){
     tabBar.addEventListener("click", e => {
       const b = e.target.closest(".mat-stab"); if(!b) return;
       matSubTab = b.dataset.ms;
+      DB.config.matSubTab = matSubTab; persist();   // kept per device, like every other view choice
       tabBar.querySelectorAll(".mat-stab").forEach(x => x.classList.toggle("on", x===b));
       document.querySelectorAll(".mat-subview").forEach(v => v.classList.toggle("hidden", v.id !== "ms-"+matSubTab));
       renderMatSubTab();
     });
     tabBar._wired = true;
   }
+  // the markup opens on Entry Types; the device may have been left elsewhere
+  tabBar.querySelectorAll(".mat-stab").forEach(x => x.classList.toggle("on", x.dataset.ms===matSubTab));
+  document.querySelectorAll(".mat-subview").forEach(v => v.classList.toggle("hidden", v.id !== "ms-"+matSubTab));
   renderMatSubTab();
 }
 
@@ -7667,16 +7711,19 @@ function renderMatSubTab(){
 }
 
 /* ── INVENTORY ─────────────────────────────────────────────────────────────── */
+let invSearch="";
 function renderInventory(){
   const host = document.getElementById("ms-inventory"); host.innerHTML = "";
-  const names = materialNames();
+  const names = materialNames().filter(n=>matchesSearch(invSearch,n,(DB.inventory[n]||{}).note,(DB.inventory[n]||{}).status));
   const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 8px;font-size:12px";
 
   const bar = document.createElement("div");
   bar.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:18px";
-  bar.innerHTML = `<input id="mat_new" placeholder="add a material / reagent / equipment" style="flex:1;max-width:360px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:8px;padding:8px 11px;font-size:13px">
+  bar.innerHTML = `${listSearchHTML(invSearch,"Search materials")}
+    <input id="mat_new" placeholder="add a material / reagent / equipment" style="flex:1;max-width:320px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:8px;padding:8px 11px;font-size:13px">
     <button class="btn accent" id="mat_add">＋ Add</button>`;
   host.appendChild(bar);
+  wireListSearch(bar,v=>{ invSearch=v; renderInventory(); });
   const doAdd = () => {
     const v = document.getElementById("mat_new").value.trim();
     if(!v){ toast("Enter a name"); return; }
@@ -7690,7 +7737,7 @@ function renderInventory(){
 
   if(!names.length){
     host.appendChild(Object.assign(document.createElement("div"),
-      {className:"empty", textContent:"No materials yet. Add stock above, or add materials inside a dendrite — they sync here."}));
+      {className:"empty-box", textContent:invSearch.trim()?"No material matches that.":"No materials yet. Add stock above, or add materials inside a dendrite — they sync here."}));
     return;
   }
 
@@ -7849,6 +7896,7 @@ async function importLocalVirusesToShared(){
     renderVirusLib();
   }catch(e){ toast("Import failed: "+String(e.message||e).slice(0,100)); }
 }
+let virusSearch="";
 function renderVirusLib(){
   const host = document.getElementById("ms-viruses"); host.innerHTML = "";
   const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
@@ -7856,7 +7904,7 @@ function renderVirusLib(){
 
   const hdr = document.createElement("div");
   hdr.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap";
-  hdr.innerHTML = shared
+  hdr.innerHTML = listSearchHTML(virusSearch,"Search viruses") + (shared
     ? `<span style="font-family:var(--mono);font-size:10.5px;color:var(--gcamp)">✓ Shared team library${sharedVirusToken()?"":" (read-only — no write token)"}</span>
        ${sharedVirusToken()?`<button id="vlib_copytoken" title="Copy the write token this device is already using — to set up another device or share it, without going back to GitHub" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">📋 copy token</button>`:""}
        <button id="vlib_refresh" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">↻ refresh</button>
@@ -7866,8 +7914,9 @@ function renderVirusLib(){
        <button id="vlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto" ${sharedVirusToken()?"":"disabled title=\"connect a write token first\""}>＋ New virus</button>`
     : `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">Private to this device</span>
        <button id="vlib_goshared" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer">🔗 use shared team library</button>
-       <button id="vlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New virus</button>`;
+       <button id="vlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New virus</button>`);
   host.appendChild(hdr);
+  wireListSearch(hdr,v=>{ virusSearch=v; renderVirusLib(); });
   if(hdr.querySelector("#vlib_goshared")) hdr.querySelector("#vlib_goshared").onclick=()=>{
     if(sharedVirusToken()){ DB.config.useSharedVirusLib=true; persist(); refreshSharedViruses().then(renderVirusLib); renderVirusLib(); }
     else showSharedVirusSetup();
@@ -7887,8 +7936,10 @@ function renderVirusLib(){
 
   const wrap = document.createElement("div"); wrap.id = "vlib_rows"; host.appendChild(wrap);
   function paintVRows(){
-    const vl = activeViruses();
-    wrap.innerHTML = vl.length ? vl.map((v,i) => `
+    const all = activeViruses();
+    const vl = all.map((v,i)=>({v,i}))
+      .filter(({v})=>matchesSearch(virusSearch,v.name,v.type,v.promoter,v.source,v.note,v.titer,v.boxNumber,v.boxLocation));
+    wrap.innerHTML = vl.length ? vl.map(({v,i}) => `
       <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
           <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 20px;text-align:right">${i+1}</span>
@@ -7920,7 +7971,7 @@ function renderVirusLib(){
             <input type="checkbox" class="lv_order" data-vi="${i}" ${v.needOrder?"checked":""} style="width:auto;margin:0">order more?</label>
         </div>
       </div>`).join("")
-    : `<div class="empty" style="padding:20px 0">${shared?"No shared viruses yet — add one above, or import your local library.":"No viruses yet — add one above."}</div>`;
+    : `<div class="empty-box">${virusSearch.trim()?"No virus matches that.":shared?"No shared viruses yet — add one above, or import your local library.":"No viruses yet — add one above."}</div>`;
   }
   paintVRows();
 
@@ -8002,6 +8053,7 @@ function renderVirusLib(){
 }
 
 /* ── INJECTION SITE LIBRARY ────────────────────────────────────────────────── */
+let siteSearch="";
 function renderSiteLib(){
   const host = document.getElementById("ms-sites"); host.innerHTML = "";
   const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
@@ -8010,8 +8062,10 @@ function renderSiteLib(){
   hdr.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap";
   hdr.innerHTML = `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
       Bregma-referenced stereotaxic coordinates (mm), Paxinos &amp; Franklin convention (C57BL/6J).</span>
+    ${listSearchHTML(siteSearch,"Search sites")}
     <button id="slib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New site</button>`;
   host.appendChild(hdr);
+  wireListSearch(hdr,v=>{ siteSearch=v; renderSiteLib(); });
 
   const wrap = document.createElement("div"); wrap.id = "slib_rows"; wrap.style.overflowX="auto"; host.appendChild(wrap);
   // only one inline 3D viewer can be live at a time (render3DBrain tears down
@@ -8024,13 +8078,13 @@ function renderSiteLib(){
   // (min-width holds the columns to size; wrap's overflow-x:auto above makes
   // that width scrollable instead of clipped/unreachable).
   function paintSRows(){
-    const sl = DB.config.siteLib||[];
+    const sl = (DB.config.siteLib||[]).map((s,i)=>({s,i})).filter(({s})=>matchesSearch(siteSearch,s.name));
     expandedBV=null;
     wrap.innerHTML = sl.length ? `
       <div style="display:grid;grid-template-columns:${GRID};gap:6px;align-items:center;font-family:var(--mono);font-size:10px;color:var(--ink-faint);padding:4px 0;margin-bottom:4px;min-width:520px">
         <span>Structure name</span><span style="text-align:center">AP (mm)</span><span style="text-align:center">ML (mm)</span><span style="text-align:center">DV (mm)</span><span></span><span></span><span></span>
       </div>`
-      + sl.map((s,i) => `
+      + sl.map(({s,i}) => `
       <div style="display:grid;grid-template-columns:${GRID};gap:6px;align-items:center;padding:6px 0;border-top:1px solid var(--line);min-width:520px">
         <input class="ls_name" data-si="${i}" value="${escAttr(s.name)}" placeholder="Structure name" style="${IST}">
         <input class="ls_ap"   data-si="${i}" type="number" step="0.05" value="${s.ap}" style="${IST};text-align:center">
@@ -8043,7 +8097,7 @@ function renderSiteLib(){
           style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕</button>
       </div>
       ${expandedSiteIdx===i?`<div class="ls_bv" style="padding:10px 0 14px;border-top:1px solid var(--line)"></div>`:""}`).join("")
-    : `<div class="empty" style="padding:20px 0">No sites yet — add one above.</div>`;
+    : `<div class="empty-box">${siteSearch.trim()?"No site matches that.":"No sites yet — add one above."}</div>`;
     if(expandedSiteIdx!=null && sl[expandedSiteIdx]){
       const bvHost=wrap.querySelector(".ls_bv");
       if(bvHost){
@@ -8083,14 +8137,17 @@ function renderSiteLib(){
    opening the full editor (same injection UI as the animal editor, via the
    shared mountProcedureEditor) to build one from scratch or tweak an existing
    one without needing an animal on hand. */
+let procSearch="";
 function renderProcedureLib(){
   const host = document.getElementById("ms-procedures"); host.innerHTML = "";
   const hdr = document.createElement("div");
   hdr.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap";
   hdr.innerHTML = `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
       Reusable procedure templates (head-post/window + injections) — apply one to an animal from its Procedure box, or build/save one here.</span>
+    ${listSearchHTML(procSearch,"Search procedures")}
     <button id="proclib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New procedure</button>`;
   host.appendChild(hdr);
+  wireListSearch(hdr,v=>{ procSearch=v; renderProcedureLib(); });
 
   const wrap = document.createElement("div"); wrap.id = "proclib_rows"; host.appendChild(wrap);
   function summarize(pr){
@@ -8102,15 +8159,16 @@ function renderProcedureLib(){
     return bits.join(" · ")||"empty — click edit to build it";
   }
   function paintPRows(){
-    const pl = DB.config.procedureLib||[];
-    wrap.innerHTML = pl.length ? pl.map((pr,i) => `
+    const pl = (DB.config.procedureLib||[]).map((pr,i)=>({pr,i}))
+      .filter(({pr})=>matchesSearch(procSearch,pr.name,summarize(pr)));
+    wrap.innerHTML = pl.length ? pl.map(({pr,i}) => `
       <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <input class="pl_name" data-pi="${i}" value="${escAttr(pr.name)}" placeholder="Procedure name" style="flex:1;min-width:160px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:6px 9px;font-size:13px">
         <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);flex:2;min-width:200px">${esc(summarize(pr))}</span>
         <button class="pl_edit" data-pi="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px">✎ edit</button>
         <button class="pl_del" data-pi="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:4px 9px;cursor:pointer;font-size:12px">✕</button>
       </div>`).join("")
-    : `<div class="empty" style="padding:20px 0">No saved procedures yet — build one here, or save one from an animal's Procedure box.</div>`;
+    : `<div class="empty-box">${procSearch.trim()?"No procedure matches that.":"No saved procedures yet — build one here, or save one from an animal's Procedure box."}</div>`;
   }
   paintPRows();
 
@@ -8204,7 +8262,7 @@ function renderTagsLib(host){
         <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 auto">${n} animal${n!==1?"s":""}</span>
         <button class="ltag_del" data-ci="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕</button>
       </div>`;
-    }).join("") : `<div class="empty" style="padding:20px 0">No tags yet — add one above.</div>`;
+    }).join("") : `<div class="empty-box">No tags yet — add one above.</div>`;
   }
   paintTagRows();
 
@@ -8356,7 +8414,7 @@ function renderDiaryTypesLib(){
         `}
         ${relatedHTML(t,i)}
       </div>`; }).join("")
-    : `<div class="empty" style="padding:20px 0">No entry types yet — add one above.</div>`;
+    : `<div class="empty-box">No entry types yet — add one above.</div>`;
   }
   paintDTRows();
 
@@ -8703,7 +8761,7 @@ const LIB_SORTS={
 };
 const LIB_ICON={reading:"📖",protocol:"📋",other:"🗂"};
 // session-only, like matSubTab — not worth persisting a filter choice across reloads
-let libKindFilter="all", libProjFilter="all", libSortBy="title";
+let libKindFilter="all", libProjFilter="all", libSortBy="title", libSearch="";
 // Every experiment or project a given link (kind+id) is attached to. A
 // library record carries no experiment/project field of its own — that
 // relationship has always lived the other way round, on the owner's own
@@ -8728,6 +8786,7 @@ function renderLibrary(){
   const top=document.createElement("div");
   top.style.cssText="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap";
   top.innerHTML=`
+    ${listSearchHTML(libSearch,"Search the library")}
     <div class="seg" id="lib_kind" style="flex:0 0 auto">${[["all","All"],["reading","Papers"],["protocol","Protocols"],["other","Other"]]
       .map(([v,l])=>`<button type="button" data-k="${v}" class="${libKindFilter===v?"on":""}">${l}</button>`).join("")}</div>
     <select id="lib_proj_filter" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:7px;padding:6px 8px;font-size:12px;max-width:220px">
@@ -8749,6 +8808,7 @@ function renderLibrary(){
       <button class="btn accent" id="addProtocol" style="font-size:12px">＋ 📋 Protocol</button>
     </div>`;
   host.appendChild(top);
+  wireListSearch(top,v=>{ libSearch=v; renderLibrary(); });
   top.querySelector("#lib_kind").addEventListener("click",e=>{
     const b=e.target.closest("button"); if(!b||b.dataset.k===libKindFilter)return;
     // last kind's sort key may not exist on the other kind (or on "All") —
@@ -8771,6 +8831,7 @@ function renderLibrary(){
     ...DB.other.map(rec=>({kind:"other",rec}))
   ];
   if(libKindFilter!=="all") items=items.filter(it=>it.kind===libKindFilter);
+  if(libSearch.trim()) items=items.filter(({rec:r})=>matchesSearch(libSearch,r.title,r.authors,r.writtenBy,r.journal,r.year,r.notes,r.link,r.fileName));
   if(libProjFilter==="none") items=items.filter(it=>!attachmentsOf({kind:it.kind,id:it.rec.id}).length);
   else if(libProjFilter!=="all"){
     const eid=libProjFilter;
@@ -8778,10 +8839,10 @@ function renderLibrary(){
   }
 
   if(!items.length){
-    host.appendChild(Object.assign(document.createElement("div"),{className:"empty",
-      textContent:(DB.readings.length||DB.protocols.length||DB.other.length)
-        ? "Nothing matches this filter."
-        : "Nothing here yet. Add a paper, a protocol, or something else — a link, a file on this computer, or both."}));
+    const anything=DB.readings.length||DB.protocols.length||DB.other.length;
+    host.appendChild(anything
+      ? emptyBox("Nothing matches this search.","Clear it",()=>{ libSearch=""; libKindFilter="all"; libProjFilter="all"; renderLibrary(); })
+      : emptyBox("Nothing here yet — a paper, a protocol, or anything else worth keeping a link or a file for.","＋ Add a paper",()=>libModal("reading")));
     return;
   }
   const byTitle=(a,b)=>(a.rec.title||"").localeCompare(b.rec.title||"");
@@ -8979,8 +9040,7 @@ function renderNotes(){
     host.appendChild(chips);
   }
   if(!DB.notes.length){
-    host.appendChild(Object.assign(document.createElement("div"),
-      {className:"empty",textContent:"Nothing here yet — a place for anything that doesn't belong to an animal or an experiment."}));
+    host.appendChild(emptyBox("Nothing here yet — a place for anything that doesn't belong to an animal or an experiment.","＋ Note",()=>noteModal()));
     return;
   }
   const shown=DB.notes.filter(n=>noteInFilter(n,nf));
@@ -8990,7 +9050,7 @@ function renderNotes(){
       textContent:`${shown.length} of ${DB.notes.length} note${DB.notes.length!==1?"s":""}`}));
   }
   if(!shown.length){
-    host.appendChild(Object.assign(document.createElement("div"),{className:"empty",textContent:"No notes match."}));
+    host.appendChild(emptyBox("No notes match.","Clear the filters",()=>setNotesFilter({q:"",links:[]})));
     return;
   }
   const sorted=shown.sort(NOTES_SORTS[DB.config.notesSort]||NOTES_SORTS.updated_desc);
@@ -9861,8 +9921,9 @@ function renderAnimals(){
     host.appendChild(h);
   }
   if(!list.length){
-    const e=document.createElement("div"); e.style.cssText="font-size:12px;color:var(--ink-faint);font-family:var(--mono);padding:4px 0 10px";
-    e.textContent="no animals"; host.appendChild(e);
+    host.appendChild(animalActiveFilterCount()||animalSearch.trim()
+      ? emptyBox("No animals match these filters.","Clear filters",clearAnimalFilters)
+      : emptyBox("No animals yet.","＋ Animal",()=>animalModal(null)));
   } else if(animalGroupBy==="none"){
     list.forEach(a=>host.appendChild(animalCard(a)));
   } else {
@@ -11559,7 +11620,9 @@ function spineWhen(sp){
 // Jump to the real record. Nothing is copied into a project, so this is the
 // only way its contents are ever edited — always at the source.
 function goMaterials(sub){
-  switchTo("materials"); matSubTab=sub;
+  // the same record of where you were that a click on the tab bar keeps —
+  // arriving here from a link or from Find should be remembered too
+  switchTo("materials"); matSubTab=sub; DB.config.matSubTab=sub; persist();
   document.querySelectorAll("#matSubTabs button").forEach(b=>b.classList.toggle("on",b.dataset.ms===sub));
   document.querySelectorAll(".mat-subview").forEach(v=>v.classList.toggle("hidden",v.id!=="ms-"+sub));
   renderMaterials();
