@@ -3077,6 +3077,47 @@ function matchesSearch(q,...fields){
   if(!t)return true;
   return fields.some(f=>f!=null&&String(f).toLowerCase().includes(t));
 }
+/* What a library entry is actually used by. Materials read as settings when a
+   virus is just a name in a list; it reads as part of the work once the row
+   can say "four animals" and show you which. */
+function animalsUsingVirus(name){
+  const t=String(name||"").trim().toLowerCase(); if(!t)return [];
+  return (DB.animals||[]).filter(a=>((a.surgeryDetail&&a.surgeryDetail.injections)||[])
+    .some(inj=>String(inj.virus||"").trim().toLowerCase()===t));
+}
+function injectionsAtSite(name){
+  const t=String(name||"").trim().toLowerCase(); if(!t)return [];
+  const out=[];
+  (DB.animals||[]).forEach(a=>((a.surgeryDetail&&a.surgeryDetail.injections)||[]).forEach((inj,i)=>{
+    const here=String(inj.siteRegion||"").trim().toLowerCase()===t;
+    const partner=String(inj.partnerRegion||"").trim().toLowerCase()===t;
+    if(here||partner) out.push({a,inj,i,partner});
+  }));
+  return out;
+}
+function animalsFromTemplate(id){
+  return (DB.animals||[]).filter(a=>a.surgeryDetail&&a.surgeryDetail.fromTemplate===id);
+}
+// the chip each row wears; nothing at all when nothing uses it yet
+function usedByChipHTML(cls,key,n,noun){
+  if(!n)return `<span style="font-family:var(--mono);font-size:9px;color:var(--ink-faint);flex:0 0 auto" title="Not used by any animal yet">unused</span>`;
+  return `<button type="button" class="${cls}" data-key="${escAttr(key)}" title="Show the ${noun} using this"
+    style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:20px;padding:2px 9px;cursor:pointer;font-family:var(--mono);font-size:10px;flex:0 0 auto">🐭 ${n}</button>`;
+}
+function openUsedByModal(title,rows){
+  modal(`<h3>${esc(title)}</h3>
+    ${rows.length?`<div class="qf-list" style="max-height:60vh">${rows.map((r,i)=>`
+      <button type="button" class="qf-row" data-i="${i}">
+        <span class="qf-ico">🐭</span>
+        <span class="qf-main"><span class="qf-label">${esc(r.label)}</span>${r.sub?`<div class="qf-sub">${esc(r.sub)}</div>`:""}</span>
+      </button>`).join("")}</div>`:`<div class="empty-box">Nothing uses this yet.</div>`}
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+  document.querySelector("#modal .qf-list")?.addEventListener("click",e=>{
+    const row=e.target.closest(".qf-row"); if(!row)return;
+    const r=rows[+row.dataset.i]; if(!r)return;
+    closeModal(); switchTo("animals"); animalModal(r.id);
+  });
+}
 function quickFindHits(q){
   const t=q.trim().toLowerCase(); if(!t)return [];
   const hits=[];
@@ -7946,6 +7987,7 @@ function renderVirusLib(){
           <input class="lv_name" data-vi="${i}" value="${escAttr(v.name)}"
             placeholder="Construct (e.g. AAV-SL1-Syn-Flex-Rev-hM4Di-mCherry)"
             style="flex:1;min-width:200px;${IST}">
+          ${usedByChipHTML("lv_used",v.name,animalsUsingVirus(v.name).length,"animals")}
           <select class="lv_type" data-vi="${i}" style="${IST};flex:0 0 auto">
             <option value="retro"  ${v.type==="retro" ?"selected":""}>retrograde</option>
             <option value="antero" ${v.type==="antero"?"selected":""}>anterograde</option>
@@ -8037,6 +8079,14 @@ function renderVirusLib(){
     }
   });
   wrap.addEventListener("click", e => {
+    const used = e.target.closest(".lv_used");
+    if(used){
+      const name=used.dataset.key;
+      openUsedByModal(`Animals injected with ${name}`, animalsUsingVirus(name).map(a=>({
+        id:a.id, label:a.name,
+        sub:[animalWhere(a),a.cage&&"cage "+a.cage].filter(Boolean).join(" · ")})));
+      return;
+    }
     const d = e.target.closest(".lv_del"); if(!d) return;
     if(shared){
       if(!canWriteShared){ toast("Connect a write token first"); return; }
@@ -8086,7 +8136,10 @@ function renderSiteLib(){
       </div>`
       + sl.map(({s,i}) => `
       <div style="display:grid;grid-template-columns:${GRID};gap:6px;align-items:center;padding:6px 0;border-top:1px solid var(--line);min-width:520px">
-        <input class="ls_name" data-si="${i}" value="${escAttr(s.name)}" placeholder="Structure name" style="${IST}">
+        <span style="display:flex;align-items:center;gap:6px;min-width:0">
+          <input class="ls_name" data-si="${i}" value="${escAttr(s.name)}" placeholder="Structure name" style="${IST};flex:1;min-width:0">
+          ${usedByChipHTML("ls_used",s.name,injectionsAtSite(s.name).length,"injections")}
+        </span>
         <input class="ls_ap"   data-si="${i}" type="number" step="0.05" value="${s.ap}" style="${IST};text-align:center">
         <input class="ls_ml"   data-si="${i}" type="number" step="0.05" value="${s.ml}" style="${IST};text-align:center">
         <input class="ls_dv"   data-si="${i}" type="number" step="0.05" value="${s.dv}" style="${IST};text-align:center">
@@ -8125,6 +8178,14 @@ function renderSiteLib(){
     if(si===expandedSiteIdx && expandedBV) expandedBV.refresh();
   });
   wrap.addEventListener("click", e => {
+    const usedS = e.target.closest(".ls_used");
+    if(usedS){
+      const name=usedS.dataset.key;
+      openUsedByModal(`Injections at ${name}`, injectionsAtSite(name).map(({a,inj,i,partner})=>({
+        id:a.id, label:a.name,
+        sub:[`injection ${i+1}`,inj.virus,partner?"as target":null].filter(Boolean).join(" · ")})));
+      return;
+    }
     const d = e.target.closest(".ls_del"), sh = e.target.closest(".ls_show");
     if(d){ (DB.config.siteLib||[]).splice(+d.dataset.si,1); expandedSiteIdx=null; persist(); paintSRows(); return; }
     if(sh){ const i=+sh.dataset.si; expandedSiteIdx = expandedSiteIdx===i?null:i; paintSRows(); return; }
@@ -8165,6 +8226,7 @@ function renderProcedureLib(){
       <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <input class="pl_name" data-pi="${i}" value="${escAttr(pr.name)}" placeholder="Procedure name" style="flex:1;min-width:160px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:6px 9px;font-size:13px">
         <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);flex:2;min-width:200px">${esc(summarize(pr))}</span>
+        ${usedByChipHTML("pl_used",pr.id,animalsFromTemplate(pr.id).length,"animals")}
         <button class="pl_edit" data-pi="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px">✎ edit</button>
         <button class="pl_del" data-pi="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:4px 9px;cursor:pointer;font-size:12px">✕</button>
       </div>`).join("")
@@ -8183,6 +8245,13 @@ function renderProcedureLib(){
     if(e.target.classList.contains("pl_name")) { pr.name = e.target.value; persist(); }
   });
   wrap.addEventListener("click", e => {
+    const usedP = e.target.closest(".pl_used");
+    if(usedP){
+      const id=usedP.dataset.key, tpl=(DB.config.procedureLib||[]).find(x=>x.id===id);
+      openUsedByModal(`Animals built from ${tpl?tpl.name||"this procedure":"this procedure"}`,
+        animalsFromTemplate(id).map(a=>({id:a.id,label:a.name,sub:animalWhere(a)})));
+      return;
+    }
     const ed = e.target.closest(".pl_edit"), del = e.target.closest(".pl_del");
     if(ed){ const pr=(DB.config.procedureLib||[])[+ed.dataset.pi]; if(pr) procedureModal(pr.id); }
     else if(del){
@@ -8868,7 +8937,8 @@ function renderLibrary(){
         ${meta?`<div class="lit-link" dir="auto">${esc(meta)}</div>`:""}
         ${sub?`<div class="lit-link" dir="auto">${esc(sub)}</div>`:""}
       </div>
-      ${attachLbl?`<span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);border:1px solid var(--line2);border-radius:5px;padding:1px 6px;flex:0 0 auto">${esc(attachLbl)}</span>`:""}
+      ${attachLbl?`<button type="button" class="lit-owner" data-rid="${escAttr(r.id)}" data-kind="${escAttr(kind)}" title="Open ${escAttr(attachLbl)}"
+        style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);background:var(--panel2);border:1px solid var(--line2);border-radius:5px;padding:1px 6px;flex:0 0 auto;cursor:pointer">${esc(attachLbl)}</button>`:""}
       ${r.fileName?`<a class="lit-file" role="button" title="Open the file on this computer">📄</a>`:""}
       ${r.link?`<button class="lit-open" title="Open the link">↗</button>`:""}
       <button class="lit-edit" title="Edit">✎</button>
@@ -8877,6 +8947,15 @@ function renderLibrary(){
     if(open)open.onclick=()=>window.open(/^https?:\/\//i.test(r.link)?r.link:"https://"+r.link,"_blank","noopener");
     const file=row.querySelector(".lit-file");
     if(file)wireFileOpener(file,r.id);
+    const ownerBtn=row.querySelector(".lit-owner");
+    // the badge already said what this belongs to; now it takes you there
+    if(ownerBtn) ownerBtn.onclick=()=>{
+      const owners=attachmentsOf({kind,id:r.id});
+      if(!owners.length)return;
+      const o=owners[0];
+      if(o.title!=null) experimentModal(o,()=>renderLibrary());
+      else projectModal(o,()=>renderLibrary());
+    };
     row.querySelector(".lit-edit").onclick=()=>libModal(kind,r.id);
     row.querySelector(".lit-del").onclick=()=>{
       if(!confirm(`Delete "${r.title||"this "+cfg.noun}"?`))return;
@@ -11514,7 +11593,10 @@ function animalModal(id,draft){
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
       dob:vDob, sacrificed:vSac, termination,
-      surgeryDetail:{headpost:tpl.headpost,window:tpl.window,winAp:tpl.winAp,winMl:tpl.winMl,winDiam:tpl.winDiam,injections:tpl.injections.map(x=>({...x}))},
+      // remembered so the template can say which animals were built from it;
+      // animals set up before this carry no mark and simply don't appear
+      surgeryDetail:{headpost:tpl.headpost,window:tpl.window,winAp:tpl.winAp,winMl:tpl.winMl,winDiam:tpl.winDiam,
+        injections:tpl.injections.map(x=>({...x})),fromTemplate:tpl.id},
       comments:comBody.innerHTML, commentsRich:true
     };
     closeModal();
