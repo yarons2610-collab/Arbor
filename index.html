@@ -303,6 +303,23 @@
   /* Notes as rectangles rather than lines: a page of them at a glance, the
      way the cage view shows a colony, instead of one note per row and the
      rest below the fold. */
+  /* Quick find: one box over the whole workspace, because the alternative is
+     remembering which page a thing lives on before you can look for it. */
+  .qf-input{width:100%;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);
+    border-radius:9px;padding:11px 13px;font-size:15px;font-family:inherit}
+  .qf-input:focus{outline:none;border-color:var(--gcamp)}
+  .qf-hint{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin:8px 2px 0}
+  .qf-list{margin-top:10px;max-height:52vh;overflow:auto;display:flex;flex-direction:column;gap:2px}
+  .qf-row{display:flex;align-items:center;gap:9px;width:100%;text-align:left;font-family:inherit;
+    background:transparent;border:1px solid transparent;border-radius:8px;padding:7px 9px;cursor:pointer;color:var(--ink)}
+  .qf-row:hover{background:var(--panel2)}
+  .qf-row.on{background:var(--panel2);border-color:var(--gcamp)}
+  .qf-ico{width:18px;text-align:center;flex:0 0 auto;font-size:13px}
+  .qf-main{flex:1;min-width:0}
+  .qf-label{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qf-sub{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qf-kind{font-family:var(--mono);font-size:9px;color:var(--ink-faint);border:1px solid var(--line2);
+    border-radius:20px;padding:1px 7px;flex:0 0 auto}
   .note-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(186px,1fr));gap:11px;align-items:start;margin-bottom:18px}
   .note-card{position:relative;display:flex;flex-direction:column;gap:6px;min-height:118px;
     background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--nc,var(--line2));
@@ -1104,6 +1121,7 @@
     <button class="readbtn" id="notifyNudge" title="Upcoming/due items" style="display:none">🔔<span class="cnt" id="notifyCnt">0</span></button>
     <button class="readbtn event-nudge" id="eventNudge" title="Upcoming/due events" style="display:none">📅<span class="cnt" id="eventCnt">0</span></button>
     <button class="readbtn" id="readNudge" title="Unread mandatory reading" style="display:none">📚 Reading<span class="cnt" id="readCnt">0</span></button>
+    <button class="btn ghost" id="findBtn" title="Find anything (⌘K)">🔍 Find</button>
     <button class="btn ghost" id="expCal" title="Export scheduled tasks as an .ics calendar file">↗ Calendar</button>
     <span id="saveState" title="Save status — click to download a backup if auto-save is off" style="font-family:var(--mono);font-size:11px;padding:0 6px;user-select:none"></span>
     <button class="btn ghost" id="syncBtn" title="Sync across devices via GitHub">⇄ Sync</button>
@@ -3014,6 +3032,111 @@ function makeAllDayDraggable(chip,item,cellSel){
     document.addEventListener("pointerup",onUp);
     document.addEventListener("pointercancel",onCancel);
   });
+}
+/* Everything a person goes looking for by name, in one list. Each hit knows
+   how to open itself, so finding and getting there are the same action —
+   before this, every page had its own search box and none of them could see
+   the others. */
+function quickFindHits(q){
+  const t=q.trim().toLowerCase(); if(!t)return [];
+  const hits=[];
+  const add=(kind,icon,label,sub,rank,open)=>hits.push({kind,icon,label:label||"(unnamed)",sub:sub||"",rank,open});
+  /* 0 an exact name, 1 something that starts with it, 2 a mention anywhere;
+     Infinity for no match at all. (Not -1 for "best": that made typing a
+     thing's exact name drop it from its own results.) */
+  const score=(...fields)=>{
+    let best=Infinity;
+    fields.filter(Boolean).forEach(f=>{
+      const v=String(f).toLowerCase(), i=v.indexOf(t);
+      if(i<0)return;
+      best=Math.min(best, v===t?0:i===0?1:2);
+    });
+    return best;
+  };
+  const go=fn=>()=>{ closeModal(); fn(); };
+  DB.animals.forEach(a=>{
+    const r=score(a.name,a.tag,a.cage,a.strain); if(!isFinite(r))return;
+    add("Animal","🐭",a.name,[a.cage&&"cage "+a.cage,a.tag,animalWhere(a)].filter(Boolean).join(" · "),r,
+      go(()=>{ switchTo("animals"); animalModal(a.id); }));
+  });
+  (DB.notes||[]).forEach(n=>{
+    const r=score(n.title,noteBodyPreview(n)); if(!isFinite(r))return;
+    add("Note","📝",n.title,attachLabel(attachmentsOf({kind:"note",id:n.id})),r,go(()=>noteModal(n.id)));
+  });
+  taskList().forEach(x=>{
+    const r=score(x.title,x.notes); if(!isFinite(r))return;
+    add(x.isEvent?"Event":"Task",x.isEvent?"📅":"✓",x.title,x.when?fmtWhenFull(x.when):"no date",r,
+      go(()=>taskEditor(x,()=>render())));
+  });
+  DB.experiments.forEach(ex=>{
+    const r=score(ex.title,ex.question); if(!isFinite(r))return;
+    const pr=ex.projectId?projById(ex.projectId):null;
+    add("Experiment","🧪",ex.title,pr?pr.name:"",r,go(()=>experimentModal(ex,()=>render())));
+  });
+  (DB.projects||[]).forEach(pr=>{
+    const r=score(pr.name,pr.question); if(!isFinite(r))return;
+    add("Project","📁",pr.name,"",r,go(()=>projectModal(pr,()=>render())));
+  });
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
+    const def=diaryTypeDef(e.type);
+    const r=score(def&&def.label,diaryNoteOf(e.data||{}),a.name+" "+(def?def.label:"")); if(!isFinite(r))return;
+    add("Diary",(def&&def.icon)||"🔖",`${a.name} — ${def?def.label:e.type}`,
+      fmtDMY(e.date)+(diaryNoteOf(e.data||{})?" · "+diaryNoteOf(e.data||{}):""),r+1,
+      go(()=>openCalItem({kind:"diary",id:e.id,title:a.name,deadline:`${e.date}${e.time?"T"+e.time:""}`,src:{a,e}})));
+  }));
+  [["reading","📖","Paper"],["protocol","📋","Protocol"],["other","🗂","Other"]].forEach(([k,icon,kind])=>{
+    (LIBS[k].list()||[]).forEach(rec=>{
+      const r=score(rec.title,rec.authors,rec.writtenBy,rec.journal); if(!isFinite(r))return;
+      add(kind,icon,rec.title,attachLabel(attachmentsOf({kind:k,id:rec.id})),r,go(()=>libModal(k,rec.id)));
+    });
+  });
+  activeViruses().forEach(v=>{
+    const r=score(v.name,v.promoter,v.source); if(!isFinite(r))return;
+    add("Virus","🧬",v.name,[v.type,v.boxNumber&&"box "+v.boxNumber].filter(Boolean).join(" · "),r,
+      go(()=>goMaterials("viruses")));
+  });
+  (DB.config.siteLib||[]).forEach(x=>{
+    const r=score(x.name); if(!isFinite(r))return;
+    add("Site","📍",x.name,`AP ${x.ap} · ML ${x.ml} · DV ${x.dv}`,r,go(()=>goMaterials("sites")));
+  });
+  (DB.config.procedureLib||[]).forEach(x=>{
+    const r=score(x.name); if(!isFinite(r))return;
+    add("Procedure","🧰",x.name,"",r,go(()=>goMaterials("procedures")));
+  });
+  const ORDER=["Animal","Task","Event","Diary","Note","Experiment","Project","Paper","Protocol","Other","Virus","Site","Procedure"];
+  return hits.sort((a,b)=>a.rank-b.rank||ORDER.indexOf(a.kind)-ORDER.indexOf(b.kind)
+    ||String(a.label).localeCompare(String(b.label))).slice(0,40);
+}
+function openQuickFind(){
+  modal(`<h3>Find anything</h3>
+    <input id="qf_q" class="qf-input" type="text" autocomplete="off" placeholder="Animal, note, task, experiment, paper, virus…" dir="auto">
+    <div class="qf-hint">↑ ↓ to move · Enter to open · Esc to close</div>
+    <div class="qf-list" id="qf_list"></div>`,{wide:true});
+  const input=document.getElementById("qf_q"), list=document.getElementById("qf_list");
+  let hits=[], sel=0;
+  function paint(){
+    if(!hits.length){
+      list.innerHTML=`<div class="qf-hint" style="padding:10px 2px">${input.value.trim()?"Nothing matches that.":"Searches animals, their diary entries, tasks and events, notes, experiments, projects, the library and materials."}</div>`;
+      return;
+    }
+    list.innerHTML=hits.map((h,i)=>`<button type="button" class="qf-row${i===sel?" on":""}" data-i="${i}">
+      <span class="qf-ico">${h.icon}</span>
+      <span class="qf-main"><span class="qf-label">${esc(h.label)}</span>${h.sub?`<div class="qf-sub">${esc(h.sub)}</div>`:""}</span>
+      <span class="qf-kind">${esc(h.kind)}</span></button>`).join("");
+    const on=list.querySelector(".qf-row.on"); if(on) on.scrollIntoView({block:"nearest"});
+  }
+  const run=()=>{ hits=quickFindHits(input.value); sel=0; paint(); };
+  input.addEventListener("input",run);
+  input.addEventListener("keydown",e=>{
+    if(e.key==="ArrowDown"){ e.preventDefault(); sel=Math.min(sel+1,hits.length-1); paint(); }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); sel=Math.max(sel-1,0); paint(); }
+    else if(e.key==="Enter"){ e.preventDefault(); if(hits[sel]) hits[sel].open(); }
+  });
+  list.addEventListener("click",e=>{
+    const row=e.target.closest(".qf-row"); if(!row)return;
+    const h=hits[+row.dataset.i]; if(h) h.open();
+  });
+  paint(); input.focus();
 }
 function openCalItem(x){
   if(x.kind==="diary"){
@@ -11592,6 +11715,9 @@ document.addEventListener("focusin",e=>{
   el.setAttribute("autocapitalize","off");
 });
 document.addEventListener("keydown",e=>{
+  // before the typing guard below: ⌘K is meant to work from anywhere,
+  // including out of a search box that is already focused
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k"){ e.preventDefault(); openQuickFind(); return; }
   if(e.key==="Escape"){
     // a modal sits above the detail panel, so it gets the key first
     if(document.getElementById("scrim").classList.contains("open")){ closeModal(); return; }
@@ -11684,6 +11810,7 @@ function showGistSetup(){
   };
 }
 
+document.getElementById("findBtn").addEventListener("click",()=>openQuickFind());
 document.getElementById("syncBtn").addEventListener("click",()=>showGistSetup());
 document.getElementById("saveState").addEventListener("click",()=>{
   const st=document.getElementById("saveState").dataset.state;
