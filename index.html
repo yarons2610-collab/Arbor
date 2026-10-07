@@ -300,6 +300,44 @@
      one direction further from its own text instead of toward it */
   .note-body ul,.note-body ol{margin:4px 0;padding-inline-start:22px}
   .note-body:empty:before{content:attr(data-ph);color:var(--ink-faint)}
+  /* Notes as rectangles rather than lines: a page of them at a glance, the
+     way the cage view shows a colony, instead of one note per row and the
+     rest below the fold. */
+  .note-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(186px,1fr));gap:11px;align-items:start;margin-bottom:18px}
+  .note-card{position:relative;display:flex;flex-direction:column;gap:6px;min-height:118px;
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--nc,var(--line2));
+    border-radius:11px;padding:10px 11px;cursor:pointer;text-align:left;
+    transition:border-color .12s ease,transform .12s ease}
+  .note-card:hover{border-color:var(--line2);transform:translateY(-1px)}
+  .note-card:focus-visible{outline:2px solid var(--gcamp);outline-offset:2px}
+  .nc-title{font-size:13px;font-weight:600;color:var(--ink);line-height:1.3;
+    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .nc-body{flex:1;font-size:11.5px;line-height:1.5;color:var(--ink-dim);
+    display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+  .nc-draw{width:100%;height:56px;object-fit:cover;border-radius:7px;border:1px solid var(--line2);background:#fff}
+  .nc-foot{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
+  .nc-owner{display:inline-flex;align-items:center;gap:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .nc-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+  .nc-date{margin-left:auto;flex:0 0 auto}
+  /* the delete stays out of the way until the card is under the pointer, and
+     is always there on a touch screen, where there is no hover to wait for */
+  .nc-del{position:absolute;top:6px;right:6px;border:1px solid var(--line2);background:var(--panel2);
+    color:var(--ink-faint);border-radius:6px;padding:1px 6px;font-size:11px;cursor:pointer;opacity:0;transition:opacity .12s}
+  .note-card:hover .nc-del,.nc-del:focus-visible{opacity:1}
+  .nc-del:hover{color:var(--overdue)}
+  @media (pointer:coarse){ .nc-del{opacity:1} }
+  /* two to a row on a phone rather than one — fitting more on screen is the
+     whole reason these are rectangles */
+  @media (max-width:520px){
+    .note-grid{grid-template-columns:repeat(auto-fill,minmax(142px,1fr));gap:8px}
+    .note-card{min-height:104px;padding:9px}
+    .nc-body{-webkit-line-clamp:3;font-size:11px}
+    .nc-draw{height:44px}
+  }
+  .note-group{display:flex;align-items:center;gap:8px;margin:4px 0 9px}
+  .note-group h2{font-family:var(--disp);font-size:13px;font-weight:600;margin:0;color:var(--ink)}
+  .note-group .count{font-family:var(--mono);font-size:10px;color:var(--ink-faint);
+    border:1px solid var(--line2);border-radius:20px;padding:1px 8px}
   .lit-row{display:flex;align-items:center;gap:8px;background:var(--panel);padding:9px 12px}
   .lit-main{flex:1;min-width:0}
   .lit-title{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1239,7 +1277,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // How an experiment's combined task+diary list is ordered and clustered.
   expTaskSort:"alpha", expTaskGroup:"none", notesSort:"updated_desc",
   // Notes list filter: search text, and the experiments/projects picked (any of them).
-  notesFilter:{q:"",links:[]},
+  notesFilter:{q:"",links:[]}, notesView:"cards", notesGroup:"owner",
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
@@ -1731,7 +1769,7 @@ function changedHere(base,coll,id,obj){
    the calendar jumping zoom while being read. Kept here instead, and put back
    over whatever a pull brings in. */
 const LOCAL_VIEW_KEYS=["calMode","calFilters","calAlldayCollapsed","topCollapsed",
-  "animalFilters","notesFilter","notesSort","expTaskSort","expTaskGroup","expViewBy"];
+  "animalFilters","notesFilter","notesSort","notesView","notesGroup","expTaskSort","expTaskGroup","expViewBy"];
 const VIEW_STATE_KEY="arbor_view_state";
 function saveLocalView(){
   try{
@@ -8776,7 +8814,13 @@ function renderNotes(){
       ${partOfOptionsHTML({valueOf:(k,id)=>k+":"+id,selected:null,
         exclude:nf.links.filter(v=>v!=="none").map(v=>v.slice(2))})}
     </select>
-    <div class="af-sortbar"><span class="af-label af-sort">↕ Sort</span>
+    <div class="af-sortbar"><span class="af-label af-sort">▦<span class="af-word"> Show as</span></span>
+      <select id="n_view" class="af-sel af-sort">${[["cards","Cards"],["list","List"]]
+        .map(o=>`<option value="${o[0]}" ${(DB.config.notesView||"cards")===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
+      <span class="af-label af-sort" style="margin-left:8px">⊞<span class="af-word"> Group</span></span>
+      <select id="n_group" class="af-sel af-sort">${[["owner","By project"],["none","Ungrouped"]]
+        .map(o=>`<option value="${o[0]}" ${(DB.config.notesGroup||"owner")===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
+      <span class="af-label af-sort" style="margin-left:8px">↕<span class="af-word"> Sort</span></span>
       <select id="n_sort" class="af-sel af-sort">${[
         ["updated_desc","Last updated (newest)"],["updated_asc","Last updated (oldest)"],
         ["created_desc","Date created (newest)"],["created_asc","Date created (oldest)"],
@@ -8786,6 +8830,8 @@ function renderNotes(){
   host.appendChild(top);
   top.querySelector("#addNote").onclick=()=>noteModal();
   top.querySelector("#n_sort").addEventListener("change",e=>{ DB.config.notesSort=e.target.value; persist(); renderNotes(); });
+  top.querySelector("#n_view").addEventListener("change",e=>{ DB.config.notesView=e.target.value; persist(); renderNotes(); });
+  top.querySelector("#n_group").addEventListener("change",e=>{ DB.config.notesGroup=e.target.value; persist(); renderNotes(); });
   top.querySelector("#n_belongs").addEventListener("change",e=>{
     const v=e.target.value; if(!v)return;
     setNotesFilter({links:[...nf.links,v]});
@@ -8824,8 +8870,75 @@ function renderNotes(){
     host.appendChild(Object.assign(document.createElement("div"),{className:"empty",textContent:"No notes match."}));
     return;
   }
+  const sorted=shown.sort(NOTES_SORTS[DB.config.notesSort]||NOTES_SORTS.updated_desc);
+  /* Cards, not lines. A note is a thing you recognise by its title and first
+     words, and twenty of them fit on a screen as rectangles where six fit as
+     rows — the same reason the colony reads better as cages than as a list.
+     Grouped by what each note belongs to, since that is how you go looking
+     for one; a note linked to two things appears under both. */
+  if((DB.config.notesView||"cards")!=="list"){
+    const ownerColor=o=>o?(o.title!=null?expShade(o):(o.color||"#7db4ff")):null;
+    const gridOf=(notes,showOwner)=>{
+      const grid=document.createElement("div"); grid.className="note-grid";
+      notes.forEach(n=>grid.appendChild(noteCard(n,showOwner)));
+      return grid;
+    };
+    function noteCard(n,showOwner){
+      const owners=attachmentsOf({kind:"note",id:n.id});
+      const col=ownerColor(owners[0]);
+      const preview=noteBodyPreview(n);
+      const el=document.createElement("div");
+      el.className="note-card"; el.tabIndex=0; el.setAttribute("role","button");
+      el.setAttribute("aria-label",`Open note ${n.title||"(untitled)"}`);
+      if(col) el.style.setProperty("--nc",col);
+      const stamp=n.updated?fmtDMY(todayDateStrOf(new Date(n.updated))):"";
+      el.innerHTML=`
+        <div class="nc-title" dir="auto">${esc(n.title||"(untitled)")}</div>
+        ${n.drawing?`<img class="nc-draw" src="${n.drawing}" alt="">`:""}
+        <div class="nc-body" dir="auto"${preview?"":' style="color:var(--ink-faint)"'}>${preview?esc(preview.slice(0,240)):"(empty)"}</div>
+        <div class="nc-foot">
+          ${(owners.length&&(showOwner||owners.length>1))
+            ? `<span class="nc-owner" title="${escAttr(attachLabel(owners))}"><span class="nc-dot" style="background:${escAttr(col)}"></span>${esc(attachLabel(owners))}</span>`
+            : ""}
+          <span class="nc-date">${esc(stamp)}</span>
+        </div>
+        <button type="button" class="nc-del" title="Delete this note">✕</button>`;
+      const open=()=>noteModal(n.id);
+      el.addEventListener("click",e=>{ if(e.target.closest(".nc-del"))return; open(); });
+      el.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); open(); } });
+      el.querySelector(".nc-del").addEventListener("click",e=>{
+        e.stopPropagation();
+        if(!confirm(`Delete "${n.title||"this note"}"?`))return;
+        DB.notes=DB.notes.filter(x=>x.id!==n.id); persist(); renderNotes(); toast("Note deleted");
+      });
+      return el;
+    }
+    if((DB.config.notesGroup||"owner")==="none"){ host.appendChild(gridOf(sorted,true)); return; }
+    const LOOSE="__loose__", groups=new Map();
+    sorted.forEach(n=>{
+      const owners=attachmentsOf({kind:"note",id:n.id});
+      if(!owners.length){
+        if(!groups.has(LOOSE)) groups.set(LOOSE,{label:"Not linked to anything",color:null,notes:[]});
+        groups.get(LOOSE).notes.push(n); return;
+      }
+      owners.forEach(o=>{
+        if(!groups.has(o.id)) groups.set(o.id,{label:entityLabel(o),color:ownerColor(o),notes:[]});
+        groups.get(o.id).notes.push(n);
+      });
+    });
+    [...groups.entries()]
+      .sort(([ka,a],[kb,b])=>(ka===LOOSE)-(kb===LOOSE)||a.label.localeCompare(b.label))
+      .forEach(([,g])=>{
+        const head=document.createElement("div"); head.className="note-group";
+        head.innerHTML=`${g.color?`<span class="nc-dot" style="background:${escAttr(g.color)};width:9px;height:9px"></span>`:""}
+          <h2>${esc(g.label)}</h2><span class="count">${g.notes.length}</span>`;
+        host.appendChild(head);
+        host.appendChild(gridOf(g.notes,false));
+      });
+    return;
+  }
   const list=document.createElement("div"); list.className="lit-list"; host.appendChild(list);
-  shown.sort(NOTES_SORTS[DB.config.notesSort]||NOTES_SORTS.updated_desc).forEach(n=>{
+  sorted.forEach(n=>{
     const open=notesExpanded.has(n.id);
     const row=document.createElement("div"); row.className="lit-row";
     const preview=noteBodyPreview(n);
