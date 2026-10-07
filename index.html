@@ -646,7 +646,10 @@
      gap rather than a border: side by side it makes a dark channel that
      looks like empty space between them. A pale rim reads as the edge of
      the block itself, and the shadow under it does the separating. */
-  .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:pinch-zoom;
+  /* A floor under every block: a half-hour at a phone's row height is about
+     nineteen pixels, which is not enough for a line of text, so short blocks
+     were coloured bars with no legible title. */
+  .cal-evt-timed{position:absolute;left:2px;right:2px;border-radius:5px;padding:2px 5px;font-size:11px;cursor:grab;overflow:hidden;touch-action:pinch-zoom;min-height:19px;
     border:1.5px solid rgba(255,255,255,.56);box-shadow:0 1px 3px rgba(0,0,0,.58)}
   /* the chip a search result just jumped to, so it can be picked out of a
      busy day instead of leaving you hunting for what you searched for */
@@ -695,6 +698,13 @@
   .cal-evt-timed.holding,.cal-evt.holding{transform:scale(1.07);box-shadow:0 10px 24px rgba(0,0,0,.5);z-index:20}
   .cal-evt-timed.dragging.drag-invalid{opacity:.35}
   .cal-evt-timed .et{font-weight:600;font-size:11px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  /* Half an hour or less: one line, centred, tight — the title rather than a
+     clipped first half of it. The time is dropped; the block's own position
+     against the hour grid already says when it is. */
+  .cal-evt-tight{padding:1px 5px;display:flex;align-items:center}
+  .cal-evt-tight .et{-webkit-line-clamp:1;font-size:10.5px;line-height:1.15;flex:1;min-width:0}
+  .cal-evt-tight .es{display:none}
+  .cal-evt-tight .cal-evt-resize{height:5px}
   .cal-evt-timed .es{font-family:var(--mono);font-size:9px;opacity:.8}
   .cal-evt-resize{position:absolute;left:0;right:0;height:6px;cursor:ns-resize;z-index:3}
   .cal-evt-resize-top{top:-2px}
@@ -1076,12 +1086,15 @@
        a narrower gutter plus minmax(0,1fr) day columns let all 7 days compress
        to fit any phone width; vertical scroll through the hours is unaffected */
     .week-grid{min-width:0;width:100%;grid-template-columns:34px repeat(var(--cal-cols,7),minmax(0,1fr))}
-    /* a 52px hour was the other big cost here — a phone showed only 7-8 hours
-       of the day without scrolling. 38px (still legible, still tall enough
-       for a 15-minute drag to snap somewhere visible) gets close to a full
-       day in view. The resize-drag math reads this same variable, so a drag
-       never falls out of step with what the row actually measures. */
-    .cal-grid-wrap{--cal-hour-h:38px}
+    /* The row height is the device's own choice now (see calHourPx); this is
+       only the starting point for a phone that has never picked one. It used
+       to be 38px, chosen to fit most of a day on screen — but at 38px a
+       half-hour block is 19px tall and its title is unreadable, which is the
+       whole reason the zoom control exists. The resize-drag math reads this
+       same variable, so a drag never falls out of step with the rows. */
+    .cal-grid-wrap{--cal-hour-h:46px}
+    .cal-evt-timed{min-height:21px}
+    .cal-evt-tight .et{font-size:11px}
     .month-cell{min-height:64px}
     .cal-grid-wrap{overflow-x:hidden}
     .cal-hour-gutter{font-size:8px;padding:0 2px}
@@ -1153,17 +1166,16 @@
     <div class="view hidden wrap" id="notes"></div>
     <div class="view hidden" id="materials">
       <div class="mat-subtabs" id="matSubTabs">
-        <button class="mat-stab on" data-ms="diarytypes">Entry Types</button>
-        <button class="mat-stab" data-ms="sites">Injection Sites</button>
+        <button class="mat-stab on" data-ms="sites">Injection Sites</button>
         <button class="mat-stab" data-ms="inventory">Inventory</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
         <button class="mat-stab" data-ms="viruses">Viruses</button>
       </div>
+      <div class="wrap mat-subview" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview hidden" id="ms-viruses"></div>
-      <div class="wrap mat-subview hidden" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-procedures"></div>
-      <div class="wrap mat-subview" id="ms-diarytypes"></div>
+
     </div>
     <div class="view hidden wrap" id="library"></div>
     <div class="view hidden wrap" id="animals"></div>
@@ -1302,7 +1314,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // How an experiment's combined task+diary list is ordered and clustered.
   expTaskSort:"alpha", expTaskGroup:"none", notesSort:"updated_desc",
   // Notes list filter: search text, and the experiments/projects picked (any of them).
-  notesFilter:{q:"",links:[]}, notesView:"cards", notesGroup:"owner", matSubTab:"diarytypes",
+  notesFilter:{q:"",links:[]}, notesView:"cards", notesGroup:"owner", matSubTab:"sites", calZoom:"auto",
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
@@ -1794,7 +1806,7 @@ function changedHere(base,coll,id,obj){
    the calendar jumping zoom while being read. Kept here instead, and put back
    over whatever a pull brings in. */
 const LOCAL_VIEW_KEYS=["calMode","calFilters","calAlldayCollapsed","topCollapsed",
-  "animalFilters","notesFilter","notesSort","notesView","notesGroup","matSubTab","expTaskSort","expTaskGroup","expViewBy"];
+  "animalFilters","notesFilter","notesSort","notesView","notesGroup","matSubTab","calZoom","expTaskSort","expTaskGroup","expViewBy"];
 const VIEW_STATE_KEY="arbor_view_state";
 function saveLocalView(){
   try{
@@ -1805,7 +1817,13 @@ function saveLocalView(){
 function applyLocalView(){
   try{
     const o=JSON.parse(localStorage.getItem(VIEW_STATE_KEY)||"null");
-    if(!o||!DB.config)return;
+    if(!DB.config)return;
+    /* Nothing stored means this device has never been used. A week of seven
+       columns is about 42px each on a phone — too narrow for a title at any
+       row height — so a phone starts on the day and a laptop on the week.
+       It is only the starting point: calMode is device-local, so switching
+       to Week here sticks, and never follows the laptop home. */
+    if(!o){ if(window.innerWidth<=600) DB.config.calMode="day"; return; }
     LOCAL_VIEW_KEYS.forEach(k=>{ if(o[k]!==undefined) DB.config[k]=o[k]; });
   }catch(e){}
 }
@@ -2178,7 +2196,8 @@ function migrate(){                       // backfill fields added in later vers
   animalGroup=DB.config.animalFilters.group||"all";
   animalTag=DB.config.animalFilters.tag||"all";
   animalCage=DB.config.animalFilters.cage||"all";
-  matSubTab=DB.config.matSubTab||"diarytypes";
+  // Entry Types left Materials; a device still remembering that tab lands on the first real one
+  matSubTab=(DB.config.matSubTab==="diarytypes"||!DB.config.matSubTab)?"sites":DB.config.matSubTab;
   animalProject=DB.config.animalFilters.project||"all";
   calMode=DB.config.calMode||"week";
   animalEntry=DB.config.animalFilters.entry||"all";
@@ -6367,6 +6386,10 @@ let calFlashKey=null;
 // The find row, shared by the hour-grid and month renderers so both get it.
 function calNavExtrasHTML(){
   return `<div class="cal-extras">
+    <select id="cal_zoom" class="cal-inp" style="flex:0 0 auto;width:auto;padding:5px 7px" title="Row height">
+      ${[["auto","⇕ Auto"],["compact","⇕ Compact"],["normal","⇕ Normal"],["tall","⇕ Tall"]]
+        .map(([v,l])=>`<option value="${v}" ${(DB.config.calZoom||"auto")===v?"selected":""}>${l}</option>`).join("")}
+    </select>
     <div class="cal-find">
       <input type="text" id="cal_search" class="cal-inp" placeholder="Find a task, event or experiment…  /" value="${escAttr(calSearchQ)}" autocomplete="off">
       <div class="cal-hits" id="cal_hits" hidden></div>
@@ -6374,6 +6397,8 @@ function calNavExtrasHTML(){
   </div>`;
 }
 function wireCalNavExtras(nav,currentISO){
+  const zoom=nav.querySelector("#cal_zoom");
+  if(zoom) zoom.addEventListener("change",e=>{ DB.config.calZoom=e.target.value; persist(); renderTimeline(); });
   const title=nav.querySelector("#cal_title");
   if(title) title.onclick=()=>openCalendar(title,currentISO,iso=>calGoToDate(iso),undefined,true);
 
@@ -6517,6 +6542,19 @@ function setCalMode(mode){
    duration, so an eight-hour event painted straight down over every hour below
    it. Anything longer than a day stays in the all-day banner, where a
    multi-day bar is what actually reads. */
+/* How tall an hour is. A phone fits most of a day at 38px and almost none of
+   it legibly; 52 reads but shows less. Rather than pick for everyone, it is a
+   control on the Timeline, kept per device like the rest of the view state. */
+const CAL_ZOOMS={compact:40,normal:52,tall:72};
+/* Row height. renderTimeline writes this onto the grid as an inline variable,
+   which beats any media query — so the phone's shorter hour has to be decided
+   here rather than in the stylesheet, or every phone silently gets the desktop
+   52px. "auto" is the default and means "whatever this screen wants". */
+function calHourPx(){
+  const z=DB.config.calZoom;
+  if(CAL_ZOOMS[z]) return CAL_ZOOMS[z];
+  return window.innerWidth<=600 ? 46 : CAL_ZOOMS.normal;
+}
 function timedSegments(t){
   if(!hasTime(t.deadline))return [];
   const start=whenDate(t.deadline);
@@ -6821,6 +6859,7 @@ function renderTimeline(){
   alldayZone.appendChild(Object.assign(document.createElement("div"),{style:"flex:0 0 10px;width:10px"}));
   // hours section: scrollable
   const wrap=document.createElement("div"); wrap.className="cal-grid-wrap"; outer.appendChild(wrap);
+  wrap.style.setProperty("--cal-hour-h",calHourPx()+"px");   // the drag math reads this same variable
   const grid=document.createElement("div"); grid.className="week-grid"; wrap.appendChild(grid);
   // The day-header/all-day row (alldayGrid, above) and the hourly grid (wrap,
   // below) are two independently-scrollable regions with no built-in link
@@ -7056,7 +7095,8 @@ function renderTimeline(){
         const layKey=sg.i?`${t.id}#${sg.i}`:t.id;
         const{col:colIdx,totalCols,span:colSpan=1}=timedLayout.get(layKey)||{col:0,totalCols:1};
         const colPct=100/totalCols;
-        const evt=document.createElement("div"); evt.className="cal-evt-timed"+(sg.i?" cal-evt-cont":"");
+        const evt=document.createElement("div");
+        evt.className="cal-evt-timed"+(sg.i?" cal-evt-cont":"")+((sg.endMin-sg.startMin)<=30?" cal-evt-tight":"");
         evt.dataset.dragSrc=t.src.id; evt.dataset.dragWhen=t.deadline;
         // identity for the live re-pack during a drag (see packColumns)
         evt.dataset.layKey=layKey; evt.dataset.layDay=String(di);
@@ -7111,7 +7151,8 @@ function renderTimeline(){
       const heightPct=(durationMins/60)*100;
       const{col:colIdx,totalCols,span:colSpan=1}=timedLayout.get(e.id)||{col:0,totalCols:1};
       const colPct=100/totalCols;
-      const evt=document.createElement("div"); evt.className="cal-evt-timed";
+      const evt=document.createElement("div");
+      evt.className="cal-evt-timed"+(durationMins<=30?" cal-evt-tight":"");
       evt.dataset.dragSrc=e.id; evt.dataset.dragWhen=`${e.date}T${e.time}`;
       evt.dataset.layKey=e.id; evt.dataset.layDay=String(dayIdx);
       if(calDragKey===e.id) evt.classList.add("cal-evt-ghost");
@@ -7708,7 +7749,7 @@ function addMaterial(name){ name=(name||"").trim(); if(!name)return false; if(!D
 function linkMaterialTask(name,taskId){ const t=taskById(taskId); if(!t)return; t.materials=[...new Set([...(t.materials||[]),name])]; persist(); }
 function unlinkMaterialTask(name,taskId){ const t=taskById(taskId); if(t&&t.materials)t.materials=t.materials.filter(m=>m!==name); persist(); }
 /* ---------- MATERIALS — sub-tabbed: Inventory / Viruses / Injection Sites ---------- */
-let matSubTab = "diarytypes";   // replaced on boot by the device's own choice
+let matSubTab = "sites";   // replaced on boot by the device's own choice
 let matExpanded = new Set();
 
 // materialNames: ONLY items referenced by tasks or explicitly added to inventory.
@@ -7737,7 +7778,7 @@ function renderMaterials(){
     });
     tabBar._wired = true;
   }
-  // the markup opens on Entry Types; the device may have been left elsewhere
+  // the markup opens on Injection Sites; the device may have been left elsewhere
   tabBar.querySelectorAll(".mat-stab").forEach(x => x.classList.toggle("on", x.dataset.ms===matSubTab));
   document.querySelectorAll(".mat-subview").forEach(v => v.classList.toggle("hidden", v.id !== "ms-"+matSubTab));
   renderMatSubTab();
@@ -7748,7 +7789,6 @@ function renderMatSubTab(){
   else if(matSubTab === "viruses")  renderVirusLib();
   else if(matSubTab === "sites")    renderSiteLib();
   else if(matSubTab === "procedures") renderProcedureLib();
-  else if(matSubTab === "diarytypes") renderDiaryTypesLib();
 }
 
 /* ── INVENTORY ─────────────────────────────────────────────────────────────── */
@@ -8378,8 +8418,12 @@ const DIARY_FIELD_TYPES=["number","text","yesno","select"];
 // covering common lab/animal/medical symbols so most people never need to
 // hunt down an emoji elsewhere.
 const DIARY_ICON_CHOICES=["⚖️","🩹","🎓","💬","🔪","💉","🧫","🔬","🔭","🩺","💊","🧪","🧬","🩸","🦴","🧠","❤️","🫀","🫁","🐭","🐁","📋","📌","📝","📅","⏰","✅","⚠️","🔥","❄️","🧊","🌡️","🔦","📷","🧴","🧯","🔖","⭐","✨","🎯","💧","🧻","🚨","🔋","🧹"];
-function renderDiaryTypesLib(){
-  const host = document.getElementById("ms-diarytypes"); host.innerHTML = "";
+/* Entry types are the shape of the animal diary, not a material — they sat in
+   Materials because that is where the other editable lists were, and that one
+   tab is what made the section read as a drawer. Lives on the Animals page
+   now, beside Tags; the renderer takes its host so it can live in a modal. */
+function renderDiaryTypesLib(hostEl){
+  const host = hostEl; host.innerHTML = "";
   const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
 
   const hdr = document.createElement("div");
@@ -9687,7 +9731,7 @@ function renderMetricsFields(taskName,metrics){
   const defs=trainingParamDefs(taskName);
   if(!defs.length){
     return taskName
-      ? `<div style="font-size:11px;color:var(--ink-faint)">no fields defined for "${esc(taskName)}" yet — add some in Entry Types → training, or just use Note below</div>`
+      ? `<div style="font-size:11px;color:var(--ink-faint)">no fields defined for "${esc(taskName)}" yet — add some in Animals → Entry types → training, or just use Note below</div>`
       : "";
   }
   return `<div class="dg-metrics-grid">${defs.map(p=>`
@@ -9828,6 +9872,7 @@ function renderAnimals(){
         <button class="btn ghost${animalActiveFilterCount()?" filt-on":""}" id="a_filters">⚙ Filter${
           animalActiveFilterCount()?` <span class="filt-n">${animalActiveFilterCount()}</span>`:""}</button>
         <button class="btn ghost" id="a_tags">🏷 Tags</button>
+        <button class="btn ghost" id="a_types">🔖 Entry types</button>
         <button class="btn ghost" id="a_eventlog">📋 Event log</button>
         <button class="btn accent" id="a_add">＋ Animal</button>
       </div>
@@ -9883,6 +9928,13 @@ function renderAnimals(){
   });
   bar.querySelector("#a_add").onclick=()=>animalModal(null);
   bar.querySelector("#a_eventlog").onclick=()=>openEventLogModal(null);
+  bar.querySelector("#a_types").onclick=()=>{
+    modal(`<h3>Diary entry types</h3><div id="dtypes_host"></div>
+      <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+    renderDiaryTypesLib(document.getElementById("dtypes_host"));
+    // a renamed or recoloured type changes what the list behind shows
+    document.getElementById("scrim").addEventListener("click",()=>renderAnimals(),{once:true});
+  };
   bar.querySelector("#a_tags").onclick=()=>{
     modal(`<h3>Tags</h3><div id="tags_host"></div>
       <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
@@ -11712,7 +11764,13 @@ function goMaterials(sub){
 function openLinked(l){
   if(l.kind==="animal"){ closeDetail(); switchTo("animals"); animalModal(l.id); return; }
   if(l.kind==="template"){ closeDetail(); goMaterials("procedures"); return; }
-  if(l.kind==="task"){ closeDetail(); goMaterials("diarytypes"); return; }
+  if(l.kind==="task"){
+    closeDetail(); switchTo("animals");
+    modal(`<h3>Diary entry types</h3><div id="dtypes_host"></div>
+      <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+    renderDiaryTypesLib(document.getElementById("dtypes_host"));
+    return;
+  }
   // A paper/protocol/other Library record — straight to its own link, the
   // same one the Library row's own ↗ button opens, instead of just landing
   // on the Library tab in general and leaving the actual click to find it.
