@@ -12439,10 +12439,28 @@ function openHistoryModal(){
         const old=await gistRevisionData(h.version);
         if(!old){ det.innerHTML=`<div style="padding:10px 0">That version couldn't be read.</div>`; return; }
         const gone=missingFromNow(old);
+        /* This screen used to describe a revision purely by its scheduled
+           items, which made it useless for the one question that matters when
+           a workspace has emptied out: is my colony in there? Every collection
+           is counted now, then against now, so a revision that still holds the
+           animals is obvious at a glance. */
+        const COUNTED=[["animals","animal"],["projects","project"],["experiments","experiment"],
+                       ["notes","note"],["schedule","scheduled item"],["readings","library record"]];
+        const nOf=(db,k)=>((db&&db[k])||[]).length;
+        const countsHTML=COUNTED.map(([k,noun])=>{
+          const then=nOf(old,k), now=nOf(DB,k);
+          const lost=then>now;
+          return `<div class="hist-count${lost?" lost":""}"><span class="hc-n">${then}</span>
+            <span class="hc-k">${esc(noun)}${then!==1?"s":""}</span>
+            <span class="hc-now">${now===then?"same as now":`${now} now`}</span></div>`;
+        }).join("");
         det.innerHTML=`<div class="hist-detail">
-          <div class="hist-head">${esc(new Date(h.committed_at).toLocaleString())} —
-            ${(old.schedule||[]).length} scheduled item${(old.schedule||[]).length!==1?"s":""} then,
-            ${taskList().length} now</div>
+          <div class="hist-head">${esc(new Date(h.committed_at).toLocaleString())}</div>
+          <div class="hist-counts">${countsHTML}</div>
+          <div class="hist-restore-all">
+            <button type="button" class="btn accent" id="hist_restore_all">↺ Restore this whole version</button>
+            <span class="hra-note">Replaces everything in your workspace with this version. Export JSON first if you want today's work kept.</span>
+          </div>
           ${gone.length?`<div class="hist-sub">In that version but not in your workspace now:</div>
           ${gone.map((t,i)=>`<div class="hist-item" data-g="${i}">
             <span class="hi-title">${esc(t.title||"(unnamed)")}</span>
@@ -12451,6 +12469,21 @@ function openHistoryModal(){
           </div>`).join("")}`
           :`<div class="hist-sub">Nothing from that version is missing — your workspace has everything it had.</div>`}
         </div>`;
+        const allBtn=det.querySelector("#hist_restore_all");
+        if(allBtn) allBtn.onclick=()=>{
+          const when=new Date(h.committed_at).toLocaleString();
+          const summary=COUNTED.map(([k,noun])=>`${nOf(old,k)} ${noun}${nOf(old,k)!==1?"s":""}`).join(", ");
+          if(!confirm(`Replace your whole workspace with the version from ${when}?\n\nThat version holds: ${summary}.\n\nWhatever is in the workspace now is overwritten. This device keeps the restored copy until you sync, so nothing is pushed until you choose to.`))return;
+          /* migrate() holds one-time conversions that are destructive if they
+             run twice — _projectsFlattened empties DB.projects outright. They
+             are facts about this workspace's lineage, not about one revision,
+             so carry the flags already set here onto the restored copy. A
+             revision whose flags went missing would otherwise come back with
+             every project silently flattened away. */
+          Object.keys(DB).forEach(k=>{ if(k[0]==="_"&&DB[k]===true&&old[k]===undefined) old[k]=true; });
+          DB=old; migrate(); persist(); closeModal(); render();
+          toast(`Restored the version from ${when}`);
+        };
         det.querySelectorAll(".hist-item").forEach(row=>{
           row.querySelector(".hi-restore").onclick=()=>{
             const t=gone[+row.dataset.g];
@@ -12470,6 +12503,21 @@ function openHistoryModal(){
 }
 
 /* ---------- BACKUP / RESTORE ---------- */
+(function(){
+  const st=document.createElement("style");
+  st.textContent=`
+  .hist-counts{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}
+  .hist-count{display:flex;align-items:baseline;gap:6px;background:var(--panel2);border:1px solid var(--line2);
+    border-radius:7px;padding:5px 9px;font-size:12px}
+  .hist-count.lost{border-color:var(--amber)}
+  .hist-count .hc-n{font-family:var(--mono);font-weight:700;font-size:13px;color:var(--ink)}
+  .hist-count .hc-k{color:var(--ink-dim)}
+  .hist-count .hc-now{color:var(--ink-faint);font-size:11px}
+  .hist-count.lost .hc-now{color:var(--amber)}
+  .hist-restore-all{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:12px 0 4px}
+  .hist-restore-all .hra-note{font-size:11px;color:var(--ink-faint);flex:1;min-width:180px;line-height:1.5}`;
+  document.head.appendChild(st);
+})();
 document.getElementById("menuBtn").addEventListener("click",()=>{ renderMenuModal(); });
 function renderMenuModal(){
   modal(`<h3>Backup &amp; restore</h3>
