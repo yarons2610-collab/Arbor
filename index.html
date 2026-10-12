@@ -1552,7 +1552,9 @@ async function loadDB(){
         const agreed=snapshotIds(remote);   // what the Gist actually holds
         const agreedBase=snapshotBase(remote);
         const before=JSON.stringify(remote.schedule||[]).length;
+        wipeSuspected=null;
         DB=(localCopy&&localCopy.domains)?mergeLocalAdditions(remote,localCopy):remote;
+        reportWipeSuspicion();
         lastSyncedBase=agreedBase;
         applyLocalView();   // this device's own filters/zoom, not the last device's
         migrate();
@@ -1827,6 +1829,14 @@ function applyLocalView(){
     LOCAL_VIEW_KEYS.forEach(k=>{ if(o[k]!==undefined) DB.config[k]=o[k]; });
   }catch(e){}
 }
+/* Loud on purpose. The whole failure this guards against was silent. */
+function reportWipeSuspicion(){
+  if(!wipeSuspected)return;
+  const w=wipeSuspected; wipeSuspected=null;
+  const noun=w.key==="diary"?"diary entries":w.key;
+  console.warn("Arbor: refused to propagate a suspected wipe",w);
+  try{ toast(`Kept ${w.gone} ${noun} that this device was missing — nothing was deleted. Check your data before syncing again.`); }catch(e){}
+}
 function snapshotIds(db){
   const out={diary:new Set()};
   MERGE_KEYS.forEach(k=>{ out[k]=new Set((db[k]||[]).map(x=>x&&x.id).filter(Boolean)); });
@@ -1872,6 +1882,21 @@ function mergeConfig(remoteCfg,localCfg,base){
   });
   return out;
 }
+/* A deletion is inferred, never recorded: anything in the agreed copy that this
+   device no longer has is taken to have been deleted here, and is then removed
+   from the remote. That inference is right for a record someone deleted and
+   catastrophic for a workspace that lost its copy some other way — an empty DB
+   in memory reads as "the user deleted every animal", and the next push carries
+   that to the Gist and on to every other device. Records created since the mark
+   survive, being additions rather than deletions, which is why such a wipe
+   leaves the newest notes behind and nothing older.
+   Nothing here can tell the two cases apart, so size decides: losing most of a
+   collection at once is treated as this device being wrong rather than as
+   intent. The deletions are not replayed, the remote keeps its records, and the
+   person is told. A real mass delete then has to be made twice, which is a far
+   better failure than a silent one. */
+const WIPE_MIN_RECORDS=8, WIPE_FRACTION=0.5;
+let wipeSuspected=null;
 function mergeLocalAdditions(remote,local){
   const known=lastSyncedIds, base=lastSyncedBase;
   const isNew=(k,id)=>!known||!known[k]||!known[k].has(id);
@@ -1879,8 +1904,15 @@ function mergeLocalAdditions(remote,local){
   // starts from the remote, which still has them, so without replaying them a
   // conflict quietly undid every delete this device had made — the mirror of
   // the lost-additions bug, and just as invisible.
-  const deletedHere=(k,liveIds)=>(!known||!known[k])?new Set()
-    :new Set([...known[k]].filter(id=>!liveIds.has(id)));
+  const deletedHere=(k,liveIds)=>{
+    if(!known||!known[k])return new Set();
+    const gone=new Set([...known[k]].filter(id=>!liveIds.has(id)));
+    if(gone.size>=WIPE_MIN_RECORDS&&gone.size>=known[k].size*WIPE_FRACTION){
+      wipeSuspected={key:k,gone:gone.size,agreed:known[k].size};
+      return new Set();
+    }
+    return gone;
+  };
   MERGE_KEYS.forEach(k=>{
     if(!Array.isArray(remote[k])||!Array.isArray(local[k]))return;
     const liveIds=new Set(local[k].map(x=>x&&x.id).filter(Boolean));
@@ -1993,7 +2025,9 @@ async function runSync(){
       // had never reached the Gist, so the next conflict read their absence
       // there as "deleted on another device" and dropped them for good.
       const agreed=snapshotIds(remote), agreedBase=snapshotBase(remote);
+      wipeSuspected=null;
       DB=mergeLocalAdditions(remote,DB);
+      reportWipeSuspicion();
       lastSyncedBase=agreedBase;
       applyLocalView(); migrate();
       lastSyncedRemoteVersion=remote.__gistVersion;
@@ -2095,7 +2129,9 @@ async function autoPull(){
       restoreSyncMark();
       const agreed=snapshotIds(remote), agreedBase=snapshotBase(remote);
       const remoteJSON=JSON.stringify(remote);
+      wipeSuspected=null;
       DB=mergeLocalAdditions(remote,DB);
+      reportWipeSuspicion();
       lastSyncedBase=agreedBase;
       applyLocalView(); migrate();
       lastSyncedRemoteVersion=remote.__gistVersion;
