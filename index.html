@@ -1262,8 +1262,19 @@
       });
     }
   };
-  // reduces the chance iOS evicts saved data under storage pressure
-  if(navigator.storage&&navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+  /* Without this the browser may evict everything the app owns — localStorage,
+     the file handles in IndexedDB, even the service worker registration —
+     whenever it feels like reclaiming space, with no warning and no way to tell
+     afterwards that it happened. Ask for persistence, then record the answer so
+     the app can say so rather than leaving the loss to be discovered as missing
+     animals. */
+  window.arborStorageState={persisted:null,quota:null,usage:null};
+  if(navigator.storage&&navigator.storage.persist){
+    navigator.storage.persist().then(ok=>{ window.arborStorageState.persisted=!!ok; }).catch(()=>{});
+    if(navigator.storage.estimate) navigator.storage.estimate().then(e=>{
+      window.arborStorageState.quota=e.quota; window.arborStorageState.usage=e.usage;
+    }).catch(()=>{});
+  }
 })();
 if("serviceWorker" in navigator){
   // register() itself only ever checks for a newer service-worker.js once,
@@ -1295,8 +1306,16 @@ if("serviceWorker" in navigator){
   // not. Now it just offers a reload instead of forcing one; the tab is still
   // running the old (but still working) code until the user taps it or
   // naturally reopens the app later.
+  /* A page that loads with no controller and then gets one has not been
+     updated — that is the worker installing for the first time, and claiming
+     the page is exactly what it is supposed to do. Announcing it says "update
+     available" on a first visit, and on every launch if the registration keeps
+     being lost, which reads as the app nagging every few seconds. Read the
+     controller now, at evaluation time, before claim can change the answer. */
+  const swHadControllerAtLoad=!!navigator.serviceWorker.controller;
   let swControllerChanged=false;
   navigator.serviceWorker.addEventListener("controllerchange",()=>{
+    if(!swHadControllerAtLoad) return;
     if(swControllerChanged) return; swControllerChanged=true;
     const banner=document.getElementById("swUpdateBanner");
     banner.classList.add("show");
