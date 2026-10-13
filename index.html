@@ -1401,6 +1401,12 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
 let DB={domains:[],tasks:[],spines:[],projects:[],experiments:[],schedule:[],readings:[],inventory:{},animals:[],tags:[],
   sharedVirusCache:{viruses:[],deletedIds:[],fetchedAt:0}, // local read-through cache of the shared virus file
   config:{...DEFAULT_CONFIG}};
+/* Until boot has loaded the real workspace, DB above is an empty placeholder.
+   Nothing may save it or sync it: on 12/10/2026 a launch that was backgrounded
+   while still loading saved this placeholder over the device's own copy, and
+   the merge that followed read every missing record as a deletion. persist(),
+   doWrite(), flushSave() and runSync() all wait for this. */
+let bootLoaded=false, persistDuringBoot=false;
 const DOMAIN_PALETTE=["#54e08a","#ff5f92","#f2b756","#3fd0d6","#a98cff","#ff8a6b","#7db4ff","#e0d454"];
 // Google Calendar's own 11 event colours, by name and hex — picked specifically
 // so a color chosen here looks like a deliberate, familiar choice rather than
@@ -1565,24 +1571,21 @@ async function loadDB(){
         // background before the push finished — was gone on next launch, with
         // nothing said. Reconcile the two the same way a mid-session pull
         // does, against the marker of what this device last agreed on.
-        restoreSyncMark();
         let localCopy=null;
         try{ localCopy=await window.arbor.load(); }catch(e){}
-        const agreed=snapshotIds(remote);   // what the Gist actually holds
-        const agreedBase=snapshotBase(remote);
-        const before=JSON.stringify(remote.schedule||[]).length;
-        wipeSuspected=null;
-        DB=(localCopy&&localCopy.domains)?mergeLocalAdditions(remote,localCopy):remote;
-        reportWipeSuspicion();
+        const agreedBase=snapshotBase(remote), remoteJSON=JSON.stringify(remote);
+        // Only a real copy is merged — never the empty placeholder an older build
+        // may have saved — and its base counts only if the copy descends from it.
+        const usable=isRealWorkspace(localCopy);
+        if(usable) restoreSyncMark(localCopy); else lastSyncedBase=null;
+        DB=usable?mergeWorkspaces(remote,localCopy,lastSyncedBase):remote;
+        const carried=JSON.stringify(DB)!==remoteJSON;
         lastSyncedBase=agreedBase;
         applyLocalView();   // this device's own filters/zoom, not the last device's
         migrate();
         lastSyncedRemoteVersion=version;
-        const carried=JSON.stringify(DB.schedule||[]).length!==before;
-        // same reasoning as the mid-session merge: agreement is with the Gist,
-        // not with whatever this boot reconciled into place
-        lastSyncedIds=agreed; saveSyncMark();
-        // anything carried over still owes the Gist a push
+        saveSyncMark();
+        // anything this copy brought that the Gist lacks still owes it a push
         if(carried){ localDirty=true; syncPending=true; }
         return "gist";
       }
@@ -1593,7 +1596,7 @@ async function loadDB(){
   // device already knows about," so runSync()'s conflict check has a real
   // baseline instead of treating the Gist's very first read as an instant
   // conflict.
-  try{ const data=await window.arbor.load(); if(data&&data.domains){DB=data;migrate();lastSyncedRemoteVersion=null;return "local";} }
+  try{ const data=await window.arbor.load(); if(isRealWorkspace(data)){DB=data;restoreSyncMark(data);migrate();lastSyncedRemoteVersion=null;return "local";} }
   catch(e){}
   return "none";
 }
@@ -1757,33 +1760,28 @@ let localDirty=false;
 // The Gist revision this device is known to be in step with. null = "we have
 // not read the Gist yet", which reads as "anything there is news to us".
 let lastSyncedRemoteVersion=null;
-/* What this device had in the copy it last agreed with the Gist on. It is the
-   difference between "I made this since we last spoke" and "this was deleted
-   somewhere else" — two things that look identical if you only compare the
-   local copy against the remote one, and getting them confused either loses
-   new work or resurrects deleted work. Kept in memory only; a fresh load has
-   nothing unpushed to reconcile anyway. */
+// The record collections a sync merges, record by record.
 const MERGE_KEYS=["domains","tasks","spines","projects","experiments","schedule",
                   "readings","protocols","other","notes","animals","tags"];
-let lastSyncedIds=null;
 const SYNC_MARK_KEY="arbor_sync_mark";
-/* The agreed-copy marker has to outlive the tab. A phone killed in the
-   background saves to disk (that part is synchronous and reliable) but may
-   never finish its push, so the next launch has to be able to tell that
-   device's unpushed additions apart from records deleted on another device.
-   Held in memory alone, that knowledge died with the page and the next boot
-   had no way to reason about it. */
+/* What this device last agreed with the Gist, kept on disk so it outlives the
+   tab: a phone killed in the background before its push finished still knows,
+   on the next launch, which records it had edited since. Fingerprints only,
+   one per record — enough to tell an edit made here from an older copy, and
+   small enough to store on every sync. A mark written by an older build held
+   ids for inferring deletions, which this build no longer does; it is ignored.
+   `at` is the workspace's own updatedAt when the mark was taken: a local copy
+   older than that predates the agreement, so the base says nothing about it. */
 function saveSyncMark(){
-  try{
-    const ids={}; Object.keys(lastSyncedIds||{}).forEach(k=>ids[k]=[...lastSyncedIds[k]]);
-    localStorage.setItem(SYNC_MARK_KEY,JSON.stringify({v:lastSyncedRemoteVersion,ids}));
-  }catch(e){}
+  try{ localStorage.setItem(SYNC_MARK_KEY,JSON.stringify({f:2,v:lastSyncedRemoteVersion,at:DB.updatedAt||0,base:lastSyncedBase})); }catch(e){}
 }
-function restoreSyncMark(){
+function restoreSyncMark(localCopy){
+  lastSyncedBase=null;
   try{
-    const m=JSON.parse(localStorage.getItem(SYNC_MARK_KEY)||"null"); if(!m)return;
-    const ids={}; Object.keys(m.ids||{}).forEach(k=>ids[k]=new Set(m.ids[k]));
-    lastSyncedIds=ids;
+    const m=JSON.parse(localStorage.getItem(SYNC_MARK_KEY)||"null");
+    if(!m||m.f!==2||!m.base||!m.base.rec)return;
+    if(localCopy&&m.at&&(localCopy.updatedAt||0)<m.at)return;
+    lastSyncedBase=m.base;
   }catch(e){}
 }
 /* What the two sides last agreed on, record by record. Deciding a merge needs
@@ -1792,33 +1790,51 @@ function restoreSyncMark(){
    record this device simply holds an older copy of — so the only safe thing
    it could do was take the remote's version of everything that already
    existed, quietly dropping an edit made here whenever the other device
-   pushed anything at all. Memory only: after a reload there is nothing
-   unpushed to reason about that boot's own reconciliation doesn't cover. */
+   pushed anything at all. Saved with the sync mark, so an edit made here and
+   not yet pushed still counts as one after a relaunch. */
 let lastSyncedBase=null;
 // an animal without its diary: the diary is merged entry by entry, so an
 // animal's own fields are compared and replaced without it
 function animalFields(a){ const {diary,...rest}=a||{}; return rest; }
+/* A fingerprint, not a copy: the base only ever answers "is this the same as
+   what we agreed on?", and a 64-bit hash answers that in a fraction of the
+   space, which is what lets it be saved to disk with every sync. */
+function hashStr(s){
+  let h1=0xdeadbeef, h2=0x41c6ce57;
+  for(let i=0;i<s.length;i++){ const c=s.charCodeAt(i); h1=Math.imul(h1^c,2654435761); h2=Math.imul(h2^c,1597334677); }
+  h1=Math.imul(h1^(h1>>>16),2246822507)^Math.imul(h2^(h2>>>13),3266489909);
+  h2=Math.imul(h2^(h2>>>16),2246822507)^Math.imul(h1^(h1>>>13),3266489909);
+  return (h2>>>0).toString(36)+"."+(h1>>>0).toString(36);
+}
+function hashJSON(v){ return hashStr(JSON.stringify(v===undefined?null:v)); }
 function snapshotBase(db){
   const rec={};
   MERGE_KEYS.forEach(k=>{
-    const m=new Map();
-    (db[k]||[]).forEach(x=>{ if(x&&x.id) m.set(x.id,JSON.stringify(k==="animals"?animalFields(x):x)); });
+    const m={};
+    (db[k]||[]).forEach(x=>{ if(x&&x.id) m[x.id]=hashJSON(k==="animals"?animalFields(x):x); });
     rec[k]=m;
   });
-  const diary=new Map();
-  (db.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) diary.set(e.id,JSON.stringify(e)); }));
-  return {rec,diary,config:JSON.stringify(db.config||{}),inventory:JSON.stringify(db.inventory||{})};
+  const diary={};
+  (db.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) diary[e.id]=hashJSON(e); }));
+  const c=db.config||{}, cfg={}, cfgItems={};
+  Object.keys(c).forEach(k=>{ cfg[k]=hashJSON(c[k]); });
+  KEYED_CONFIG_LISTS.forEach(({key,idOf})=>{
+    const m={}; (Array.isArray(c[key])?c[key]:[]).forEach(x=>{ const id=idOf(x); if(id!=null) m[id]=hashJSON(x); });
+    cfgItems[key]=m;
+  });
+  const inv={}; Object.keys(db.inventory||{}).forEach(k=>{ inv[k]=hashJSON(db.inventory[k]); });
+  return {rec,diary,cfg,cfgItems,inv};
 }
-function baseJSON(base,coll,id){
-  if(!base)return undefined;
+function baseHash(base,coll,id){
+  if(!base||!base.rec)return undefined;
   const m=coll==="diary"?base.diary:base.rec[coll];
-  return m?m.get(id):undefined;
+  return m?m[id]:undefined;
 }
 // true only when this device actually changed the record since that copy —
 // a record it never touched is left to whatever the remote says
 function changedHere(base,coll,id,obj){
-  const was=baseJSON(base,coll,id);
-  return was!==undefined&&was!==JSON.stringify(obj);
+  const was=baseHash(base,coll,id);
+  return was!==undefined&&was!==hashJSON(obj);
 }
 /* View state is this device's own, not the workspace's: which filters are on,
    what is typed in a search box, which calendar zoom, what is collapsed. It
@@ -1849,150 +1865,250 @@ function applyLocalView(){
   }catch(e){}
 }
 /* Loud on purpose. The whole failure this guards against was silent. */
-function reportWipeSuspicion(){
-  if(!wipeSuspected)return;
-  const w=wipeSuspected; wipeSuspected=null;
-  const noun=w.key==="diary"?"diary entries":w.key;
-  console.warn("Arbor: refused to propagate a suspected wipe",w);
-  try{ toast(`Kept ${w.gone} ${noun} that this device was missing — nothing was deleted. Check your data before syncing again.`); }catch(e){}
+function reportMassRemoval(w){
+  const noun=w.key==="diary"?"diary entries":w.key.startsWith("cfg:")?w.key.slice(4)+" entries":w.key;
+  console.warn("Arbor: one change removed most of a collection — not recorded as deletions",w);
+  try{ toast(`${w.gone} ${noun} disappeared in a single change — not treated as deleted, so your synced copy keeps them. If you meant it, delete them again.`); }catch(e){}
 }
-function snapshotIds(db){
-  const out={diary:new Set()};
-  MERGE_KEYS.forEach(k=>{ out[k]=new Set((db[k]||[]).map(x=>x&&x.id).filter(Boolean)); });
-  (db.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) out.diary.add(e.id); }));
-  return out;
-}
-/* A pull used to replace the workspace outright, so anything added here and
-   not yet pushed was simply gone — which is why it had to interrupt with
-   "your last change wasn't saved, please redo it". Carry those additions
-   across instead and there is nothing to announce.
-   Only records created since the last agreed copy come over. One that was in
-   that copy and is missing from the remote was deleted on another device, and
-   must stay deleted rather than being resurrected by its absence. */
 /* Config lists nobody can tell apart by id alone — both devices may have
    added to the same one, and taking either side whole would drop the other's. */
 const KEYED_CONFIG_LISTS=[{key:"diaryTypes",idOf:x=>x&&x.key},{key:"taskLib",idOf:x=>x&&x.name},
   {key:"eventTypes",idOf:x=>x&&x.id},{key:"procedureLib",idOf:x=>x&&x.id},
   {key:"siteLib",idOf:x=>x&&x.name},{key:"virusLib",idOf:x=>x&&x.name}];
-/* config was taken from the remote wholesale, so an entry type added here, or
-   a follow-up rule just written, vanished the moment the other device pushed.
-   Merged key by key on the same three-way rule the records use, with the
-   keyed lists above unioned so neither side's additions are lost — and
-   neither side's deletions undone, since anything in the agreed copy that is
-   gone here stays gone. */
-function mergeConfig(remoteCfg,localCfg,base){
-  const out={...(remoteCfg||{})};
-  let baseCfg=null; try{ baseCfg=base?JSON.parse(base.config||"null"):null; }catch(e){}
-  Object.keys(localCfg||{}).forEach(k=>{
-    if(!baseCfg||JSON.stringify(baseCfg[k])!==JSON.stringify(localCfg[k])) out[k]=localCfg[k];
+/* Config merges key by key: a value this device changed since the agreed copy
+   wins, otherwise the remote's stands. The keyed lists — entry types, the site
+   and virus libraries, procedures — merge item by item the way records do: a
+   union, an item leaving only by a deletion mark. Taking a list whole is what
+   let a default config replace someone's own entry types and libraries on
+   12/10. Without a base nothing here counts as an edit, and a default item only
+   this side holds is not brought back: the other side may have deleted it
+   before deletions were recorded. */
+const KEYED_CONFIG_SET=new Set(KEYED_CONFIG_LISTS.map(l=>l.key));
+function mergeConfig(remoteCfg,localCfg,base,dead){
+  const R=remoteCfg||{}, L=localCfg||{}, out={...R}, bc=base&&base.cfg;
+  Object.keys(L).forEach(k=>{
+    if(KEYED_CONFIG_SET.has(k))return;
+    if(!(k in R)){ out[k]=L[k]; return; }
+    if(bc&&bc[k]!==undefined&&bc[k]!==hashJSON(L[k])) out[k]=L[k];
   });
   KEYED_CONFIG_LISTS.forEach(({key,idOf})=>{
-    const r=(remoteCfg||{})[key], l=(localCfg||{})[key];
-    if(!Array.isArray(r)||!Array.isArray(l))return;
-    const merged=Array.isArray(out[key])?[...out[key]]:[];
-    const have=new Set(merged.map(idOf));
-    const knownBefore=new Set((baseCfg&&Array.isArray(baseCfg[key])?baseCfg[key]:[]).map(idOf));
-    [...r,...l].forEach(x=>{
-      const id=idOf(x);
-      if(id==null||have.has(id)||knownBefore.has(id))return;   // already there, or deleted on purpose
-      have.add(id); merged.push(x);
+    const r=Array.isArray(R[key])?R[key]:null, l=Array.isArray(L[key])?L[key]:null;
+    if(!r&&!l)return;
+    const bItems=base&&base.cfgItems&&base.cfgItems[key];
+    const defaults=new Set((Array.isArray(DEFAULT_CONFIG[key])?DEFAULT_CONFIG[key]:[]).map(idOf));
+    // this side's order if this side edited the list since the agreed copy
+    const localLead=!!(l&&r&&bc&&bc[key]!==undefined&&bc[key]!==hashJSON(l));
+    const first=localLead?l:(r||l), second=localLead?r:(r?l:null);
+    const items=first.slice(), at=new Set(items.map(idOf));
+    (second||[]).forEach(x=>{
+      const id=idOf(x); if(id==null||at.has(id))return;
+      if(second===l&&!bItems&&defaults.has(id))return;
+      at.add(id); items.push(x);
     });
-    out[key]=merged;
+    if(r&&l){
+      const rById=new Map(r.map(x=>[idOf(x),x])), lById=new Map(l.map(x=>[idOf(x),x]));
+      items.forEach((x,i)=>{
+        const id=idOf(x); if(id==null||!rById.has(id)||!lById.has(id))return;
+        const editedHere=!!(bItems&&bItems[id]!==undefined&&bItems[id]!==hashJSON(lById.get(id)));
+        items[i]=editedHere?lById.get(id):rById.get(id);
+      });
+    }
+    out[key]=items.filter(x=>{ const id=idOf(x); return !(id!=null&&dead("cfg:"+key,id)); });
   });
   return out;
 }
-/* A deletion is inferred, never recorded: anything in the agreed copy that this
-   device no longer has is taken to have been deleted here, and is then removed
-   from the remote. That inference is right for a record someone deleted and
-   catastrophic for a workspace that lost its copy some other way — an empty DB
-   in memory reads as "the user deleted every animal", and the next push carries
-   that to the Gist and on to every other device. Records created since the mark
-   survive, being additions rather than deletions, which is why such a wipe
-   leaves the newest notes behind and nothing older.
-   Nothing here can tell the two cases apart, so size decides: losing most of a
-   collection at once is treated as this device being wrong rather than as
-   intent. The deletions are not replayed, the remote keeps its records, and the
-   person is told. A real mass delete then has to be made twice, which is a far
-   better failure than a silent one. */
-const WIPE_MIN_RECORDS=8, WIPE_FRACTION=0.5;
-let wipeSuspected=null;
-function mergeLocalAdditions(remote,local){
-  const known=lastSyncedIds, base=lastSyncedBase;
-  const isNew=(k,id)=>!known||!known[k]||!known[k].has(id);
-  // Deletions made here since that agreed copy, and not yet pushed. The merge
-  // starts from the remote, which still has them, so without replaying them a
-  // conflict quietly undid every delete this device had made — the mirror of
-  // the lost-additions bug, and just as invisible.
-  const deletedHere=(k,liveIds)=>{
-    if(!known||!known[k])return new Set();
-    const gone=new Set([...known[k]].filter(id=>!liveIds.has(id)));
-    if(gone.size>=WIPE_MIN_RECORDS&&gone.size>=known[k].size*WIPE_FRACTION){
-      wipeSuspected={key:k,gone:gone.size,agreed:known[k].size};
-      return new Set();
-    }
-    return gone;
-  };
+/* ── DELETIONS ARE RECORDED, NEVER INFERRED ───────────────────────────────
+   On 12/10/2026 two wipes reached the Gist. A launch on a slow connection was
+   backgrounded while the workspace was still loading; the save that fires on
+   backgrounding wrote the empty placeholder over this device's copy; the next
+   merge compared it with the records it had agreed on, concluded every one had
+   been deleted here, and pushed that. Records were removed by their absence —
+   and absence is exactly what a broken copy looks like.
+
+   So a record now leaves the workspace — here, on the Gist, on any other
+   device — only through a deletion mark: an entry in DB.deletions, written at
+   the moment of a save by the device where the record vanished, because of a
+   change someone made there. A merge is a union: what one side lacks is kept
+   from the other unless a mark says otherwise. A copy that lost records any
+   other way loses nothing anywhere, and the next sync fills it back in.
+
+   DB.revivals is the way back — undo, a restore, an import, re-creating a
+   record after its mark. A record is deleted while its deletion is newer than
+   its revival. Both maps merge by keeping the later stamp, so every device
+   converges on the same answer whatever order they sync in. */
+const MASS_MIN=5, MASS_MIN_DIARY=20, MASS_FRACTION=0.5;
+let recordBaseline=null;      // ids as of the last recorded save of a loaded workspace
+let allowMassRemoval=false;   // set only around an explicit restore, import or reset
+function idsOf(db){
+  const out={};
+  MERGE_KEYS.forEach(k=>{ out[k]=new Set((Array.isArray(db[k])?db[k]:[]).map(x=>x&&x.id).filter(Boolean)); });
+  out.diary=new Set();
+  (Array.isArray(db.animals)?db.animals:[]).forEach(a=>(a&&Array.isArray(a.diary)?a.diary:[]).forEach(e=>{ if(e&&e.id) out.diary.add(e.id); }));
+  out.inventory=new Set(Object.keys(db.inventory||{}));
+  KEYED_CONFIG_LISTS.forEach(({key,idOf})=>{
+    const l=(db.config||{})[key];
+    out["cfg:"+key]=new Set((Array.isArray(l)?l:[]).map(idOf).filter(x=>x!=null));
+  });
+  return out;
+}
+function unionStamps(a,b){
+  const out={};
+  [a,b].forEach(m=>{
+    if(!m||typeof m!=="object")return;
+    Object.keys(m).forEach(c=>{
+      const src=m[c]; if(!src||typeof src!=="object")return;
+      const o=out[c]=out[c]||{};
+      Object.keys(src).forEach(id=>{ const t=+src[id]||0; if(t>(o[id]||0)) o[id]=t; });
+    });
+  });
+  return out;
+}
+function deadIn(stamps){
+  const dels=(stamps&&stamps.deletions)||{}, revs=(stamps&&stamps.revivals)||{};
+  return (c,id)=>(((dels[c]||{})[id])||0)>(((revs[c]||{})[id])||0);
+}
+function isDeletedHere(c,id){ return deadIn(DB)(c,id); }
+function resetRecordBaseline(){ recordBaseline=idsOf(DB); }
+/* Called from persist(), once per change somebody made. Whatever left the
+   workspace since the last save left it because of that change, and is marked;
+   whatever came back is marked revived. A stamp always outranks the one it
+   answers, whatever the clock says, so a device running behind cannot have
+   its own undo overruled. A single change that empties most of a collection is
+   not believed: nothing is marked, the next sync brings the records back from
+   the Gist, and the person is told. */
+function recordDeletions(){
+  if(!recordBaseline){ resetRecordBaseline(); return; }
+  const now=idsOf(DB), t=Date.now();
+  const dels=DB.deletions=(DB.deletions&&typeof DB.deletions==="object")?DB.deletions:{};
+  const revs=DB.revivals=(DB.revivals&&typeof DB.revivals==="object")?DB.revivals:{};
+  let refused=null;
+  Object.keys(now).forEach(c=>{
+    const before=recordBaseline[c]||new Set(), after=now[c];
+    const gone=[]; before.forEach(id=>{ if(!after.has(id)) gone.push(id); });
+    const min=c==="diary"?MASS_MIN_DIARY:MASS_MIN;
+    if(gone.length&&!allowMassRemoval&&gone.length>=min&&gone.length>=before.size*MASS_FRACTION){
+      refused={key:c,gone:gone.length,had:before.size};
+    } else gone.forEach(id=>{
+      const d=dels[c]=dels[c]||{}, r=(revs[c]||{})[id]||0;
+      d[id]=Math.max(t,r+1);
+    });
+    after.forEach(id=>{
+      if(before.has(id))return;
+      const d=(dels[c]||{})[id]||0, r=(revs[c]||{})[id]||0;
+      if(d>r) (revs[c]=revs[c]||{})[id]=Math.max(t,d+1);
+    });
+  });
+  recordBaseline=now;
+  if(refused) reportMassRemoval(refused);
+}
+/* A workspace someone actually had, as opposed to the empty shape the app
+   starts with before anything loads — which older builds could save to disk
+   when backgrounded mid-launch. That shape must never be merged as "this
+   device's copy": it holds nothing, and its default config would win. */
+function isRealWorkspace(x){
+  return !!x&&typeof x==="object"&&Array.isArray(x.domains)&&
+    (!!x.updatedAt||MERGE_KEYS.some(k=>Array.isArray(x[k])&&x[k].length>0));
+}
+function freshWorkspace(){
+  return {domains:[],tasks:[],spines:[],projects:[],experiments:[],schedule:[],readings:[],protocols:[],other:[],
+    notes:[],inventory:{},animals:[],tags:[],sharedVirusCache:{viruses:[],deletedIds:[],fetchedAt:0},
+    config:JSON.parse(JSON.stringify(DEFAULT_CONFIG))};
+}
+/* Merge another copy into the remote. Every record either side holds is kept
+   unless a deletion mark says otherwise; where both hold one, the side that
+   changed it since the agreed copy wins (this one, if both did). `base` is what
+   the two last agreed on — null when this copy does not descend from it, and
+   then the remote's version of anything shared is taken. */
+function mergeWorkspaces(remote,local,base){
+  const stamps={deletions:unionStamps(remote.deletions,local.deletions),revivals:unionStamps(remote.revivals,local.revivals)};
+  remote.deletions=stamps.deletions; remote.revivals=stamps.revivals;
+  const dead=deadIn(stamps);
   MERGE_KEYS.forEach(k=>{
-    if(!Array.isArray(remote[k])||!Array.isArray(local[k]))return;
-    const liveIds=new Set(local[k].map(x=>x&&x.id).filter(Boolean));
-    const gone=deletedHere(k,liveIds);
-    if(gone.size) remote[k]=remote[k].filter(x=>!(x&&gone.has(x.id)));
-    const have=new Set(remote[k].map(x=>x&&x.id));
-    local[k].forEach(x=>{ if(x&&x.id&&!have.has(x.id)&&isNew(k,x.id)) remote[k].push(x); });
-    // An edit made here since the agreed copy replaces the remote's copy of
-    // that record. One this device never touched keeps the remote's version;
-    // when both changed the same record the one about to push wins, which is
-    // the person currently looking at the screen. Animals are merged by their
-    // own fields only — their diary is merged entry by entry below, and
-    // taking a whole animal would throw away entries added on the other side.
-    const at=new Map(); remote[k].forEach((x,i)=>{ if(x&&x.id) at.set(x.id,i); });
-    local[k].forEach(x=>{
+    const R=Array.isArray(remote[k])?remote[k]:null, L=Array.isArray(local[k])?local[k]:null;
+    if(!R&&!L)return;
+    const out=R?R.slice():[];
+    const at=new Map(); out.forEach((x,i)=>{ if(x&&x.id) at.set(x.id,i); });
+    (L||[]).forEach(x=>{
       if(!x||!x.id)return;
-      const i=at.get(x.id); if(i==null)return;
-      if(k==="animals"){
-        if(changedHere(base,k,x.id,animalFields(x))) Object.assign(remote[k][i],animalFields(x));
-      } else if(changedHere(base,k,x.id,x)) remote[k][i]=x;
+      const i=at.get(x.id);
+      // the remote lacks it: absence is never a deletion
+      if(i==null){ at.set(x.id,out.length); out.push(x); return; }
+      if(k==="animals"){ if(changedHere(base,k,x.id,animalFields(x))) out[i]=Object.assign({},out[i],animalFields(x)); }
+      else if(changedHere(base,k,x.id,x)) out[i]=x;
     });
+    remote[k]=out.filter(x=>!(x&&x.id&&dead(k,x.id)));
   });
-  // diary entries hang off their animal, so they need the same test a level down
-  const liveDiary=new Set();
-  (local.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) liveDiary.add(e.id); }));
-  const diaryGone=deletedHere("diary",liveDiary);
-  if(diaryGone.size) (remote.animals||[]).forEach(a=>{
-    if(Array.isArray(a.diary)) a.diary=a.diary.filter(e=>!(e&&diaryGone.has(e.id)));
+  // diary entries hang off their animal, so the same rule a level down
+  const localAnimal=new Map((Array.isArray(local.animals)?local.animals:[]).filter(a=>a&&a.id).map(a=>[a.id,a]));
+  (remote.animals||[]).forEach(ra=>{
+    if(!ra)return;
+    const la=localAnimal.get(ra.id);
+    const entries=Array.isArray(ra.diary)?ra.diary.slice():[];
+    if(la&&la!==ra&&Array.isArray(la.diary)){
+      const at=new Map(); entries.forEach((e,i)=>{ if(e&&e.id) at.set(e.id,i); });
+      la.diary.forEach(e=>{
+        if(!e||!e.id)return;
+        const i=at.get(e.id);
+        if(i==null){ at.set(e.id,entries.length); entries.push(e); return; }
+        if(changedHere(base,"diary",e.id,e)) entries[i]=e;
+      });
+    }
+    ra.diary=entries.filter(e=>!(e&&e.id&&dead("diary",e.id)));
   });
-  const byId=new Map((remote.animals||[]).map(a=>[a.id,a]));
-  (local.animals||[]).forEach(la=>{
-    const ra=byId.get(la.id); if(!ra||!Array.isArray(la.diary))return;
-    ra.diary=ra.diary||[];
-    const have=new Set(ra.diary.map(e=>e&&e.id));
-    la.diary.forEach(e=>{ if(e&&e.id&&!have.has(e.id)&&isNew("diary",e.id)) ra.diary.push(e); });
-    // and an entry edited here — a weight corrected, a follow-up ticked off —
-    // keeps that edit rather than reverting to the remote's copy
-    const at=new Map(); ra.diary.forEach((e,i)=>{ if(e&&e.id) at.set(e.id,i); });
-    la.diary.forEach(e=>{
-      if(!e||!e.id)return;
-      const i=at.get(e.id); if(i==null)return;
-      if(changedHere(base,"diary",e.id,e)) ra.diary[i]=e;
-    });
+  remote.config=mergeConfig(remote.config,local.config,base,dead);
+  // inventory is keyed by material name, the same union a key at a time
+  const inv={...(remote.inventory||{})}, li=local.inventory||{}, bi=base&&base.inv;
+  Object.keys(li).forEach(k=>{
+    if(!(k in inv)){ inv[k]=li[k]; return; }
+    if(bi&&bi[k]!==undefined&&bi[k]!==hashJSON(li[k])) inv[k]=li[k];
   });
-  remote.config=mergeConfig(remote.config,local.config,base);
-  // inventory is keyed by material name rather than id, so it gets the same
-  // three-way treatment a key at a time, deletions included
-  let baseInv=null; try{ baseInv=base?JSON.parse(base.inventory||"null"):null; }catch(e){}
-  const inv={...(remote.inventory||{})}, localInv=local.inventory||{};
-  Object.keys(localInv).forEach(k=>{
-    if(!baseInv||JSON.stringify(baseInv[k])!==JSON.stringify(localInv[k])) inv[k]=localInv[k];
-  });
-  if(baseInv) Object.keys(baseInv).forEach(k=>{ if(!(k in localInv)) delete inv[k]; });
+  Object.keys(inv).forEach(k=>{ if(dead("inventory",k)) delete inv[k]; });
   remote.inventory=inv;
-  // this device's own read-through cache of the shared virus file, not
-  // anything the workspace owns
+  // one-time conversions already applied on either side stay applied — running
+  // one twice is how a restore once flattened every project away
+  Object.keys(local).forEach(k=>{ if(k[0]==="_"&&local[k]===true) remote[k]=true; });
+  if((local.updatedAt||0)>(remote.updatedAt||0)) remote.updatedAt=local.updatedAt;
+  // this device's own read-through cache of the shared virus file
   if(local.sharedVirusCache) remote.sharedVirusCache=local.sharedVirusCache;
   return remote;
 }
+/* Before a push when the Gist has not moved since this device last agreed with
+   it. Anything it holds that this copy lacks without a deletion mark was lost
+   here, not deleted — put it back, in place, so no open editor loses the
+   object it is editing. A push therefore never takes a record off the Gist
+   just by leaving it out. Returns how many things came back. */
+function healInPlace(db,remote){
+  const stamps={deletions:unionStamps(remote.deletions,db.deletions),revivals:unionStamps(remote.revivals,db.revivals)};
+  db.deletions=stamps.deletions; db.revivals=stamps.revivals;
+  const dead=deadIn(stamps); let healed=0;
+  MERGE_KEYS.forEach(k=>{
+    if(!Array.isArray(remote[k]))return;
+    if(!Array.isArray(db[k])) db[k]=[];
+    const have=new Set(db[k].map(x=>x&&x.id));
+    remote[k].forEach(x=>{ if(x&&x.id&&!have.has(x.id)&&!dead(k,x.id)){ db[k].push(x); have.add(x.id); healed++; } });
+  });
+  const byId=new Map((db.animals||[]).filter(a=>a&&a.id).map(a=>[a.id,a]));
+  (remote.animals||[]).forEach(ra=>{
+    const a=ra&&byId.get(ra.id); if(!a||a===ra||!Array.isArray(ra.diary))return;
+    if(!Array.isArray(a.diary)) a.diary=[];
+    const have=new Set(a.diary.map(e=>e&&e.id));
+    ra.diary.forEach(e=>{ if(e&&e.id&&!have.has(e.id)&&!dead("diary",e.id)){ a.diary.push(e); have.add(e.id); healed++; } });
+  });
+  const c=db.config=db.config||{}, rc=remote.config||{};
+  KEYED_CONFIG_LISTS.forEach(({key,idOf})=>{
+    if(!Array.isArray(rc[key]))return;
+    if(!Array.isArray(c[key])) c[key]=[];
+    const have=new Set(c[key].map(idOf));
+    rc[key].forEach(x=>{ const id=idOf(x); if(id!=null&&!have.has(id)&&!dead("cfg:"+key,id)){ c[key].push(x); have.add(id); healed++; } });
+  });
+  const inv=db.inventory=db.inventory||{};
+  Object.keys(remote.inventory||{}).forEach(k=>{ if(!(k in inv)&&!dead("inventory",k)){ inv[k]=remote.inventory[k]; healed++; } });
+  Object.keys(remote).forEach(k=>{ if(k[0]==="_"&&remote[k]===true) db[k]=true; });
+  return healed;
+}
 
 async function doWrite(){
+  if(!bootLoaded)return;
   setSaveState("saving");
   storageError=await arborSave(DB);
   storageOK=!storageError;
@@ -2010,6 +2126,7 @@ function scheduleSync(){
   syncTimer=setTimeout(runSync,wait);
 }
 async function runSync(){
+  if(!bootLoaded){ syncPending=true; return; }
   if(syncInFlight){ syncPending=true; return; }
   if(!gistToken()){ syncPending=false; return; }
   syncInFlight=true; syncPending=false;
@@ -2043,14 +2160,12 @@ async function runSync(){
       // merged state as agreed was a quiet lie — the additions carried over
       // had never reached the Gist, so the next conflict read their absence
       // there as "deleted on another device" and dropped them for good.
-      const agreed=snapshotIds(remote), agreedBase=snapshotBase(remote);
-      wipeSuspected=null;
-      DB=mergeLocalAdditions(remote,DB);
-      reportWipeSuspicion();
+      const agreedBase=snapshotBase(remote);
+      DB=mergeWorkspaces(remote,DB,lastSyncedBase);
       lastSyncedBase=agreedBase;
-      applyLocalView(); migrate();
+      resetRecordBaseline(); applyLocalView(); migrate();
       lastSyncedRemoteVersion=remote.__gistVersion;
-      lastSyncedIds=agreed; saveSyncMark();
+      saveSyncMark();
       undoStack.length=0;   // those entries describe records this pull replaced
       localDirty=true; syncPending=true;
       try{ await window.arbor.save(DB); }catch(e){}
@@ -2058,9 +2173,17 @@ async function runSync(){
       setSaveState(storageOK?"saved":"failed",storageFailDetail());
       return;
     }
+    // The Gist has not moved: it holds what this device last agreed with it.
+    // Fill back anything this copy lost without a deletion mark first, so the
+    // push can never take a record off the Gist by leaving it out.
+    if(remote&&remote.domains&&healInPlace(DB,remote)){
+      resetRecordBaseline();
+      try{ await window.arbor.save(DB); }catch(e){}
+      render();
+    }
     const pushedVersion=await gistSave(JSON.stringify(DB));
     if(pushedVersion) lastSyncedRemoteVersion=pushedVersion;
-    lastSyncedIds=snapshotIds(DB); lastSyncedBase=snapshotBase(DB); saveSyncMark();
+    lastSyncedBase=snapshotBase(DB); saveSyncMark();
     lastSyncAt=Date.now(); syncBackoffUntil=0; syncFailures=0; localDirty=false; setSaveState("synced");
   }catch(e){
     lastSyncAt=Date.now();
@@ -2085,11 +2208,14 @@ async function runSync(){
   }
 }
 function persist(){
+  if(!bootLoaded){ persistDuringBoot=true; return; }
+  recordDeletions();   // what this change removed, marked as deleted by it
   DB.updatedAt=Date.now(); localDirty=true;
   saveLocalView();   // filters/zoom/collapse stay on this device (see LOCAL_VIEW_KEYS)
   clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160);
 }
 async function flushSave(){
+  if(!bootLoaded)return;
   clearTimeout(saveTimer);
   try{
     const res=window.arbor.saveSync(DB);
@@ -2145,34 +2271,36 @@ async function autoPull(){
       // copy can hold edits from a session that closed before its push went
       // through. Before this, the warning only cleared once an edit happened
       // to push.
-      restoreSyncMark();
-      const agreed=snapshotIds(remote), agreedBase=snapshotBase(remote);
-      const remoteJSON=JSON.stringify(remote);
-      wipeSuspected=null;
-      DB=mergeLocalAdditions(remote,DB);
-      reportWipeSuspicion();
+      const agreedBase=snapshotBase(remote), remoteJSON=JSON.stringify(remote);
+      DB=mergeWorkspaces(remote,DB,lastSyncedBase);
+      const differs=JSON.stringify(DB)!==remoteJSON;
       lastSyncedBase=agreedBase;
-      applyLocalView(); migrate();
+      resetRecordBaseline(); applyLocalView(); migrate();
       lastSyncedRemoteVersion=remote.__gistVersion;
-      lastSyncedIds=agreed; saveSyncMark();
+      saveSyncMark();
       undoStack.length=0;
       try{ await window.arbor.save(DB); }catch(e){}
       render(); syncTopCollapsed();
-      if(JSON.stringify(DB)!==remoteJSON){ localDirty=true; setSaveState("saved"); scheduleSync(); }
+      if(differs){ localDirty=true; setSaveState("saved"); scheduleSync(); }
       else setSaveState("synced");
       return;
     }
     if(remote.__gistVersion===lastSyncedRemoteVersion)return;   // the Gist has not moved since we last synced
-    // No merge here on purpose: this only runs with nothing unpushed, so the
-    // local copy is exactly what we last agreed on, and anything the remote
-    // no longer has was deleted elsewhere and should stay that way.
-    lastSyncedBase=snapshotBase(remote);
-    DB=remote; applyLocalView(); migrate(); lastSyncedRemoteVersion=remote.__gistVersion;
-    lastSyncedIds=snapshotIds(DB); saveSyncMark();
+    // Nothing is unpushed here, so this copy is what was last agreed — but the
+    // remote is still merged, not adopted. Adopting it is how one device's wipe
+    // reached the other on 12/10: what the Gist lacks without a deletion mark
+    // stays here, and goes back up.
+    const agreedBase=snapshotBase(remote), remoteJSON=JSON.stringify(remote);
+    DB=mergeWorkspaces(remote,DB,lastSyncedBase);
+    const differs=JSON.stringify(DB)!==remoteJSON;
+    lastSyncedBase=agreedBase;
+    resetRecordBaseline(); applyLocalView(); migrate();
+    lastSyncedRemoteVersion=remote.__gistVersion; saveSyncMark();
     undoStack.length=0;   // those entries describe records this pull just replaced
     try{ await window.arbor.save(DB); }catch(e){}          // keep the local disk copy in step too
     render(); syncTopCollapsed();
-    setSaveState("synced");
+    if(differs){ localDirty=true; setSaveState("saved"); scheduleSync(); }
+    else setSaveState("synced");
   }catch(e){ console.warn("Auto-pull failed",e); }          // background nicety — never surface this as an error
 }
 function scheduleAutoPull(){
@@ -8767,12 +8895,16 @@ const canPickFiles=()=>typeof window.showOpenFilePicker==="function";
 // under an id nothing refers to. Swept at startup rather than tracked; skipped
 // when there are no records at all, so an empty or not-yet-loaded workspace can
 // never be read as "everything here is an orphan".
+/* Forget a file link only once its record has a deletion mark. "Not in the
+   workspace right now" is also what a damaged copy looks like: on 12/10 the
+   library was empty for a moment, and this deleted the link behind every
+   paper in it. */
 function pruneOrphanFiles(){
-  const live=new Set([...(DB.readings||[]),...(DB.protocols||[]),...(DB.other||[])].map(x=>x.id));
-  if(!live.size)return;
   fileDB().then(db=>{
     const rq=db.transaction(FILE_STORE,"readonly").objectStore(FILE_STORE).getAllKeys();
-    rq.onsuccess=()=>{ (rq.result||[]).forEach(k=>{ if(!live.has(k)) fileHandleDel(k); }); };
+    rq.onsuccess=()=>{ (rq.result||[]).forEach(k=>{
+      if(["readings","protocols","other"].some(c=>isDeletedHere(c,k))) fileHandleDel(k);
+    }); };
   }).catch(()=>{});
 }
 // Safari has no picker that hands back a reusable handle — not on macOS and not
@@ -12040,13 +12172,18 @@ function showGistSetup(){
       localStorage.setItem(GIST_TOKEN_KEY,tok);
       localStorage.removeItem(GIST_ID_KEY);
       msg("Verified ✓ — looking for existing Arbor data…","var(--gcamp)");
-      try{
-        const remote=await gistLoad();
-        if(remote&&remote.domains){DB=remote;lastSyncedBase=snapshotBase(remote);applyLocalView();migrate();lastSyncedRemoteVersion=remote.__gistVersion;render();
-          msg("Connected as @"+login+" — loaded your existing workspace ✓","var(--gcamp)");}
-        else{msg("Connected as @"+login+" — saving current workspace…","var(--gcamp)");
-          lastSyncedRemoteVersion=await gistSave(JSON.stringify(DB));}
-      }catch(e){ lastSyncedRemoteVersion=await gistSave(JSON.stringify(DB)); }
+      let remote;
+      try{ remote=await gistLoad(); }
+      catch(e){
+        // Reading failed — say so and stop. Saving here would overwrite whatever
+        // the Gist holds with this device's copy, on the strength of an error.
+        msg("Couldn't read your Arbor data on GitHub ("+String(e.message||e).slice(0,80)+") — nothing was changed. Try again.","var(--overdue)");
+        return;
+      }
+      if(remote&&remote.domains){DB=remote;lastSyncedBase=snapshotBase(remote);applyLocalView();migrate();resetRecordBaseline();lastSyncedRemoteVersion=remote.__gistVersion;saveSyncMark();render();
+        msg("Connected as @"+login+" — loaded your existing workspace ✓","var(--gcamp)");}
+      else{msg("Connected as @"+login+" — saving current workspace…","var(--gcamp)");
+        lastSyncedRemoteVersion=await gistSave(JSON.stringify(DB)); lastSyncedBase=snapshotBase(DB); saveSyncMark();}
       setSaveState("synced");
       scheduleAutoPull();
       setTimeout(()=>closeModal(),1400);
@@ -12536,7 +12673,11 @@ function openHistoryModal(){
              revision whose flags went missing would otherwise come back with
              every project silently flattened away. */
           Object.keys(DB).forEach(k=>{ if(k[0]==="_"&&DB[k]===true&&old[k]===undefined) old[k]=true; });
-          DB=old; migrate(); persist(); closeModal(); render();
+          // an explicit replacement: what it drops is deleted, what it brings back is revived
+          old.deletions=unionStamps(DB.deletions,old.deletions); old.revivals=unionStamps(DB.revivals,old.revivals);
+          allowMassRemoval=true;
+          try{ DB=old; migrate(); persist(); } finally{ allowMassRemoval=false; }
+          closeModal(); render();
           toast(`Restored the version from ${when}`);
         };
         det.querySelectorAll(".hist-item").forEach(row=>{
@@ -12591,12 +12732,17 @@ function renderMenuModal(){
     try{
       const d=JSON.parse(text);
       if(!d.domains||!d.tasks){ toast("Not an Arbor file"); return; }
-      DB=d; migrate(); closeModal(); render();
-      persist();
+      // the same explicit replacement as a restore — and the same one-time
+      // conversions carried over, so an older file cannot flatten projects away
+      Object.keys(DB).forEach(k=>{ if(k[0]==="_"&&DB[k]===true&&d[k]===undefined) d[k]=true; });
+      d.deletions=unionStamps(DB.deletions,d.deletions); d.revivals=unionStamps(DB.revivals,d.revivals);
+      allowMassRemoval=true;
+      try{ DB=d; migrate(); persist(); } finally{ allowMassRemoval=false; }
+      closeModal(); render();
       toast("Imported — "+d.tasks.length+" tasks, "+d.animals.length+" animals");
     }catch(e){ toast("JSON parse error: "+String(e).slice(0,60)); console.error(e); }
   });
-  document.getElementById("m_reset").addEventListener("click",()=>{ if(confirm("Replace everything with the seeded pipeline?")){DB={domains:[],tasks:[],spines:[],projects:[],experiments:[],schedule:[],readings:[],inventory:{},animals:[],tags:[],config:{...DEFAULT_CONFIG}};seed();migrate();closeModal();render();toast("Reset done");}});
+  document.getElementById("m_reset").addEventListener("click",()=>{ if(confirm("Replace everything with the seeded pipeline?")){const prevStamps={deletions:DB.deletions,revivals:DB.revivals};DB={domains:[],tasks:[],spines:[],projects:[],experiments:[],schedule:[],readings:[],inventory:{},animals:[],tags:[],config:{...DEFAULT_CONFIG}};seed();DB.deletions=unionStamps(prevStamps.deletions,DB.deletions);DB.revivals=unionStamps(prevStamps.revivals,DB.revivals);migrate();allowMassRemoval=true;try{persist();}finally{allowMassRemoval=false;}closeModal();render();toast("Reset done");}});
 }
 // reached only via the "✎ edit library" shortcuts inside the injection editor —
 // not from the "..." menu, which is reserved for Export/Import/Reset
@@ -12868,9 +13014,22 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
   // sequence — the app would sit on a blank screen forever with no visible error
   // and no data. Logging it here at least makes any future regression debuggable.
   try{
+    const preBoot=DB;           // the placeholder — plus anything done to it while loading
     const src=await loadDB();   // "gist" | "local" | "none"
-    if(src==="none") seed();
-    migrate(); render(); pruneOrphanFiles(); syncTopCollapsed();
+    // Connected to sync but nothing reachable and no copy here: start empty, not
+    // from the demo workspace built into the page, which the first sync would
+    // otherwise merge into the real one.
+    if(src==="none"){ if(gistToken()){ DB=freshWorkspace(); lastSyncedBase=null; } else seed(); }
+    // Something made while the workspace was still loading — a note typed in
+    // the first seconds of a slow launch — is carried into the loaded one rather
+    // than dropped with the placeholder. Only additions: the placeholder has
+    // nothing else to say, and without a base none of it counts as an edit.
+    if(persistDuringBoot&&preBoot!==DB&&MERGE_KEYS.some(k=>Array.isArray(preBoot[k])&&preBoot[k].length))
+      DB=mergeWorkspaces(DB,preBoot,null);
+    migrate();
+    resetRecordBaseline();   // deletions are recorded against what was loaded
+    bootLoaded=true;         // from here on, saving and syncing are allowed
+    render(); pruneOrphanFiles(); syncTopCollapsed();
     // Save locally always (captures any seed/migration changes) — but NEVER push
     // to the Gist automatically on boot. Boot used to always call doWrite(), which
     // pushes to the Gist whenever a token exists, regardless of whether the load
@@ -12895,6 +13054,10 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
     } else {
       setSaveState(storageOK2?"saved":"failed",storageFailDetail());
     }
+    // a change asked for while loading, or a merge that owes the Gist a push —
+    // both safe now that every push is merged with the Gist first
+    if(persistDuringBoot){ persistDuringBoot=false; persist(); }
+    else if(syncPending&&gistToken()) scheduleSync();
     scheduleAutoPull();
   }catch(e){ console.error("Arbor failed to start:",e); }
 })();
