@@ -175,6 +175,28 @@
   .dd-row:hover{background:var(--panel)}
   .dd-row.on{color:var(--ink);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
   .dd-check{cursor:pointer}
+  /* Picking a mouse is a different job from picking an option: there can be
+     dozens, most of them retired, and the name alone ("T2I-3") does not say
+     which one. Wide enough for a line of context, tall enough to scan. */
+  .ap-pop{position:fixed;z-index:110;background:var(--panel2);border:1px solid var(--line2);border-radius:12px;
+    box-shadow:0 24px 60px -22px #000;width:340px;max-width:calc(100vw - 20px);display:flex;flex-direction:column;overflow:hidden}
+  .ap-search{margin:8px 8px 6px;background:var(--bg2);border:1px solid var(--line2);border-radius:8px;
+    padding:8px 10px;color:var(--ink);font-size:13px;width:calc(100% - 16px)}
+  .ap-list{overflow-y:auto;max-height:min(58vh,340px);padding:0 6px 6px;display:flex;flex-direction:column;gap:2px}
+  .ap-group{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--ink-faint);padding:9px 9px 3px;position:sticky;top:0;background:var(--panel2)}
+  .ap-row{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;
+    border:1px solid transparent;border-radius:8px;padding:7px 9px;cursor:pointer;color:var(--ink-dim)}
+  .ap-row:hover,.ap-row.cursor{background:var(--panel)}
+  .ap-row.on{border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
+  .ap-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .ap-main{min-width:0;flex:1}
+  .ap-name{display:block;font-size:13px;color:var(--ink);line-height:1.25}
+  .ap-meta{display:block;font-family:var(--mono);font-size:10px;color:var(--ink-faint);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+  .ap-term{font-family:var(--mono);font-size:9.5px;flex:0 0 auto}
+  .ap-none{font-family:var(--mono);font-size:11px;color:var(--ink-faint);padding:12px 9px}
+  @media (pointer:coarse){ .ap-row{padding:10px 9px} .ap-list{max-height:min(54vh,380px)} }
   .dd-check input{width:auto;margin:0}
   .cal-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
   .cal-h b{font-family:var(--disp);font-size:13px;color:var(--ink)}
@@ -3868,6 +3890,113 @@ function openRadioDropdown(anchor, items, current, onPick){
   document.addEventListener("mousedown",out,true);
   _ddEls={pop,out};
 }
+/* Choosing a mouse from a flat alphabetical list of every animal that ever
+   existed meant reading past a dozen retired practice mice to reach the one in
+   front of you, with nothing but a name to go on. Same records, ordered the way
+   the work is: the ones you have been logging, then by cage, then the ones that
+   are no longer alive — which still have to be reachable, since histology and
+   perfusion entries are written after the fact. Each row carries the cage, tag
+   and experiment, because that is what tells two similar names apart. Typing
+   searches all of it and ranks a name that starts with what you typed first. */
+function animalPickerMeta(a){
+  return [a.cage&&("cage "+a.cage), a.tag, animalWhere(a)].filter(Boolean).join(" · ");
+}
+function lastDiaryDate(a){
+  let best=""; (a.diary||[]).forEach(e=>{ const d=String(e&&e.date||"").slice(0,10); if(d>best) best=d; });
+  return best;
+}
+// The one the picker would put at the top — the mouse most recently written
+// about, not whichever retired practice animal sorts first alphabetically.
+function defaultPickedAnimal(list){
+  const g=animalPickerGroups(list)[0];
+  return (g&&g.items[0])||list[0]||null;
+}
+function animalPickerGroups(list){
+  const alive=list.filter(a=>(a.termination||"alive")==="alive");
+  const gone=list.filter(a=>(a.termination||"alive")!=="alive");
+  const out=[];
+  // what you have actually been writing entries about, most recent first
+  const recent=alive.filter(a=>lastDiaryDate(a))
+    .sort((x,y)=>lastDiaryDate(y).localeCompare(lastDiaryDate(x))).slice(0,4);
+  const recentIds=new Set(recent.map(a=>a.id));
+  if(recent.length) out.push({label:"Recently logged",items:recent});
+  const byCage=new Map();
+  alive.forEach(a=>{ if(recentIds.has(a.id))return; const k=a.cage||""; if(!byCage.has(k))byCage.set(k,[]); byCage.get(k).push(a); });
+  [...byCage.keys()].filter(Boolean)
+    .sort((x,y)=>String(x).localeCompare(String(y),undefined,{numeric:true}))
+    .forEach(c=>out.push({label:"Cage "+c,items:byCage.get(c)}));
+  if(byCage.get("")) out.push({label:"No cage",items:byCage.get("")});
+  if(gone.length) out.push({label:"No longer alive",items:gone});
+  return out;
+}
+let _apEls=null;
+function closeAnimalPicker(){ if(_apEls){ _apEls.pop.remove(); document.removeEventListener("mousedown",_apEls.out,true); _apEls=null; } }
+function openAnimalPicker(anchor, currentId, onPick){
+  closeListDropdown(); closeCalendar(); closeEmojiPicker(); closeAnimalPicker();
+  const all=[...DB.animals].sort((x,y)=>String(x.name||"").localeCompare(String(y.name||""),undefined,{numeric:true}));
+  const pop=document.createElement("div"); pop.className="ap-pop";
+  pop.innerHTML=`<input type="text" class="ap-search" id="ap_q" placeholder="Search by name, cage, tag or experiment" autocomplete="off">
+    <div class="ap-list" id="ap_list"></div>`;
+  const list=pop.querySelector("#ap_list"), q=pop.querySelector("#ap_q");
+  let rows=[], cursor=-1;
+  const rowHTML=a=>{
+    const term=a.termination||"alive", meta=animalPickerMeta(a);
+    return `<button type="button" class="ap-row${a.id===currentId?" on":""}" data-id="${escAttr(a.id)}">
+      <span class="ap-dot" style="background:${animalColor(a)}"></span>
+      <span class="ap-main"><span class="ap-name">${esc(a.name||"(unnamed)")}</span>
+        ${meta?`<span class="ap-meta">${esc(meta)}</span>`:""}</span>
+      ${term!=="alive"?`<span class="ap-term" style="color:${TERM_COLOR[term]||"var(--ink-faint)"}">${esc(TERM_LABEL[term]||term)}</span>`:""}
+    </button>`;
+  };
+  function paint(){
+    const t=String(q.value||"").trim().toLowerCase();
+    if(t){
+      // searching is a flat ranked list: a group header between two matches
+      // only gets in the way of "type three letters and hit enter"
+      // the meta line as shown, so "cage 4" finds what the row displays as
+      // "cage 4" rather than only matching the bare number
+      const hits=all.filter(a=>matchesSearch(t,a.name,animalPickerMeta(a)))
+        .sort((x,y)=>{
+          const r=a=>String(a.name||"").toLowerCase().startsWith(t)?0:1;
+          return r(x)-r(y)||String(x.name||"").localeCompare(String(y.name||""),undefined,{numeric:true});
+        });
+      list.innerHTML=hits.length?hits.map(rowHTML).join("")
+        :`<div class="ap-none">No animal matches “${esc(q.value.trim())}”.</div>`;
+    } else {
+      list.innerHTML=animalPickerGroups(all)
+        .map(g=>`<div class="ap-group">${esc(g.label)}</div>`+g.items.map(rowHTML).join("")).join("");
+    }
+    rows=[...list.querySelectorAll(".ap-row")]; cursor=-1;
+  }
+  const moveCursor=d=>{
+    if(!rows.length)return;
+    if(cursor>=0) rows[cursor].classList.remove("cursor");
+    cursor=(cursor+d+rows.length)%rows.length;
+    rows[cursor].classList.add("cursor"); rows[cursor].scrollIntoView({block:"nearest"});
+  };
+  list.addEventListener("click",ev=>{
+    const b=ev.target.closest(".ap-row"); if(!b)return;
+    onPick(b.dataset.id); closeAnimalPicker();
+  });
+  q.addEventListener("input",paint);
+  q.addEventListener("keydown",ev=>{
+    if(ev.key==="ArrowDown"){ ev.preventDefault(); moveCursor(1); }
+    else if(ev.key==="ArrowUp"){ ev.preventDefault(); moveCursor(-1); }
+    else if(ev.key==="Enter"){ ev.preventDefault(); const b=cursor>=0?rows[cursor]:rows[0]; if(b){ onPick(b.dataset.id); closeAnimalPicker(); } }
+    else if(ev.key==="Escape"){ ev.preventDefault(); closeAnimalPicker(); anchor.focus(); }
+  });
+  paint();
+  document.body.appendChild(pop);
+  const r=anchor.getBoundingClientRect(), pw=pop.offsetWidth||340, ph=pop.offsetHeight||300;
+  pop.style.left=Math.max(8,Math.min(r.left, window.innerWidth-pw-10))+"px";
+  pop.style.top=((r.bottom+ph+8<window.innerHeight)? r.bottom+6 : Math.max(8,r.top-ph-6))+"px";
+  // on a phone the keyboard would cover the list it is meant to filter, so the
+  // search waits to be tapped; on a laptop it is ready to type into
+  if(!window.matchMedia||!window.matchMedia("(pointer:coarse)").matches) q.focus();
+  const out=(e)=>{ if(!pop.contains(e.target)&&e.target!==anchor&&!anchor.contains(e.target)) closeAnimalPicker(); };
+  document.addEventListener("mousedown",out,true);
+  _apEls={pop,out};
+}
 // Checkbox: any number of independently-toggleable items — stays open across
 // clicks so several can be flipped in one visit instead of reopening per pick.
 function openCheckDropdown(anchor, items, isChecked, onToggle){
@@ -5692,7 +5821,11 @@ function animalHomeExperiment(aid){
 }
 function animalColor(a){
   const ex=animalHomeExperiment(a.id);
-  return ex?ex.color:"#5b6678";
+  // An experiment's colour is derived from its project now (expShade) rather
+  // than stored on the record, so reading .color returned null for every
+  // experiment that never had one explicitly set — an invalid CSS colour, which
+  // is why these dots and chips came out blank. Fall back to the shade.
+  return ex?(ex.color||expShade(ex)||"#5b6678"):"#5b6678";
 }
 // Two channels, two variables: what kind of entry this is (the fill, backed up
 // by the icon the chip already carries) and which experiment the animal belongs to
@@ -12087,7 +12220,11 @@ function cycleStatus(id){
 /* ---------- ADD TASK / DOMAIN ---------- */
 function modal(h,opts){ const s=document.getElementById("scrim"); const m=document.getElementById("modal");
   m.className="modal"+(opts&&opts.center?" modal-center":"")+(opts&&opts.wide?" modal-wide":""); m.innerHTML=h; s.classList.add("open"); return s; }
-function closeModal(){ document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(document.getElementById("modal")); }
+function closeModal(){
+  // popovers live on <body>, not inside the modal, so closing the modal from
+  // code (Save) would otherwise leave one floating over the page
+  closeAnimalPicker(); closeListDropdown(); closeEmojiPicker(); closeCalendar();
+  document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(document.getElementById("modal")); }
 // Modals close only via Cancel / ✕ / Save — NOT by clicking outside, so a stray click never discards an edit.
 document.getElementById("modalX").onclick=()=>closeModal();
 // Every text field in this app is generated from a template string, so there
@@ -12284,7 +12421,7 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
     body.innerHTML=`
       <div class="drow">
         <div class="fld" style="flex:1"><label>Animal</label>
-          <select id="tc_animal">${animals.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select></div>
+          <button type="button" id="tc_animal" class="datebtn"></button></div>
         <div class="fld" style="flex:1"><label>Type</label>
           <select id="tc_type">${types.map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}</select></div>
       </div>
@@ -12298,6 +12435,21 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
       <label style="margin-top:6px;display:block">Note</label><textarea id="tc_note"></textarea>
       ${diaryRepeatHTML("tc")}
       <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="tc_save">Save</button></div>`;
+
+    // the animal the entry is about, chosen through the picker rather than a
+    // dropdown of every mouse that ever existed (see openAnimalPicker)
+    let animalId=(defaultPickedAnimal(animals)||{}).id||"";
+    const animalBtn=document.getElementById("tc_animal");
+    function paintAnimal(){
+      const a=DB.animals.find(x=>x.id===animalId);
+      if(!a){ animalBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">🐭</span>choose an animal`; return; }
+      const meta=animalPickerMeta(a), term=a.termination||"alive";
+      animalBtn.innerHTML=`<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${animalColor(a)};margin-right:7px"></span>`+
+        `${esc(a.name||"(unnamed)")}${meta?`<span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-left:7px">${esc(meta)}</span>`:""}`+
+        (term!=="alive"?`<span style="font-family:var(--mono);font-size:9.5px;color:${TERM_COLOR[term]||"var(--ink-faint)"};margin-left:7px">${esc(TERM_LABEL[term]||term)}</span>`:"");
+    }
+    animalBtn.onclick=()=>openAnimalPicker(animalBtn,animalId,id=>{ animalId=id; paintAnimal(); });
+    paintAnimal();
 
     let dtValue=date+(time?"T"+time:""), endTimeValue=time?endTime:"";
     // anchored on the live date field, not the slot this was opened from, so
@@ -12338,7 +12490,8 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
     typeSel.onchange=paintFields; paintFields();
 
     document.getElementById("tc_save").onclick=()=>{
-      const a=DB.animals.find(x=>x.id===document.getElementById("tc_animal").value); if(!a)return;
+      const a=DB.animals.find(x=>x.id===animalId);
+      if(!a){ toast("Choose an animal first"); return; }
       const type=typeSel.value;
       const entryDate=(dtValue||date).slice(0,10);
       const entryTime=hasTime(dtValue)?dtValue.slice(11,16):null;
