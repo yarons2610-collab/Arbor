@@ -1359,7 +1359,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
-  animalFilters:{tag:"all",cage:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",search:"",sort:"name",groupBy:"none",conds:[],panelOpen:false},
+  animalFilters:{tag:"all",cage:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",excluded:"all",practice:"all",search:"",sort:"name",groupBy:"none",conds:[],panelOpen:false},
   taskLib:[], // known behavioral task/paradigm names, for autocomplete on diary training entries
   // Named, colour-coded event categories — tasks already get an implicit
   // colour from whatever project they're attached to, but an event (isEvent:
@@ -2397,6 +2397,8 @@ function migrate(){                       // backfill fields added in later vers
   // pull the persisted animal filter selections into the live module-level state —
   // runs on boot and after every JSON import so filters travel with the workspace
   animalStatus=DB.config.animalFilters.status||"all";
+  animalExcluded=DB.config.animalFilters.excluded||"all";
+  animalPractice=DB.config.animalFilters.practice||"all";
   animalExperiment=DB.config.animalFilters.experiment||"all";
   animalGroup=DB.config.animalFilters.group||"all";
   animalTag=DB.config.animalFilters.tag||"all";
@@ -2476,16 +2478,46 @@ function migrate(){                       // backfill fields added in later vers
       });
       a._proceduresMigrated=true;
     }
-    // backfill termination field from alive boolean + comments heuristic
-    if(!a.termination){
-      if(a.alive===true) a.termination="alive";
-      else { const c=(a.comments||"").toLowerCase();
-        if(c.includes("died during")||c.includes("died immediately")||c.includes("died after")||c.includes("died two")||c.includes("died one"))
-          a.termination="early_death";
-        else a.termination="sacrificed"; }
+    /* migrate() runs on every boot and after every merge, so each step has to
+       be safe to repeat. This one is not, on its own: once the split below has
+       removed `termination`, re-deriving it from `alive` would read a dead
+       animal as sacrificed and write that down as fact on the second pass. The
+       presence of the new fields is what says the split already happened. */
+    const splitAlready = ("excluded" in a) || ("practice" in a);
+    // backfill the old single status from the even older alive boolean
+    if(!splitAlready){
+      if(!a.termination&&a.alive===undefined) a.termination="alive";
+      if(!a.termination&&a.alive!==undefined){
+        if(a.alive===true) a.termination="alive";
+        else { const c=(a.comments||"").toLowerCase();
+          if(c.includes("died during")||c.includes("died immediately")||c.includes("died after")||c.includes("died two")||c.includes("died one"))
+            a.termination="early_death";
+          else a.termination="sacrificed"; }
+      }
     }
-    // keep alive in sync with termination for all existing code
-    a.alive = a.termination==="alive";
+    /* alive/sacrificed/early_death/excluded was one field, so the four could
+       not overlap — but they are two independent questions. Whether the animal
+       is alive, and if not how it died, is one. Whether it counts toward the
+       data is another, and applies just as well to a living animal. Four mice
+       here were marked excluded while carrying a sacrifice date, so the
+       sacrifice was unsayable and invisible. Split, keeping both facts. */
+    if(a.termination){
+      a.alive = a.termination==="alive";
+      if(a.termination==="sacrificed"||a.termination==="early_death") a.deathKind=a.termination;
+      if(a.termination==="excluded"){
+        a.excluded=true;
+        // a sacrifice date is the record of a death the old field could not hold
+        if(a.sacrificed) a.deathKind=a.deathKind||"sacrificed";
+      }
+      delete a.termination;
+    }
+    if(typeof a.alive!=="boolean") a.alive=!a.deathKind;
+    if(a.alive) a.deathKind=null;
+    if(!a.alive&&a.deathKind!=="sacrificed"&&a.deathKind!=="early_death") a.deathKind=null;
+    a.excluded=!!a.excluded;
+    // "Practice" was a tag, and the only one that said something no experiment
+    // or project says: this animal exists to practise on, not to produce data.
+    if(!("practice" in a)) a.practice=(a.tag==="Practice");
   });
   // now-redundant procedure tasks were converted to diary entries above (or
   // had no linked animal to convert onto) - drop them so the Timeline doesn't
@@ -3912,20 +3944,24 @@ function defaultPickedAnimal(list){
   return (g&&g.items[0])||list[0]||null;
 }
 function animalPickerGroups(list){
-  const alive=list.filter(a=>(a.termination||"alive")==="alive");
-  const gone=list.filter(a=>(a.termination||"alive")!=="alive");
+  // practice and excluded animals are not what you are usually reaching for,
+  // whether or not they are still alive
+  const current=list.filter(a=>a.alive&&!a.excluded&&!a.practice);
+  const aside=list.filter(a=>a.alive&&(a.excluded||a.practice));
+  const gone=list.filter(a=>!a.alive);
   const out=[];
   // what you have actually been writing entries about, most recent first
-  const recent=alive.filter(a=>lastDiaryDate(a))
+  const recent=current.filter(a=>lastDiaryDate(a))
     .sort((x,y)=>lastDiaryDate(y).localeCompare(lastDiaryDate(x))).slice(0,4);
   const recentIds=new Set(recent.map(a=>a.id));
   if(recent.length) out.push({label:"Recently logged",items:recent});
   const byCage=new Map();
-  alive.forEach(a=>{ if(recentIds.has(a.id))return; const k=a.cage||""; if(!byCage.has(k))byCage.set(k,[]); byCage.get(k).push(a); });
+  current.forEach(a=>{ if(recentIds.has(a.id))return; const k=a.cage||""; if(!byCage.has(k))byCage.set(k,[]); byCage.get(k).push(a); });
   [...byCage.keys()].filter(Boolean)
     .sort((x,y)=>String(x).localeCompare(String(y),undefined,{numeric:true}))
     .forEach(c=>out.push({label:"Cage "+c,items:byCage.get(c)}));
   if(byCage.get("")) out.push({label:"No cage",items:byCage.get("")});
+  if(aside.length) out.push({label:"Practice & excluded",items:aside});
   if(gone.length) out.push({label:"No longer alive",items:gone});
   return out;
 }
@@ -3940,12 +3976,12 @@ function openAnimalPicker(anchor, currentId, onPick){
   const list=pop.querySelector("#ap_list"), q=pop.querySelector("#ap_q");
   let rows=[], cursor=-1;
   const rowHTML=a=>{
-    const term=a.termination||"alive", meta=animalPickerMeta(a);
+    const meta=animalPickerMeta(a), bits=animalStateBits(a);
     return `<button type="button" class="ap-row${a.id===currentId?" on":""}" data-id="${escAttr(a.id)}">
       <span class="ap-dot" style="background:${animalColor(a)}"></span>
       <span class="ap-main"><span class="ap-name">${esc(a.name||"(unnamed)")}</span>
         ${meta?`<span class="ap-meta">${esc(meta)}</span>`:""}</span>
-      ${term!=="alive"?`<span class="ap-term" style="color:${TERM_COLOR[term]||"var(--ink-faint)"}">${esc(TERM_LABEL[term]||term)}</span>`:""}
+      ${bits.length?`<span class="ap-term" style="color:${animalStateColor(a)}">${esc(bits.join(" · "))}</span>`:""}
     </button>`;
   };
   function paint(){
@@ -4243,8 +4279,32 @@ const LINK_GROUPS=[
   {kind:"note",     icon:"📝", label:"Notes"},
   {kind:"url",      icon:"🔗", label:"External"}
 ];
-const TERM_LABEL={alive:"alive",sacrificed:"sacrificed",early_death:"early death",excluded:"excluded"};
-const TERM_COLOR={alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"};
+/* Alive-or-dead is one axis; excluded and practice are flags that sit across
+   it, because a living animal can be excluded and a practice animal can be
+   alive or dead. Everything that shows a status reads these, so the four old
+   scattered colour maps cannot drift apart again. */
+// "dead" is for a record that says the animal is gone without saying how —
+// guessing "sacrificed" there would write a fact nobody entered
+const LIFE_LABEL={alive:"alive",sacrificed:"sacrificed",early_death:"early death",dead:"no longer alive"};
+const LIFE_COLOR={alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",dead:"#5b6678"};
+function lifeState(a){ return (a&&a.alive)?"alive":((a&&a.deathKind)||"dead"); }
+function lifeLabel(a){ return LIFE_LABEL[lifeState(a)]||lifeState(a); }
+function lifeColor(a){ return LIFE_COLOR[lifeState(a)]||"var(--ink-faint)"; }
+// the flags, in the order they are worth reading
+function animalFlags(a){
+  const out=[];
+  if(a&&a.practice) out.push({key:"practice",label:"practice",color:"var(--amber)"});
+  if(a&&a.excluded) out.push({key:"excluded",label:a.excludedReason?("excluded — "+a.excludedReason):"excluded",color:"var(--overdue)"});
+  return out;
+}
+// what a row says after the name: how it ended, then why it is set aside
+function animalStateBits(a){ return [a.alive?null:lifeLabel(a),...animalFlags(a).map(f=>f.label)].filter(Boolean); }
+// the dot colour: being set aside outranks how it ended, since that is the
+// thing you are scanning for
+function animalStateColor(a){
+  const f=animalFlags(a)[0];
+  return f?f.color:lifeColor(a);
+}
 // Offered as autocomplete when naming a group — the arms people actually run in
 // this work. Nothing is restricted to them; a group is whatever you call it.
 const GROUP_SUGGESTIONS=["Experimental","Control","Fluorophore-only (GFP)","No-virus","Vehicle / saline",
@@ -4268,8 +4328,8 @@ function linkDetail(l){
   if(l.kind==="animal"){
     const a=DB.animals.find(x=>x.id===l.id); if(!a)return {text:"deleted",color:"var(--overdue)"};
     const w=latestWeight(a);
-    return {text:[animalWhere(a),TERM_LABEL[a.termination]||a.termination,w!=null?w+"g":null].filter(Boolean).join(" · "),
-            color:TERM_COLOR[a.termination]||"var(--ink-faint)"};
+    return {text:[animalWhere(a),a.alive?"alive":lifeLabel(a),...animalFlags(a).map(f=>f.label),w!=null?w+"g":null].filter(Boolean).join(" · "),
+            color:animalStateColor(a)};
   }
   if(l.kind==="material"){
     if(l.cat==="inv"){ const inv=(DB.inventory||{})[l.id];
@@ -9785,6 +9845,16 @@ function noteModal(id,over){
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
 let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalCage="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name", animalGroupBy="none";
+let animalExcluded="all", animalPractice="all";
+// "dead" asks the axis, "sacrificed"/"early_death" ask how — one control, two
+// depths, instead of a flat list that could not express "all the dead ones"
+function inLife(a,v){
+  if(v==="all")return true;
+  if(v==="alive")return !!a.alive;
+  if(v==="dead")return !a.alive;
+  return !a.alive&&lifeState(a)===v;
+}
+function inFlag(on,v){ return v==="all"||(v==="yes"?!!on:!on); }
 // Set when a cage (or tag) tile was opened into its own list, so the list can
 // offer the way back to the tiles it came from. Session-only.
 let animalOpenedFrom=null;
@@ -9792,14 +9862,15 @@ let animalFiltersOpen=false;
 // How many filters are actually doing something — shown on the button so a
 // collapsed panel can never hide the fact that the list is being narrowed.
 function animalActiveFilterCount(){
-  return [animalTag,animalCage,animalExperiment,animalProject,animalGroup,animalStatus,animalEntry]
+  return [animalTag,animalCage,animalExperiment,animalProject,animalGroup,animalStatus,animalEntry,animalExcluded,animalPractice]
     .filter(v=>v&&v!=="all").length + animalConds.length;
 }
 function clearAnimalFilters(){
   animalTag=animalCage=animalExperiment=animalProject=animalGroup=animalStatus=animalEntry="all";
+  animalExcluded=animalPractice="all";
   animalConds=[]; animalOpenedFrom=null;
   Object.assign(DB.config.animalFilters,
-    {tag:"all",cage:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",conds:[]});
+    {tag:"all",cage:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",excluded:"all",practice:"all",conds:[]});
   persist(); renderAnimals();
 }
 // Conditions on the values inside diary entries. An animal satisfies one if
@@ -10204,7 +10275,9 @@ function renderAnimals(){
       ${expNames.length?col("Experiment","a_exp",animalExperiment,[["all","All experiments"],["none","Unattached"],...expNames]):""}
       ${DB.projects.length?col("Project","a_project",animalProject,[["all","All projects"],["none","No project"],...DB.projects.map(p=>[p.id,p.name||"(unnamed project)"])]):""}
       ${groupNames.length?col("Group","a_group",animalGroup,[["all","All groups"],...groupNames.map(g=>[g,g])]):""}
-      ${col("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["sacrificed","Sacrificed"],["early_death","Early death"],["excluded","Excluded"]])}
+      ${col("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["dead","No longer alive"],["sacrificed","— sacrificed"],["early_death","— early death"]])}
+      ${col("Excluded","a_excluded",animalExcluded,[["all","Either"],["no","Not excluded"],["yes","Excluded only"]])}
+      ${col("Practice","a_practice",animalPractice,[["all","Either"],["no","Not practice"],["yes","Practice only"]])}
       ${col("Entry","a_entry",animalEntry,[["all","Any entry"],["none","No entries"],
         ...diaryTypeDefs().map(d=>[d.key,`${d.icon||""} ${d.label}`.trim()])])}
     </div>
@@ -10236,6 +10309,8 @@ function renderAnimals(){
   onPick("a_group",v=>{ animalGroup=v; DB.config.animalFilters.group=v; persist(); renderAnimals(); });
   onPick("a_sort",v=>{ animalSort=v; DB.config.animalFilters.sort=v; persist(); renderAnimals(); });
   onPick("a_status",v=>{ animalStatus=v; DB.config.animalFilters.status=v; persist(); renderAnimals(); });
+  onPick("a_excluded",v=>{ animalExcluded=v; DB.config.animalFilters.excluded=v; persist(); renderAnimals(); });
+  onPick("a_practice",v=>{ animalPractice=v; DB.config.animalFilters.practice=v; persist(); renderAnimals(); });
   onPick("a_entry",v=>{ animalEntry=v; DB.config.animalFilters.entry=v; persist(); renderAnimals(); });
   onPick("a_groupby",v=>{ animalGroupBy=v; DB.config.animalFilters.groupBy=v; persist(); renderAnimals(); });
   bar.querySelector("#a_search").addEventListener("input",e=>{
@@ -10313,7 +10388,7 @@ function renderAnimals(){
   };
   let list=DB.animals.filter(a=>
     inTag(a,animalTag) && inCage(a,animalCage) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
-    (animalStatus==="all"||a.termination===animalStatus) &&
+    inLife(a,animalStatus) && inFlag(a.excluded,animalExcluded) && inFlag(a.practice,animalPractice) &&
     inEntry(a,animalEntry) &&
     animalConds.every(c=>condMatches(a,c)) &&
     searchMatch(a));
@@ -10334,7 +10409,7 @@ function renderAnimals(){
   const sum=document.createElement("div");
   sum.style.cssText="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:18px;font-family:var(--mono);font-size:11.5px;color:var(--ink-dim)";
   sum.innerHTML=`<span>${list.length} animal${list.length!==1?"s":""}</span>
-    <span style="color:var(--gcamp)">${cnt(a=>a.termination==="alive")} alive</span>`;
+    <span style="color:var(--gcamp)">${cnt(a=>a.alive)} alive</span>`;
   host.appendChild(sum);
 
   /* One cage — picked in the filter, or opened from its tile — gets a heading
@@ -10393,7 +10468,7 @@ function renderAnimals(){
     const grid=document.createElement("div"); grid.className="cage-grid"; host.appendChild(grid);
     names.forEach(name=>{
       const members=buckets.get(name);
-      const alive=members.filter(a=>a.termination==="alive").length;
+      const alive=members.filter(a=>a.alive).length;
       const strains=[...new Set(members.map(a=>a.strain).filter(Boolean))];
       const sexes=members.map(a=>a.sex).filter(Boolean);
       const nM=sexes.filter(x=>/^m/i.test(x)).length, nF=sexes.filter(x=>/^f/i.test(x)).length;
@@ -10409,7 +10484,7 @@ function renderAnimals(){
         <div class="ct-body">${members.map(a=>{
           const w=latestWeight(a), aw=ageWeeks(a);
           return `<button type="button" class="ct-animal" data-id="${escAttr(a.id)}">
-            <span class="ct-dot" style="background:${STATUS[a.termination]||"#3a4252"}"></span>
+            <span class="ct-dot" style="background:${animalStateColor(a)}"></span>
             <span class="ct-nm">${esc(a.name)}</span>
             <span class="ct-meta">${[a.sex,aw!=null?aw+"w":null,w!=null?w+"g":null].filter(Boolean).join(" · ")}</span>
           </button>`;}).join("")}</div>
@@ -10435,7 +10510,10 @@ function renderAnimals(){
 }
 function animalCard(a){
   const card=document.createElement("div");
-  card.style.cssText=`background:var(--panel);border:1px solid var(--line);border-left:3px solid ${{alive:"var(--line)",sacrificed:"#3a4252",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"var(--line)"};border-radius:11px;padding:12px 15px;margin-bottom:8px;${a.termination!=="alive"?"opacity:.68":""}`;
+  const setAside=a.excluded||a.practice;
+  card.style.cssText=`background:var(--panel);border:1px solid var(--line);border-left:3px solid ${
+    setAside?animalStateColor(a):(a.alive?"var(--line)":(lifeState(a)==="early_death"?"var(--overdue)":"#3a4252"))
+  };border-radius:11px;padding:12px 15px;margin-bottom:8px;${(!a.alive||setAside)?"opacity:.68":""}`;
   const aw=ageWeeks(a), lw=latestWeight(a);
   // one chip per surgery — the date and the days since it, numbered once
   // there is more than one, and a booked one marked as planned
@@ -10453,9 +10531,13 @@ function animalCard(a){
   const expanded=animalExpanded.has(a.id);
   card.innerHTML=`
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <span style="width:9px;height:9px;border-radius:50%;background:${{alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"}[a.termination]||"#3a4252"};flex:0 0 auto" title="${{alive:"Alive",sacrificed:"Sacrificed",early_death:"Early death",excluded:"Excluded"}[a.termination]||""}"></span>
+      <span style="width:9px;height:9px;border-radius:50%;background:${animalStateColor(a)};flex:0 0 auto" title="${escAttr([a.alive?"Alive":lifeLabel(a),...animalFlags(a).map(f=>f.label)].join(" · "))}"></span>
       <span style="font-weight:500;font-size:14px">${esc(a.name)}</span>
       ${a.tag?`<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);background:var(--panel2);border:1px solid var(--line2);border-radius:5px;padding:1px 6px" title="Tag"><span style="width:6px;height:6px;border-radius:50%;background:${(tagByName(a.tag)||{}).color||"#5b6678"};flex:0 0 auto"></span>${esc(a.tag)}</span>`:""}
+      ${/* said in words, not only as a dot: an animal can be sacrificed AND
+            excluded, and the whole point of splitting them is seeing both */""}
+      ${(!a.alive?[{label:lifeLabel(a),color:lifeColor(a)}]:[]).concat(animalFlags(a))
+        .map(f=>`<span style="font-family:var(--mono);font-size:9.5px;color:${f.color};border:1px solid ${f.color}33;background:${f.color}14;border-radius:5px;padding:1px 6px">${esc(f.label)}</span>`).join("")}
       <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">${esc(a.cage||"")}${a.sex?" · "+esc(a.sex):""}${a.strain?" · "+esc(a.strain):""}${aw!=null?" · "+aw+"w":""}${lw!=null?" · ⚖ "+lw+"g":""}</span>
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:100%;justify-content:flex-end">
         <button class="a-log" data-id="${a.id}" title="Chronological event log" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">📋</button>
@@ -10495,7 +10577,7 @@ function animalCard(a){
     const field=btn.dataset.field;
     bindDateButton(btn, ()=>a[field]||"", v=>{
       a[field]=v||null;
-      if(field==="sacrificed"&&v&&a.termination==="alive"){ a.termination="sacrificed"; a.alive=false; }
+      if(field==="sacrificed"&&v&&a.alive){ a.alive=false; a.deathKind="sacrificed"; }
       persist();
       // dob/sacrificed feed a lot more than this one button's own label: the
       // header's age-in-weeks and day-post-surg text, the status dot/border/
@@ -11866,6 +11948,13 @@ function animalModal(id,draft){
   // `a` itself stays the real DB.animals reference so Save's Object.assign(a,rec)
   // still mutates the actual stored record in place.
   const view=draft||a;
+  // a record from before the split, or a brand-new one, still has to open here
+  const vAlive = typeof view.alive==="boolean" ? view.alive : (view.termination||"alive")==="alive";
+  // left blank when the record never said how, so neither button lights up and
+  // nothing is asserted until it is actually chosen
+  const vDeath = view.deathKind || (view.termination==="early_death"?"early_death":(view.termination==="sacrificed"?"sacrificed":""));
+  const vExcluded = ("excluded" in view) ? !!view.excluded : view.termination==="excluded";
+  const vPractice = ("practice" in view) ? !!view.practice : view.tag==="Practice";
   const F=(fid,lab,val,type="text")=>`<div class="fld" style="flex:1"><label>${lab}</label><input id="${fid}" type="${type}" value="${escAttr(val||"")}"></div>`;
   const dbtn=(fid,val)=>`<button type="button" id="${fid}" class="datebtn datebtn-sm ${val?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${val?fmtWhenFull(val):"set date"}</button>`;
   const seg=(fid,on)=>`<div class="seg" id="${fid}"><button data-v="1" class="${on?"on":""}">Yes</button><button data-v="0" class="${!on?"on":""}">No</button></div>`;
@@ -11880,11 +11969,22 @@ function animalModal(id,draft){
       <div class="fld" style="flex:1"><label>Sacrificed</label>${dbtn("am_sac",view.sacrificed)}</div></div>
     <div class="fld"><label>Status</label>
       <div class="seg" id="am_alive">
-        <button data-v="alive"       class="${(view.termination||"alive")==="alive"?"on":""}">Alive</button>
-        <button data-v="sacrificed"  class="${view.termination==="sacrificed"?"on":""}">Sacrificed</button>
-        <button data-v="early_death" class="${view.termination==="early_death"?"on":""}">Early death</button>
-        <button data-v="excluded"    class="${view.termination==="excluded"?"on":""}">Excluded</button>
+        <button data-v="alive"       class="${vAlive?"on":""}">Alive</button>
+        <button data-v="sacrificed"  class="${!vAlive&&vDeath==="sacrificed"?"on":""}">Sacrificed</button>
+        <button data-v="early_death" class="${!vAlive&&vDeath==="early_death"?"on":""}">Early death</button>
       </div></div>
+    <div class="drow" style="align-items:flex-start">
+      <div class="fld" style="flex:0 0 auto"><label>Set aside</label>
+        <div style="display:flex;gap:14px;align-items:center;padding-top:5px;white-space:nowrap">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;color:var(--ink-dim)">
+            <input type="checkbox" id="am_practice" style="width:auto;margin:0" ${vPractice?"checked":""}> practice animal</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;color:var(--ink-dim)">
+            <input type="checkbox" id="am_excluded" style="width:auto;margin:0" ${vExcluded?"checked":""}> excluded</label>
+        </div></div>
+      <div class="fld" id="am_exreason_wrap" style="flex:1${vExcluded?"":";display:none"}">
+        <label>Why excluded</label>
+        <input type="text" id="am_exreason" value="${escAttr(view.excludedReason||"")}" placeholder="bad surgery, no expression…"></div>
+    </div>
 
     <div style="border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
@@ -11930,8 +12030,16 @@ function animalModal(id,draft){
   dobBtn.onclick=()=>openCalendar(dobBtn, vDob, v=>{ vDob=v||""; renderDobBtn(); }, undefined, true);
   sacBtn.onclick=()=>openCalendar(sacBtn, vSac, v=>{ vSac=v||""; renderDobBtn(); renderSacBtn(); });
 
-  let termination=view.termination||(view.alive===false?"sacrificed":"alive");
-  document.getElementById("am_alive").onclick=e=>{const b=e.target.closest("button");if(!b)return;termination=b.dataset.v;document.querySelectorAll("#am_alive button").forEach(x=>x.classList.toggle("on",x===b));};
+  /* Three states on one axis, and two flags beside it: an animal can be
+     sacrificed AND excluded, which the old single control could not say. */
+  let alive=vAlive, deathKind=vAlive?null:(vDeath||null);
+  document.getElementById("am_alive").onclick=e=>{
+    const b=e.target.closest("button"); if(!b)return;
+    alive=b.dataset.v==="alive"; deathKind=alive?null:b.dataset.v;
+    document.querySelectorAll("#am_alive button").forEach(x=>x.classList.toggle("on",x===b));
+  };
+  const exCb=document.getElementById("am_excluded"), exWrap=document.getElementById("am_exreason_wrap");
+  exCb.onchange=()=>{ exWrap.style.display=exCb.checked?"":"none"; exWrap.style.flex="1"; };
 
   // Snapshot every field currently on screen into a plain draft object, so
   // navigating to the virus/site library and back (which tears down and
@@ -11943,7 +12051,10 @@ function animalModal(id,draft){
       cage:document.getElementById("am_cage").value,
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
-      dob:vDob, sacrificed:vSac, termination,
+      dob:vDob, sacrificed:vSac,
+      alive, deathKind:alive?null:deathKind,
+      practice:document.getElementById("am_practice").checked,
+      excluded:exCb.checked, excludedReason:document.getElementById("am_exreason").value.trim(),
       surgeryDetail:procEditor.getSnapshot(),
       comments:comBody.innerHTML, commentsRich:true
     };
@@ -11964,7 +12075,10 @@ function animalModal(id,draft){
       cage:document.getElementById("am_cage").value,
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
-      dob:vDob, sacrificed:vSac, termination,
+      dob:vDob, sacrificed:vSac,
+      alive, deathKind:alive?null:deathKind,
+      practice:document.getElementById("am_practice").checked,
+      excluded:exCb.checked, excludedReason:document.getElementById("am_exreason").value.trim(),
       // remembered so the template can say which animals were built from it;
       // animals set up before this carry no mark and simply don't appear
       surgeryDetail:{headpost:tpl.headpost,window:tpl.window,winAp:tpl.winAp,winMl:tpl.winMl,winDiam:tpl.winDiam,
@@ -11994,7 +12108,10 @@ function animalModal(id,draft){
       cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
       dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
-      termination, alive:termination==="alive",
+      alive, deathKind:alive?null:deathKind,
+      practice:document.getElementById("am_practice").checked,
+      excluded:exCb.checked,
+      excludedReason:exCb.checked?document.getElementById("am_exreason").value.trim():"",
       comments:comBody.textContent.trim()?comBody.innerHTML:"", commentsRich:true};
   }
   document.getElementById("am_save").onclick=()=>{
@@ -12019,7 +12136,7 @@ function animalModal(id,draft){
     const newId=uid("a_");
     DB.animals.push({id:newId,created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],tasks:[],
       ...rec, name:(rec.name||"(unnamed)")+" (copy)",
-      sacrificed:"", termination:"alive", alive:true,
+      sacrificed:"", alive:true, deathKind:null, excluded:false, excludedReason:"",
       surgeryDetail:rec.surgeryDetail?JSON.parse(JSON.stringify(rec.surgeryDetail)):null});
     [...DB.experiments,...DB.projects].forEach(st=>{
       if((st.links||[]).some(l=>l.kind==="animal"&&l.id===id)) st.links.push({kind:"animal",id:newId});
@@ -12209,7 +12326,7 @@ function todayDateStr(){ const d=new Date(); const pad=n=>String(n).padStart(2,"
 // sacrifice (but not the reverse — an animal can be sacrificed without perfusion).
 function applyPerfusionSacrifice(a,date){
   if(!a.sacrificed) a.sacrificed=date;
-  if(a.termination==="alive"){ a.termination="sacrificed"; a.alive=false; }
+  if(a.alive){ a.alive=false; a.deathKind="sacrificed"; }
 }
 function cycleStatus(id){
   const t=taskById(id),o=["todo","active","blocked","done"];
@@ -12443,10 +12560,10 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
     function paintAnimal(){
       const a=DB.animals.find(x=>x.id===animalId);
       if(!a){ animalBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">🐭</span>choose an animal`; return; }
-      const meta=animalPickerMeta(a), term=a.termination||"alive";
+      const meta=animalPickerMeta(a), bits=animalStateBits(a);
       animalBtn.innerHTML=`<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${animalColor(a)};margin-right:7px"></span>`+
         `${esc(a.name||"(unnamed)")}${meta?`<span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-left:7px">${esc(meta)}</span>`:""}`+
-        (term!=="alive"?`<span style="font-family:var(--mono);font-size:9.5px;color:${TERM_COLOR[term]||"var(--ink-faint)"};margin-left:7px">${esc(TERM_LABEL[term]||term)}</span>`:"");
+        (bits.length?`<span style="font-family:var(--mono);font-size:9.5px;color:${animalStateColor(a)};margin-left:7px">${esc(bits.join(" · "))}</span>`:"");
     }
     animalBtn.onclick=()=>openAnimalPicker(animalBtn,animalId,id=>{ animalId=id; paintAnimal(); });
     paintAnimal();
@@ -13084,7 +13201,7 @@ function exportFullDatabaseExcel(){
   // coordinates and volumes are typed as text in the editor; numbers here
   const num=v=>(v===""||v==null)?"":(isFinite(+v)?+v:v);
   const yes=b=>b?"Yes":"";
-  const STATUS={alive:"Alive",sacrificed:"Sacrificed",early_death:"Early death",excluded:"Excluded"};
+  const STATUS={alive:"Alive",sacrificed:"Sacrificed",early_death:"Early death"};
   const noTime=(e,a)=>{ const s=diaryEntrySummary(e,a); if(!e.time)return s;
     const pre=`${e.time}${e.endTime?"–"+e.endTime:""} · `; return s.startsWith(pre)?s.slice(pre.length):s; };
   const sheet=(name,header,rows,...sortKeys)=>({name,rows:[header,...sortRows(rows,...sortKeys)]});
@@ -13094,7 +13211,9 @@ function exportFullDatabaseExcel(){
     const lw=latestWeight(a);
     const where=animalSteps(a.id).map(ex=>{ const g=animalGroups(a.id).find(x=>x.st.id===ex.id);
       return (ex.title||"(unnamed)")+(g?` (${g.g.name||"group"})`:""); }).join(", ");
-    return [a.name||"",a.tag||"",a.cage||"",a.sex||"",a.strain||"",STATUS[a.termination]||a.termination||"",
+    return [a.name||"",a.tag||"",a.cage||"",a.sex||"",a.strain||"",
+      a.alive?"Alive":(STATUS[lifeState(a)]||""),
+      a.practice?"yes":"", a.excluded?(a.excludedReason||"yes"):"",
       a.dob||"",ageWeeks(a)??"",a.sacrificed||"",
       surg.map(x=>fmtDMY(x.date)+(x.planned?" (planned)":"")).join(", "),
       last?daysSinceDate(a,last.date):"", lw??"",
@@ -13136,7 +13255,7 @@ function exportFullDatabaseExcel(){
       num(r.year)||r.date||"",r.journal||"",attachedTo(k,r.id),r.link||"",r.fileName||"",plain(r.notes)]);
 
   const sheets=[
-    sheet("Animals",["Name","Tag","Cage","Sex","Strain","Status","Born","Age (weeks)","Sacrificed","Surgeries",
+    sheet("Animals",["Name","Tag","Cage","Sex","Strain","Status","Practice","Excluded","Born","Age (weeks)","Sacrificed","Surgeries",
       "Days since last surgery","Latest weight (g)","Head-post","Cranial window","Experiments (group)","Comments"],animals,0),
     sheet("Diary entries",["Animal","Tag","Date","Time","End time","Type","Details","Done","Repeats","Logged"],diary,0,2,3),
     sheet("Injections",["Animal","Injection #","Depth #","Virus","Virus type","Site region","AP","ML","DV","Volume (nl)",
