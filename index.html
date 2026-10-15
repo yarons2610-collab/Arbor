@@ -1441,29 +1441,12 @@ const GCAL_COLORS=[
 // legacy hook from when a tag (née cohort) could seed-link to a research
 // domain on first creation — left empty for a clean shared build; a fresh
 // workspace just gets whatever tags the user types, no pre-populated names
-const TAG_DOMAIN_SEED={};
-function tagByName(name){ return (DB.tags||[]).find(c=>c.name===name); }
+
 // Bottom-up, not top-down: a tag is whatever loose, ad-hoc thing an animal
 // has in common with others — "virus validation," a litter, anything — named
 // by the user as the need comes up, not planned in advance. The opposite
 // direction from an experiment's own groups, which exist because the design
 // says so before any animal is assigned to one. Just a name typed onto an
-// animal; a DB.tags entity (and its colour) is created the first time a new
-// name is used, never through a separate "define a tag first" step.
-function syncTags(){
-  if(!Array.isArray(DB.tags))DB.tags=[];
-  const names=[...new Set([...DB.animals.map(a=>a.tag).filter(Boolean), ...Object.keys(TAG_DOMAIN_SEED)])];
-  names.forEach(nm=>{
-    if(DB.tags.some(c=>c.name===nm))return;
-    const domName=TAG_DOMAIN_SEED[nm]; const dom=DB.domains.find(d=>d.name===domName);
-    DB.tags.push({id:uid("tg_"),name:nm,domainId:dom?dom.id:(DB.domains[0]?DB.domains[0].id:null)});
-  });
-  DB.tags.forEach((c,i)=>{
-    if(c.color)return;
-    const dom=domById(c.domainId);
-    c.color=dom?dom.color:DOMAIN_PALETTE[i%DOMAIN_PALETTE.length];
-  });
-}
 let saveTimer=null, storageOK=null;
 /* Why a wrapper rather than a plain try/catch: the browser shim reports a full
    disk or an exceeded quota by RETURNING {ok:false}, it does not throw. A
@@ -2401,7 +2384,6 @@ function migrate(){                       // backfill fields added in later vers
   animalPractice=DB.config.animalFilters.practice||"all";
   animalExperiment=DB.config.animalFilters.experiment||"all";
   animalGroup=DB.config.animalFilters.group||"all";
-  animalTag=DB.config.animalFilters.tag||"all";
   animalCage=DB.config.animalFilters.cage||"all";
   // Entry Types left Materials; a device still remembering that tab lands on the first real one
   matSubTab=(DB.config.matSubTab==="diarytypes"||!DB.config.matSubTab)?"sites":DB.config.matSubTab;
@@ -2518,6 +2500,23 @@ function migrate(){                       // backfill fields added in later vers
     // "Practice" was a tag, and the only one that said something no experiment
     // or project says: this animal exists to practise on, not to produce data.
     if(!("practice" in a)) a.practice=(a.tag==="Practice");
+    /* Tags are gone. For most animals here the tag was the only record of what
+       they were — nine virus-validation mice and four STN mice belong to no
+       experiment — so the label is written into the animal's own notes before
+       the field is dropped, rather than thrown away. "Practice" is not folded:
+       it is a flag on the record now and would only repeat itself.
+       Driven by the field's presence, so it cannot run twice; and the line is
+       matched before being added, so a tag arriving back from a device still
+       on an older build cannot write it a second time. */
+    if("tag" in a){
+      const t=String(a.tag||"").trim();
+      if(t&&t!=="Practice"){
+        const line=`<div>Tag: ${esc(t)}</div>`;
+        const body=richBodyHTML(a.comments,a.commentsRich);
+        if(!body.includes(`Tag: ${esc(t)}`)){ a.comments=body?body+line:line; a.commentsRich=true; }
+      }
+      delete a.tag;
+    }
   });
   // now-redundant procedure tasks were converted to diary entries above (or
   // had no linked animal to convert onto) - drop them so the Timeline doesn't
@@ -2529,15 +2528,24 @@ function migrate(){                       // backfill fields added in later vers
   // field is now removed; see below). A task set that way would look fine
   // until the next reload, then vanish with no diary entry to show for it.
   if(!DB._procTasksPruned){ DB.tasks=DB.tasks.filter(t=>!t.procedureType); DB._procTasksPruned=true; }
-  // "cohort" was the name for one brief release before "tag" — fold any data
-  // written under it onto the current field names rather than orphaning it.
+  // "cohort" was the name for one brief release before "tag", and tags are gone
+  // too — so anything still written under it goes where the tags went, into the
+  // animal's own notes, rather than being orphaned.
   if(!DB._cohortsRenamedToTags){
-    if(Array.isArray(DB.cohorts)) DB.tags=(DB.tags||[]).concat(DB.cohorts);
-    DB.animals.forEach(a=>{ if(a.cohort){ a.tag=a.tag||a.cohort; } delete a.cohort; });
+    DB.animals.forEach(a=>{
+      const c=String(a.cohort||"").trim();
+      if(c){
+        const line=`<div>Tag: ${esc(c)}</div>`;
+        const body=richBodyHTML(a.comments,a.commentsRich);
+        if(!body.includes(`Tag: ${esc(c)}`)){ a.comments=body?body+line:line; a.commentsRich=true; }
+      }
+      delete a.cohort;
+    });
     delete DB.cohorts;
     DB._cohortsRenamedToTags=true;
   }
-  syncTags();
+  // the tag library itself, once every animal's label has been folded away
+  if(DB.tags) delete DB.tags;
   // somata (DB.domains) gained a free-text outline: the plan for the project in
   // the user's own words. Additive only — nothing else about a soma changed.
   // A soma is a paper now: what was its free-text outline is its abstract, and
@@ -3392,8 +3400,8 @@ function quickFindHits(q){
   };
   const go=fn=>()=>{ closeModal(); fn(); };
   DB.animals.forEach(a=>{
-    const r=score(a.name,a.tag,a.cage,a.strain); if(!isFinite(r))return;
-    add("Animal","🐭",a.name,[a.cage&&"cage "+a.cage,a.tag,animalWhere(a)].filter(Boolean).join(" · "),r,
+    const r=score(a.name,a.cage,a.strain); if(!isFinite(r))return;
+    add("Animal","🐭",a.name,[a.cage&&"cage "+a.cage,animalWhere(a)].filter(Boolean).join(" · "),r,
       go(()=>{ switchTo("animals"); animalModal(a.id); }));
   });
   (DB.notes||[]).forEach(n=>{
@@ -3702,7 +3710,6 @@ function colorUsage(){
   (DB.config.eventTypes||[]).forEach(x=>add(x.color,"Event category",x.name));
   (DB.experiments||[]).forEach(x=>add(x.color,"Experiment",x.title));
   (DB.projects||[]).forEach(x=>add(x.color,"Project",x.name));
-  (DB.tags||[]).forEach(x=>add(x.color,"Tag",x.name));
   taskList().forEach(t=>{ if(t.color) add(t.color,t.isEvent?"Event":"Task",t.title); });
   return out;
 }
@@ -3931,7 +3938,7 @@ function openRadioDropdown(anchor, items, current, onPick){
    and experiment, because that is what tells two similar names apart. Typing
    searches all of it and ranks a name that starts with what you typed first. */
 function animalPickerMeta(a){
-  return [a.cage&&("cage "+a.cage), a.tag, animalWhere(a)].filter(Boolean).join(" · ");
+  return [a.cage&&("cage "+a.cage), animalWhere(a)].filter(Boolean).join(" · ");
 }
 function lastDiaryDate(a){
   let best=""; (a.diary||[]).forEach(e=>{ const d=String(e&&e.date||"").slice(0,10); if(d>best) best=d; });
@@ -8710,76 +8717,6 @@ function procedureModal(id,draft){
   };
 }
 
-/* ── TAGS ─────────────────────────────────────────────────────────────────
-   A tag is whatever loose, ad-hoc thing an animal has in common with others
-   — "virus validation," a litter, anything — decided as the need comes up,
-   not planned in advance. The opposite direction from an experiment's own
-   groups, which only exist because a design says so. An animal just carries
-   the tag's name as plain text (see syncTags), so renaming here has to walk
-   every animal on the old name; deleting has to decide what happens to
-   animals still on it, since the name is the only link — there's no
-   id-based reference to clean up automatically. */
-// Renders into whatever host it is given: the Animals page opens it in a
-// modal, since a tag is a fact about animals and belongs beside them rather
-// than filed under Materials with the reagents and injection sites.
-function renderTagsLib(host){
-  host = host || document.getElementById("ms-tags"); if(!host) return;
-  host.innerHTML = "";
-  const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
-
-  const hdr = document.createElement("div");
-  hdr.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap";
-  hdr.innerHTML = `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
-      Loose ad-hoc groupings — "virus validation," a litter, anything — separate from an experiment's own groups. Also created automatically the first time you type a new name on an animal's own Tag field.</span>
-    <button id="taglib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New tag</button>`;
-  host.appendChild(hdr);
-
-  const wrap = document.createElement("div"); wrap.id = "taglib_rows"; host.appendChild(wrap);
-  function paintTagRows(){
-    const list=[...DB.tags].sort((a,b)=>a.name.localeCompare(b.name));
-    wrap.innerHTML = list.length ? list.map(c=>{
-      const i=DB.tags.indexOf(c);
-      const n=DB.animals.filter(a=>a.tag===c.name).length;
-      return `
-      <div style="display:flex;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)">
-        ${colorBtnHTML(c.color,{cls:"ltag_color",attrs:`data-ci="${i}"`,title:"Colour for this tag"})}
-        <input class="ltag_name" data-ci="${i}" value="${escAttr(c.name)}" placeholder="Tag name (e.g. virus validation)" style="flex:1;min-width:140px;${IST}">
-        <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 auto">${n} animal${n!==1?"s":""}</span>
-        <button class="ltag_del" data-ci="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕</button>
-      </div>`;
-    }).join("") : `<div class="empty-box">No tags yet — add one above.</div>`;
-  }
-  paintTagRows();
-
-  host.querySelector("#taglib_add").onclick = () => {
-    DB.tags.push({id:uid("tg_"),name:"",color:DOMAIN_PALETTE[DB.tags.length%DOMAIN_PALETTE.length]});
-    persist(); paintTagRows();
-    const rows = wrap.querySelectorAll(".ltag_name"); if(rows.length) rows[rows.length-1].focus();
-  };
-  wrap.addEventListener("input", e => {
-    if(!e.target.classList.contains("ltag_name")) return;
-    const c = DB.tags[+e.target.dataset.ci]; if(!c) return;
-    // the name is the only link an animal has to this tag — rename every
-    // animal still on the old name along with it, or they'd silently fall off
-    const oldName=c.name, newName=e.target.value;
-    DB.animals.forEach(a=>{ if(a.tag===oldName) a.tag=newName; });
-    c.name=newName; persist();
-  });
-  wrap.addEventListener("change", e => {
-    if(!e.target.classList.contains("ltag_color")) return;
-    const c = DB.tags[+e.target.dataset.ci]; if(!c) return;
-    c.color = e.target.value; persist();
-  });
-  wrap.addEventListener("click", e => {
-    const d = e.target.closest(".ltag_del"); if(!d) return;
-    const c = DB.tags[+d.dataset.ci]; if(!c) return;
-    const n = DB.animals.filter(a=>a.tag===c.name).length;
-    if(!confirm(`Delete "${c.name||"this tag"}"?${n?` ${n} animal${n!==1?"s":""} currently on it will become unassigned.`:""}`)) return;
-    DB.animals.forEach(a=>{ if(a.tag===c.name) a.tag=""; });
-    DB.tags.splice(DB.tags.indexOf(c),1);
-    persist(); paintTagRows();
-  });
-}
 
 /* ── DIARY TYPES ────────────────────────────────────────────────────────────
    Diary entry types themselves are fully user-editable - the seeded defaults
@@ -9844,7 +9781,7 @@ function noteModal(id,over){
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
-let animalExperiment="all", animalProject="all", animalGroup="all", animalTag="all", animalCage="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name", animalGroupBy="none";
+let animalExperiment="all", animalProject="all", animalGroup="all", animalCage="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name", animalGroupBy="none";
 let animalExcluded="all", animalPractice="all";
 // "dead" asks the axis, "sacrificed"/"early_death" ask how — one control, two
 // depths, instead of a flat list that could not express "all the dead ones"
@@ -9862,11 +9799,11 @@ let animalFiltersOpen=false;
 // How many filters are actually doing something — shown on the button so a
 // collapsed panel can never hide the fact that the list is being narrowed.
 function animalActiveFilterCount(){
-  return [animalTag,animalCage,animalExperiment,animalProject,animalGroup,animalStatus,animalEntry,animalExcluded,animalPractice]
+  return [animalCage,animalExperiment,animalProject,animalGroup,animalStatus,animalEntry,animalExcluded,animalPractice]
     .filter(v=>v&&v!=="all").length + animalConds.length;
 }
 function clearAnimalFilters(){
-  animalTag=animalCage=animalExperiment=animalProject=animalGroup=animalStatus=animalEntry="all";
+  animalCage=animalExperiment=animalProject=animalGroup=animalStatus=animalEntry="all";
   animalExcluded=animalPractice="all";
   animalConds=[]; animalOpenedFrom=null;
   Object.assign(DB.config.animalFilters,
@@ -10251,7 +10188,7 @@ function renderAnimals(){
       <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search"
         style="flex:1 1 160px;max-width:340px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
       <div class="af-sortbar"><span class="af-label af-sort">▦<span class="af-word"> Show as</span></span>
-        <select id="a_groupby" class="af-sel af-sort">${[["none","List"],["cage","Cages"],["tag","Tags"]]
+        <select id="a_groupby" class="af-sel af-sort">${[["none","List"],["cage","Cages"]]
           .map(o=>`<option value="${o[0]}" ${animalGroupBy===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
         <span class="af-label af-sort" style="margin-left:8px">↕<span class="af-word"> Sort by</span></span>
         <select id="a_sort" class="af-sel af-sort">${[["name","Name"],
@@ -10262,7 +10199,6 @@ function renderAnimals(){
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         <button class="btn ghost${animalActiveFilterCount()?" filt-on":""}" id="a_filters">⚙ Filter${
           animalActiveFilterCount()?` <span class="filt-n">${animalActiveFilterCount()}</span>`:""}</button>
-        <button class="btn ghost" id="a_tags">🏷 Tags</button>
         <button class="btn ghost" id="a_types">🔖 Entry types</button>
         <button class="btn ghost" id="a_eventlog">📋 Event log</button>
         <button class="btn accent" id="a_add">＋ Animal</button>
@@ -10270,7 +10206,6 @@ function renderAnimals(){
     </div>
     <div class="af-panel" ${animalFiltersOpen?"":"hidden"}>
     <div class="af-grid">
-      ${DB.tags.length?col("Tag","a_tag",animalTag,[["all","All tags"],["none","No tag"],...[...DB.tags].sort((a,b)=>a.name.localeCompare(b.name)).map(c=>[c.name,c.name])]):""}
       ${cageNames.length?col("Cage","a_cage",animalCage,[["all","All cages"],["none","No cage"],...cageNames.map(c=>[c,c])]):""}
       ${expNames.length?col("Experiment","a_exp",animalExperiment,[["all","All experiments"],["none","Unattached"],...expNames]):""}
       ${DB.projects.length?col("Project","a_project",animalProject,[["all","All projects"],["none","No project"],...DB.projects.map(p=>[p.id,p.name||"(unnamed project)"])]):""}
@@ -10302,7 +10237,6 @@ function renderAnimals(){
   bar.querySelectorAll(".acond-x").forEach(b=>b.onclick=()=>{
     animalConds.splice(+b.dataset.i,1); DB.config.animalFilters.conds=animalConds; persist(); renderAnimals(); });
   const onPick=(id,fn)=>{ const el=bar.querySelector("#"+id); if(el)el.addEventListener("change",e=>fn(e.target.value)); };
-  onPick("a_tag",v=>{ animalTag=v; DB.config.animalFilters.tag=v; persist(); renderAnimals(); });
   onPick("a_cage",v=>{ animalCage=v; DB.config.animalFilters.cage=v; persist(); renderAnimals(); });
   onPick("a_exp",v=>{ animalExperiment=v; DB.config.animalFilters.experiment=v; persist(); renderAnimals(); });
   onPick("a_project",v=>{ animalProject=v; DB.config.animalFilters.project=v; persist(); renderAnimals(); });
@@ -10330,13 +10264,6 @@ function renderAnimals(){
     // a renamed or recoloured type changes what the list behind shows
     document.getElementById("scrim").addEventListener("click",()=>renderAnimals(),{once:true});
   };
-  bar.querySelector("#a_tags").onclick=()=>{
-    modal(`<h3>Tags</h3><div id="tags_host"></div>
-      <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
-    renderTagsLib(document.getElementById("tags_host"));
-    // the list on the page behind reflects renames/deletes once this closes
-    document.getElementById("scrim").addEventListener("click",()=>renderAnimals(),{once:true});
-  };
 
 
   const q=animalSearch.trim().toLowerCase();
@@ -10357,10 +10284,9 @@ function renderAnimals(){
       diary.push(def&&def.label, diaryNoteOf(e.data||{}));
       Object.values(e.data||{}).forEach(v=>{ if(v!=null&&typeof v!=="object") diary.push(v); });
     });
-    return [a.name,a.cage,a.strain,a.tag,richTextPlain(richBodyHTML(a.comments,a.commentsRich)),...where,...diary]
+    return [a.name,a.cage,a.strain,richTextPlain(richBodyHTML(a.comments,a.commentsRich)),...where,...diary]
       .some(v=>v && String(v).toLowerCase().includes(q));
   }
-  const inTag=(a,name)=>name==="all"||(name==="none"?!a.tag:a.tag===name);
   const inCage=(a,c)=>c==="all"||(c==="none"?!a.cage:a.cage===c);
   // "has an entry of this type" — the options come from diaryTypeDefs(), so a
   // type you add yourself is filterable the moment it exists
@@ -10387,7 +10313,7 @@ function renderAnimals(){
     return animalSteps(a.id).some(st=>st.projectId===pid);
   };
   let list=DB.animals.filter(a=>
-    inTag(a,animalTag) && inCage(a,animalCage) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
+    inCage(a,animalCage) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
     inLife(a,animalStatus) && inFlag(a.excluded,animalExcluded) && inFlag(a.practice,animalPractice) &&
     inEntry(a,animalEntry) &&
     animalConds.every(c=>condMatches(a,c)) &&
@@ -10414,22 +10340,20 @@ function renderAnimals(){
 
   /* One cage — picked in the filter, or opened from its tile — gets a heading
      of its own over the full list of who is in it, with the way back to the
-     tiles when that is where it was opened from. A tag tile opens the same
-     way, through the tag filter. */
-  if(animalOpenedFrom&&((animalOpenedFrom.kind==="cage"?animalCage:animalTag)==="all")) animalOpenedFrom=null;
-  const focusKind=animalOpenedFrom?animalOpenedFrom.kind:(animalCage!=="all"?"cage":null);
+     tiles when that is where it was opened from. */
+  if(animalOpenedFrom&&animalCage==="all") animalOpenedFrom=null;
+  const focusKind=(animalOpenedFrom||animalCage!=="all")?"cage":null;
   if(focusKind){
-    const v=focusKind==="cage"?animalCage:animalTag;
-    const label=v==="none"?(focusKind==="cage"?"No cage":"No tag"):v;
+    const v=animalCage;
+    const label=v==="none"?"No cage":v;
     const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="6px";
-    h.innerHTML=`<span style="font-size:14px">${focusKind==="cage"?"▤":"🏷"}</span>
-      <h2>${focusKind==="cage"&&v!=="none"?"Cage ":""}${esc(label)}</h2>
+    h.innerHTML=`<span style="font-size:14px">▤</span>
+      <h2>${v!=="none"?"Cage ":""}${esc(label)}</h2>
       <span class="count">${list.length} animal${list.length!==1?"s":""}</span>
       <button type="button" class="btn ghost" id="a_unfocus" style="margin-left:auto;font-size:12px">${
-        animalOpenedFrom?`← Back to ${focusKind==="cage"?"cages":"tags"}`:"✕ All cages"}</button>`;
+        animalOpenedFrom?"← Back to cages":"✕ All cages"}</button>`;
     h.querySelector("#a_unfocus").onclick=()=>{
-      if(focusKind==="cage"){ animalCage="all"; DB.config.animalFilters.cage="all"; }
-      else{ animalTag="all"; DB.config.animalFilters.tag="all"; }
+      animalCage="all"; DB.config.animalFilters.cage="all";
       if(animalOpenedFrom){ animalGroupBy=animalOpenedFrom.groupBy; DB.config.animalFilters.groupBy=animalGroupBy; }
       animalOpenedFrom=null; persist(); renderAnimals();
     };
@@ -10458,13 +10382,12 @@ function renderAnimals(){
     // question "who is housed with whom, and how are they doing" is answered
     // by looking rather than by scrolling. The animal rows inside are just
     // enough to identify one and click into it.
-    const keyOf=animalGroupBy==="cage"?(a=>a.cage||""):(a=>a.tag||"");
-    const emptyLabel=animalGroupBy==="cage"?"No cage":"No tag";
+    const keyOf=a=>a.cage||"";
+    const emptyLabel="No cage";
     const buckets=new Map();
     list.forEach(a=>{ const k=keyOf(a)||emptyLabel; if(!buckets.has(k))buckets.set(k,[]); buckets.get(k).push(a); });
     const names=[...buckets.keys()].sort((x,y)=>
       (x===emptyLabel)-(y===emptyLabel)||String(x).localeCompare(String(y),undefined,{numeric:true}));
-    const STATUS={alive:"var(--gcamp)",sacrificed:"#5b6678",early_death:"var(--overdue)",excluded:"var(--amber)"};
     const grid=document.createElement("div"); grid.className="cage-grid"; host.appendChild(grid);
     names.forEach(name=>{
       const members=buckets.get(name);
@@ -10472,11 +10395,10 @@ function renderAnimals(){
       const strains=[...new Set(members.map(a=>a.strain).filter(Boolean))];
       const sexes=members.map(a=>a.sex).filter(Boolean);
       const nM=sexes.filter(x=>/^m/i.test(x)).length, nF=sexes.filter(x=>/^f/i.test(x)).length;
-      const tagColor=animalGroupBy==="tag"&&name!==emptyLabel?(tagByName(name)||{}).color:null;
       const tile=document.createElement("div"); tile.className="cage-tile";
       tile.innerHTML=`
         <div class="ct-head">
-          <span class="ct-mark" style="${tagColor?`background:${tagColor}`:""}">${tagColor?"":(animalGroupBy==="cage"?"▤":"🏷")}</span>
+          <span class="ct-mark">▤</span>
           <span class="ct-name"${name===emptyLabel?' style="color:var(--ink-faint)"':""}>${esc(name)}</span>
           <span class="ct-count">${members.length}</span>
           <button type="button" class="ct-open" title="Open as a list">⤢</button>
@@ -10495,9 +10417,8 @@ function renderAnimals(){
       // real filter — so it narrows the same way picking it in Filter does
       const openTile=()=>{
         const v=name===emptyLabel?"none":name;
-        animalOpenedFrom={kind:animalGroupBy==="cage"?"cage":"tag",groupBy:animalGroupBy};
-        if(animalGroupBy==="cage"){ animalCage=v; DB.config.animalFilters.cage=v; }
-        else{ animalTag=v; DB.config.animalFilters.tag=v; }
+        animalOpenedFrom={kind:"cage",groupBy:animalGroupBy};
+        animalCage=v; DB.config.animalFilters.cage=v;
         animalGroupBy="none"; DB.config.animalFilters.groupBy="none";
         persist(); renderAnimals();
         document.getElementById("animals")?.scrollIntoView({block:"start"});
@@ -10533,7 +10454,6 @@ function animalCard(a){
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="width:9px;height:9px;border-radius:50%;background:${animalStateColor(a)};flex:0 0 auto" title="${escAttr([a.alive?"Alive":lifeLabel(a),...animalFlags(a).map(f=>f.label)].join(" · "))}"></span>
       <span style="font-weight:500;font-size:14px">${esc(a.name)}</span>
-      ${a.tag?`<span style="display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);background:var(--panel2);border:1px solid var(--line2);border-radius:5px;padding:1px 6px" title="Tag"><span style="width:6px;height:6px;border-radius:50%;background:${(tagByName(a.tag)||{}).color||"#5b6678"};flex:0 0 auto"></span>${esc(a.tag)}</span>`:""}
       ${/* said in words, not only as a dot: an animal can be sacrificed AND
             excluded, and the whole point of splitting them is seeing both */""}
       ${(!a.alive?[{label:lifeLabel(a),color:lifeColor(a)}]:[]).concat(animalFlags(a))
@@ -10713,7 +10633,7 @@ function openEventLogModal(presetIds){
     const rows=[["Date","Time","End time","Animal","Tag","Type","Details","Done"]];
     evs.forEach(({a,e})=>{
       const def=diaryTypeDef(e.type);
-      rows.push([e.date, e.time||"", e.endTime||"", a.name, a.tag||"", def.label, summaryNoTime(e,a), e.done?"Yes":""]);
+      rows.push([e.date, e.time||"", e.endTime||"", a.name, def.label, summaryNoTime(e,a), e.done?"Yes":""]);
     });
     downloadExcel("arbor_event_log.xls",[{name:"Events",rows}]);
     toast(`Exported ${evs.length} events`);
@@ -11961,8 +11881,6 @@ function animalModal(id,draft){
   modal(`<h3>${id?"Edit":"New"} animal</h3>
     <div class="drow">${F("am_name","Name",view.name)}</div>
     <div class="fld"><label>Experiments &amp; groups</label><div id="am_attach"></div></div>
-    <div class="fld"><label>Tag</label><input id="am_tag" list="am_tag_list" value="${escAttr(view.tag)}" placeholder="a loose grouping, e.g. virus validation">
-      <datalist id="am_tag_list">${(DB.tags||[]).map(c=>`<option value="${escAttr(c.name)}">`).join("")}</datalist></div>
     <div class="drow">${F("am_cage","Cage",view.cage)}${F("am_sex","Sex",view.sex)}${F("am_strain","Strain",view.strain)}</div>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Born</label>${dbtn("am_dob",view.dob)}</div>
@@ -12047,7 +11965,6 @@ function animalModal(id,draft){
   function goToLibrary(focus){
     const d={
       name:document.getElementById("am_name").value,
-      tag:document.getElementById("am_tag").value,
       cage:document.getElementById("am_cage").value,
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
@@ -12071,7 +11988,6 @@ function animalModal(id,draft){
     // only headpost/window/injections come from the template.
     const d={
       name:document.getElementById("am_name").value,
-      tag:document.getElementById("am_tag").value,
       cage:document.getElementById("am_cage").value,
       sex:document.getElementById("am_sex").value,
       strain:document.getElementById("am_strain").value,
@@ -12104,7 +12020,7 @@ function animalModal(id,draft){
     const snap=procEditor.getSnapshot();
     const cleanInjs=snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
     const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
-    return {name:document.getElementById("am_name").value.trim(),tag:document.getElementById("am_tag").value.trim(),
+    return {name:document.getElementById("am_name").value.trim(),
       cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
       dob:vDob,sacrificed:vSac,surgeryDetail:surgery,
@@ -12123,7 +12039,6 @@ function animalModal(id,draft){
       DB.animals.push({id:newId,created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],...rec});
       applyPendingExperiments(newId,pendingExp);
     }
-    syncTags();
     persist(); closeModal(); render(); toast(id?"Animal updated":"Animal added");
   };
   if(id)document.getElementById("am_del").onclick=()=>{ if(confirm("Delete this animal record?")){DB.animals=DB.animals.filter(x=>x.id!==id);persist();closeModal();render();toast("Deleted");}};
@@ -12141,8 +12056,7 @@ function animalModal(id,draft){
     [...DB.experiments,...DB.projects].forEach(st=>{
       if((st.links||[]).some(l=>l.kind==="animal"&&l.id===id)) st.links.push({kind:"animal",id:newId});
       const gid=(st.groups||{})[id]; if(gid) st.groups[newId]=gid;
-    });
-    syncTags(); persist(); closeModal(); render();
+    }); persist(); closeModal(); render();
     animalModal(newId);
     toast("Duplicated — you're editing the copy");
   };
@@ -13211,7 +13125,7 @@ function exportFullDatabaseExcel(){
     const lw=latestWeight(a);
     const where=animalSteps(a.id).map(ex=>{ const g=animalGroups(a.id).find(x=>x.st.id===ex.id);
       return (ex.title||"(unnamed)")+(g?` (${g.g.name||"group"})`:""); }).join(", ");
-    return [a.name||"",a.tag||"",a.cage||"",a.sex||"",a.strain||"",
+    return [a.name||"",a.cage||"",a.sex||"",a.strain||"",
       a.alive?"Alive":(STATUS[lifeState(a)]||""),
       a.practice?"yes":"", a.excluded?(a.excludedReason||"yes"):"",
       a.dob||"",ageWeeks(a)??"",a.sacrificed||"",
@@ -13222,7 +13136,7 @@ function exportFullDatabaseExcel(){
   });
 
   const diary=[];
-  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>diary.push([a.name||"",a.tag||"",e.date||"",e.time||"",e.endTime||"",
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>diary.push([a.name||"",e.date||"",e.time||"",e.endTime||"",
     diaryTypeDef(e.type).label,noTime(e,a),yes(e.done),e.seriesRule?repeatLabel(e.seriesRule,e.date)||"Yes":"",stamp(e.created)])));
 
   const inj=[];
@@ -13255,9 +13169,9 @@ function exportFullDatabaseExcel(){
       num(r.year)||r.date||"",r.journal||"",attachedTo(k,r.id),r.link||"",r.fileName||"",plain(r.notes)]);
 
   const sheets=[
-    sheet("Animals",["Name","Tag","Cage","Sex","Strain","Status","Practice","Excluded","Born","Age (weeks)","Sacrificed","Surgeries",
+    sheet("Animals",["Name","Cage","Sex","Strain","Status","Practice","Excluded","Born","Age (weeks)","Sacrificed","Surgeries",
       "Days since last surgery","Latest weight (g)","Head-post","Cranial window","Experiments (group)","Comments"],animals,0),
-    sheet("Diary entries",["Animal","Tag","Date","Time","End time","Type","Details","Done","Repeats","Logged"],diary,0,2,3),
+    sheet("Diary entries",["Animal","Date","Time","End time","Type","Details","Done","Repeats","Logged"],diary,0,1,2),
     sheet("Injections",["Animal","Injection #","Depth #","Virus","Virus type","Site region","AP","ML","DV","Volume (nl)",
       "Target region","Target AP","Target ML","Target DV"],inj,0,1,2),
     sheet("Timeline",["When","Until","Duration (min)","Kind","Title","Repeats","Project","Experiment","Materials",
@@ -13266,7 +13180,6 @@ function exportFullDatabaseExcel(){
     sheet("Projects",["Name","Question","Experiments","Notes"],projs,0),
     sheet("Notes",["Title","Attached to","Created","Updated","Text"],notes,0),
     sheet("Library",["Kind","Title","Authors / written by","Year / date","Journal","Attached to","Link","File","Notes"],lib,0,1),
-    sheet("Tags",["Name","Colour"],(DB.tags||[]).map(c=>[c.name,c.color||""]),0),
     sheet("Virus library",["Name","Type","Promoter","Titer","Source","Note","Backup tubes","Aliquoted tubes","Box #",
       "Box colour","Box location","Need to order"],activeViruses().map(v=>[v.name,v.type||"",v.promoter||"",v.titer||"",
       v.source||"",v.note||"",v.backupTubes??"",v.aliquotTubes??"",v.boxNumber||"",v.boxColor||"",v.boxLocation||"",yes(v.needOrder)]),0),
