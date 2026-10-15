@@ -11033,8 +11033,16 @@ function paintDiary(container,a,opts){
       const finish=rows=>{ const ids=new Set(rows.map(x=>x.id)); const sid=rows[0]&&rows[0].seriesId;
         a.diary=a.diary.filter(x=>!ids.has(x.id));
         if(sid) closeOpenSeriesIfTailRemoved(a,sid,rows.map(x=>x.date));
-        formType=null; editingId=null; persist(); notifyChange(); draw();
-        toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted"); };
+        formType=null; editingId=null; persist(); notifyChange();
+        toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
+        // Same rule Cancel and Save already follow: opened from the Timeline to
+        // edit one entry, this modal has nothing left to show once that entry
+        // is gone. Repainting instead left the animal's whole diary sitting
+        // there — a window nobody asked for, and on a laptop one with no
+        // visible way out, since the widget has no Cancel of its own and the ✕
+        // is a phone-only control.
+        if(opts.closeOnDone){ closeModal(); return; }
+        draw(); };
       if(entry.seriesId&&diarySeriesCount(a,entry.seriesId)>1){
         occurrenceScopeModal(scope=>askDeleteWithFollowUps(a,diarySeriesFrom(a,entry,scope),finish),
           {title:"Repeating entry",prompt:"Delete which of them?",noun:"entry"});
@@ -11061,8 +11069,10 @@ function paintDiary(container,a,opts){
         const ids=new Set(rows.map(x=>x.id));
         a.diary=a.diary.filter(x=>!ids.has(x.id));
         if(entry.seriesId) closeOpenSeriesIfTailRemoved(a,entry.seriesId,rows.map(x=>x.date));
-        persist(); notifyChange(); draw();
+        persist(); notifyChange();
         toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
+        if(opts.closeOnDone){ closeModal(); return; }
+        draw();
       };
       if(entry.seriesId&&diarySeriesCount(a,entry.seriesId)>1){
         occurrenceScopeModal(scope=>askDeleteWithFollowUps(a,diarySeriesFrom(a,entry,scope),wipe),
