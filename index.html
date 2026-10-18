@@ -1765,14 +1765,19 @@ function setSaveState(s,detail){
   const states={
     saving:   ["saving…",          "var(--ink-faint)"],
     saved:    ["✓ saved",          "var(--gcamp)"],
+    // A new Arbor is one cleared browser away from empty, and "✓ saved" in
+    // green reads as safe. Say where it is actually saved, and make the pill
+    // the way to fix it.
+    local:    ["saved on this device only — connect sync","var(--amber)"],
     synced:   ["✓ synced",         "var(--gcamp)"],
     failed:   ["⚠ save failed — export JSON backup","var(--overdue)"],
     syncwarn: ["⚠ showing local copy, not synced — export JSON backup","var(--amber)"],
     throttled:["⏳ sync paused by GitHub — saved on this device","var(--amber)"],
   };
+  if(s==="saved"&&!gistToken()) s="local";
   const m=states[s]||states.saved; el.textContent=m[0]+(detail?" ("+detail+")":""); el.style.color=m[1]; el.dataset.state=s;
-  el.title=detail||"";
-  el.style.cursor=(s==="failed"||s==="syncwarn"||s==="throttled")?"pointer":"default";
+  el.title=s==="local"?"Your workspace lives only in this browser. Connect GitHub sync to keep it anywhere else.":(detail||"");
+  el.style.cursor=(s==="failed"||s==="syncwarn"||s==="throttled"||s==="local")?"pointer":"default";
 }
 
 // Writing to disk is cheap and wants to happen almost immediately. Pushing the
@@ -13790,6 +13795,7 @@ document.getElementById("findBtn").addEventListener("click",()=>openQuickFind())
 document.getElementById("syncBtn").addEventListener("click",()=>showGistSetup());
 document.getElementById("saveState").addEventListener("click",()=>{
   const st=document.getElementById("saveState").dataset.state;
+  if(st==="local"){ showGistSetup(); return; }
   if(st==="failed"||st==="noapi"||st==="off"||st==="syncwarn"||st==="throttled"){
     download("arbor_workspace.json",JSON.stringify(privateDB(DB),null,2),"application/json");
     toast("JSON backup downloaded — import this via ⋯ to restore"); }
