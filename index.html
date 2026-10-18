@@ -2419,8 +2419,18 @@ async function publishProject(pr,opts){
   const list=(idx.json&&idx.json.projects)||[];
   if(!list.some(x=>x.id===pr.id)){
     const next=idx.json||{schema:1,name:"Arbor shared space",members:[],projects:[]};
-    next.projects=list.concat([{id:pr.id,file:path,sharedBy:meId(),since:todayDateStr()}]);
+    next.projects=list.concat([{id:pr.id,file:path,sharedBy:meId(),since:todayDateStr(),
+                                to:projectAudience(pr)||undefined}]);
     await spaceWrite("space.json",next,idx.sha,`Arbor: share ${pr.name||pr.id}`);
+  } else {
+    // already listed: keep the audience on the entry in step with the project
+    const was=list.find(x=>x.id===pr.id)||{};
+    const to=projectAudience(pr)||undefined;
+    if(JSON.stringify(was.to||null)!==JSON.stringify(to||null)){
+      const next=idx.json;
+      next.projects=list.map(x=>x.id===pr.id?Object.assign({},x,{to}):x);
+      await spaceWrite("space.json",next,idx.sha,`Arbor: who ${pr.name||pr.id} goes to`);
+    }
   }
   markPublished(file);
   sharedFileShas[pr.id]=sha; sharedBase[pr.id]=sharedFileBase(file);
@@ -2715,6 +2725,8 @@ async function sharedPoll(force){
         const known=new Set((DB.projects||[]).map(x=>x&&x.id));
         for(const entry of (idx.json.projects||[])){
           if(!entry||!entry.id||known.has(entry.id)||sharedLeft.has(entry.id)) continue;
+          // addressed to particular people, and you are not one of them
+          if(Array.isArray(entry.to)&&entry.to.length&&!entry.to.includes(meId())) continue;
           try{
             const r=await spaceRead(entry.file||projectFilePath(entry.id));
             if(!r.json) continue;
@@ -2736,7 +2748,9 @@ async function sharedPoll(force){
         const listed=new Set((idx.json.projects||[]).map(e=>e&&e.id));
         (DB.projects||[]).slice().forEach(p=>{
           if(!p||!p.id) return;
-          if(listed.has(p.id)){ delete sharedMissing[p.id]; return; }
+          const entry=(idx.json.projects||[]).find(e=>e&&e.id===p.id);
+          const addressedToMe=!entry||!Array.isArray(entry.to)||!entry.to.length||entry.to.includes(meId());
+          if(listed.has(p.id)&&addressedToMe){ delete sharedMissing[p.id]; return; }
           if(spOf(p)!==p.id) return;                       // not one that came from the space
           if(p.id.indexOf("_"+meId()+"_")>=0) return;      // mine: only I decide
           sharedMissing[p.id]=(sharedMissing[p.id]||0)+1;
@@ -2957,6 +2971,30 @@ function openSharedActivity(pr){
    initial in that person's colour, and, if you want it louder, their colour on
    the chip's left edge where the project's own colour is least load-bearing. */
 const MEMBER_COLOURS=["#7db4ff","#f2b756","#a98cff","#3fd0d6","#ff8a6b","#54e08a"];
+/* Who a project goes to. An absent or empty list means everyone in the space,
+   which is what every project shared before this existed meant, so nothing has
+   to be migrated. The owner is always in it: you cannot share a project away
+   from yourself.
+   This is a boundary Arbor keeps, not one GitHub keeps — everyone in the space
+   can read the whole repository, so a project narrowed to one person is hidden
+   from the others rather than sealed against them. Said plainly in the editor
+   too, because a privacy control people misread is worse than none. */
+function projectAudience(pr){
+  const to=pr&&pr.to;
+  return Array.isArray(to)&&to.length?to.slice():null;   // null = everyone
+}
+function audienceHas(pr,who){
+  const to=projectAudience(pr);
+  return !to||to.includes(who);
+}
+function audienceLabel(pr){
+  const to=projectAudience(pr);
+  if(!to) return "everyone in the space";
+  const names=to.filter(id=>id!==meId()).map(id=>(memberOf(id)||{}).name||id);
+  if(!names.length) return "only you";
+  if(names.length===1) return names[0]+" and you";
+  return names.slice(0,-1).join(", ")+" and "+names[names.length-1]+", and you";
+}
 function spaceMembers(){
   const out=[];
   Object.keys(DB.sharedMembers||{}).forEach(id=>{ out.push(DB.sharedMembers[id]); });
@@ -7210,6 +7248,10 @@ function projectModal(pr,after){
             <button type="button" data-v="used" class="${libShareMode(pr,"viruses")==="used"?"on":""}">Only what it uses</button>
             <button type="button" data-v="all" class="${libShareMode(pr,"viruses")==="all"?"on":""}">Whole libraries</button>
           </div></div>
+        <div class="share-opt" style="align-items:flex-start;flex-direction:column;gap:7px">
+          <span>Shared with</span>
+          <div id="pm_audience" style="display:flex;flex-wrap:wrap;gap:7px"></div>
+        </div>
         <div class="share-note" id="pm_share_sum"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button type="button" class="btn ghost" id="pm_review" style="font-size:12px">What would be shared?</button>
@@ -7276,12 +7318,64 @@ function projectModal(pr,after){
                 [n("schedule"),"timeline item"],[n("notes"),"note"],
                 [n("readings")+n("protocols")+n("other"),"library record"]]
       .filter(([c])=>c).map(([c,w])=>`${c} ${w}${c===1?"":(w.endsWith("y")?"":"s")}`.replace("diary entrys","diary entries"));
-    shSum.textContent=bits.length?("Would share "+bits.join(", ")+"."):"Nothing in this project would be shared yet.";
+    const who=spaceConnected()&&spaceMembers().some(m=>m.id!==meId())?(" with "+audienceLabel(pr)):"";
+    shSum.textContent=bits.length?("Would share "+bits.join(", ")+who+"."):"Nothing in this project would be shared yet.";
   }
+  /* Everyone in the space, as chips you can turn off. Nobody has to be
+     invited twice: being in the space is what puts them here. */
+  function paintAudience(){
+    const host=document.getElementById("pm_audience"); if(!host)return;
+    const everyone=spaceMembers().map(m=>m.id).filter(id=>id!==meId());
+    if(!spaceConnected()||!everyone.length){
+      host.innerHTML=`<span style="font-size:11px;color:var(--ink-faint)">`+
+        (spaceConnected()?"Nobody else has joined the shared space yet."
+                        :"Connect a shared space to choose who a project goes to.")+`</span>`;
+      return;
+    }
+    const to=projectAudience(pr);
+    host.innerHTML=everyone.map(id=>{
+      const m=memberOf(id)||{id,name:id};
+      const on=!to||to.includes(id);
+      return `<button type="button" class="aud-chip" data-id="${escAttr(id)}"
+        style="display:inline-flex;align-items:center;gap:7px;border:1px solid ${on?"var(--gcamp)":"var(--line2)"};
+        background:var(--panel2);border-radius:20px;padding:4px 11px;cursor:pointer;font-size:12px;
+        color:${on?"var(--ink)":"var(--ink-faint)"}">
+        <span style="width:9px;height:9px;border-radius:50%;background:${escAttr(m.colour||"#7db4ff")};
+          opacity:${on?1:0.35};flex:0 0 auto"></span>
+        ${esc(m.name||id)}${on?"":" — not shared"}
+      </button>`;
+    }).join("")+
+      `<div style="flex-basis:100%;font-family:var(--mono);font-size:10px;color:var(--ink-faint);line-height:1.5">
+        Goes to ${esc(audienceLabel(pr))}. Hidden from the others in Arbor — but everyone
+        in the space can read the repository on GitHub, so this organises rather than seals.</div>`;
+    host.querySelectorAll(".aud-chip").forEach(b=>{
+      b.onclick=()=>{
+        const id=b.dataset.id;
+        const everyoneIds=spaceMembers().map(m=>m.id).filter(x=>x!==meId());
+        let to=projectAudience(pr)||everyoneIds.concat([meId()]);
+        to=to.includes(id)?to.filter(x=>x!==id):to.concat([id]);
+        if(!to.includes(meId())) to.push(meId());          // never share it away from yourself
+        const others=to.filter(x=>x!==meId());
+        // back to everyone is the absence of a list, not a list of everyone,
+        // so someone joining later is included without anyone re-picking
+        pr.to=(others.length===everyoneIds.length)?undefined:to;
+        persist(); paintAudience(); paintShareSummary();
+        /* Who it goes to lives on the index entry, which only publishing
+           rewrites — so without this the chips would look right and change
+           nothing until someone thought to press Send. */
+        if(pr.shared&&spaceConnected()){
+          publishProject(pr,{quiet:true})
+            .then(()=>toast("Now shared with "+audienceLabel(pr)))
+            .catch(e=>toast(String(e.message||e).slice(0,120)));
+        }
+      };
+    });
+  }
+  paintAudience();
   shBox.onchange=()=>{
     pr.shared=shBox.checked||undefined;
     if(pr.shared&&!pr.shareDefaults) pr.shareDefaults={timeline:"shared",diary:"shared"};
-    shOpts.hidden=!pr.shared; persist(); paintShareSummary();
+    shOpts.hidden=!pr.shared; persist(); paintAudience(); paintShareSummary();
   };
   const libSeg=document.getElementById("pm_libshare");
   if(libSeg) libSeg.onclick=ev=>{
