@@ -2645,8 +2645,16 @@ function noteSharedChanges(){
   sharedProjects().forEach(p=>{
     const base=sharedBase[p.id]; if(!base)return;
     const now=new Set();
-    SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{ if(spOf(x)===p.id) now.add(x.id); }));
-    (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(spOf(e)===p.id) now.add(e.id); }));
+    SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{
+      if(spOf(x)===p.id){ now.add(x.id); return; }
+      const r=resolveShare(coll,x);
+      if(r.shared&&r.project===p.id) now.add(x.id);
+    }));
+    (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
+      if(spOf(e)===p.id){ now.add(e.id); return; }
+      const r=resolveShare("diary",e,a);
+      if(r.shared&&r.project===p.id) now.add(e.id);
+    }));
     const was=new Set([...Object.keys(base.rec||{}),...Object.keys(base.diary||{})]);
     if(now.size!==was.size||[...now].some(id=>!was.has(id))) seen.add(p.id);
   });
@@ -7647,7 +7655,10 @@ function renderExperiments(){
   sortSel.value=DB.config.expTaskSort||"alpha"; groupSel.value=DB.config.expTaskGroup||"none";
   hideDoneChk.checked=!!DB.config.expTaskHideDone;
   viewBySel.value=DB.config.expViewBy||"flat";
-  top.querySelector("#pj_addproj").style.display=viewBySel.value==="project"?"":"none";
+  // Making a project is not a property of how the list is arranged. Hiding
+  // this outside "By project" left a new workspace — which starts on Flat, and
+  // the View is device-local so it never arrives from anyone else — with no
+  // way to create one.
   sortSel.addEventListener("change",()=>{ DB.config.expTaskSort=sortSel.value; persist(); renderExperiments(); });
   groupSel.addEventListener("change",()=>{ DB.config.expTaskGroup=groupSel.value; persist(); renderExperiments(); });
   hideDoneChk.addEventListener("change",()=>{ DB.config.expTaskHideDone=hideDoneChk.checked; persist(); renderExperiments(); });
