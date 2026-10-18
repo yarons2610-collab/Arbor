@@ -2603,6 +2603,183 @@ function startSharedSync(){
   if(!spaceConnected())return;
   sharedPollTimer=setInterval(sharedPoll,SHARED_POLL_MS);
 }
+/* ── SHARING, PHASE 5: taking things back ──────────────────────────────────
+   Nothing shared is destroyed silently (R7). A deletion goes to a trash you
+   both see; making something private moves it home before it leaves the file
+   (R5); and leaving offers to keep a copy of everything first. */
+const TRASH_DAYS=30, ACTIVITY_MAX=300;
+function logActivity(file,did,coll,id,label){
+  file.activity=(file.activity||[]).concat([{at:Date.now(),by:meId(),did,coll,id,label:String(label||"").slice(0,80)}]);
+  if(file.activity.length>ACTIVITY_MAX) file.activity=file.activity.slice(-ACTIVITY_MAX);
+}
+/* Make a shared record private again: into the private store first, out of the
+   shared file second. Only the person who made it can do this — for anyone
+   else the control reads "hide for me" and changes nothing on the other side. */
+async function unshareRecord(coll,x,parentAnimal){
+  const id=spOf(x)||spOf(parentAnimal); if(!id) return false;
+  const pr=(DB.projects||[]).find(p=>p.id===id); if(!pr) return false;
+  if(x.by&&x.by!==meId()){ toast("Only the person who made this can take it back"); return false; }
+  x.share=SHARE_PRIVATE;
+  setSp(x,null);                       // it belongs to the private store now
+  persist();                           // written home before it leaves the file
+  const path=projectFilePath(id);
+  for(let attempt=0;attempt<SHARED_MAX_TRIES;attempt++){
+    const cur=await spaceRead(path);
+    if(!cur.json) return false;
+    const file=cur.json;
+    const strip=arr=>(arr||[]).filter(y=>y.id!==x.id);
+    ["experiments","schedule","notes","readings","protocols","other","animals"].forEach(k=>{ file[k]=strip(file[k]); });
+    (file.animals||[]).forEach(a=>{ if(Array.isArray(a.diary)) a.diary=a.diary.filter(e=>e.id!==x.id); });
+    file.deletions=file.deletions||{};
+    (file.deletions[coll==="diary"?"diary":coll]=file.deletions[coll==="diary"?"diary":coll]||{})[x.id]=
+      {at:Date.now(),by:meId(),kind:"private"};
+    logActivity(file,"made private",coll,x.id,x.name||x.title||"an entry");
+    try{
+      const sha=await spaceWrite(path,file,cur.sha,`Arbor: make private`);
+      sharedFileShas[id]=sha; sharedBase[id]=sharedFileBase(file);
+      try{ localStorage.setItem(spaceCacheKey(id),JSON.stringify({file,sha})); }catch(e){}
+      toast("Made private — removed from your collaborator's copy");
+      return true;
+    }catch(e){ if(e.status===409) continue; throw e; }
+  }
+  return false;
+}
+/* Delete a shared record: to the trash, visible to both, restorable for 30
+   days. Either of you can do it; neither of you loses it by accident. */
+async function trashSharedRecord(coll,x){
+  const id=spOf(x); if(!id) return false;
+  const path=projectFilePath(id);
+  for(let attempt=0;attempt<SHARED_MAX_TRIES;attempt++){
+    const cur=await spaceRead(path); if(!cur.json) return false;
+    const file=cur.json;
+    let rec=null;
+    const k=coll;
+    file[k]=(file[k]||[]).filter(y=>{ if(y.id===x.id){ rec=y; return false; } return true; });
+    if(!rec){ (file.animals||[]).forEach(a=>{ a.diary=(a.diary||[]).filter(e=>{ if(e.id===x.id){ rec=e; return false; } return true; }); }); }
+    file.trash=(file.trash||[]).concat([{coll:k,record:rec||JSON.parse(JSON.stringify(x)),at:Date.now(),by:meId()}]);
+    file.deletions=file.deletions||{};
+    (file.deletions[k]=file.deletions[k]||{})[x.id]={at:Date.now(),by:meId(),kind:"deleted"};
+    logActivity(file,"deleted",k,x.id,x.name||x.title||"a record");
+    // 30 days is long enough to notice; the repository history keeps the rest
+    const cut=Date.now()-TRASH_DAYS*864e5;
+    file.trash=file.trash.filter(t=>t.at>=cut);
+    try{
+      const sha=await spaceWrite(path,file,cur.sha,`Arbor: delete`);
+      sharedFileShas[id]=sha; sharedBase[id]=sharedFileBase(file);
+      detachProjectFile(id); attachProjectFile(file); resetRecordBaseline();
+      try{ localStorage.setItem(spaceCacheKey(id),JSON.stringify({file,sha})); }catch(e){}
+      return true;
+    }catch(e){ if(e.status===409) continue; throw e; }
+  }
+  return false;
+}
+async function restoreFromTrash(projectId,entryIndex){
+  const path=projectFilePath(projectId);
+  for(let attempt=0;attempt<SHARED_MAX_TRIES;attempt++){
+    const cur=await spaceRead(path); if(!cur.json) return false;
+    const file=cur.json;
+    const t=(file.trash||[])[entryIndex]; if(!t) return false;
+    const k=t.coll;
+    if(k==="diary"){
+      const a=(file.animals||[]).find(y=>(y.diary||[]).every(e=>e.id!==t.record.id));
+      if(a){ a.diary=(a.diary||[]).concat([t.record]); }
+    } else { file[k]=(file[k]||[]).concat([t.record]); }
+    // a revival outranks the deletion that put it here
+    file.revivals=file.revivals||{};
+    const d=((file.deletions||{})[k]||{})[t.record.id];
+    (file.revivals[k]=file.revivals[k]||{})[t.record.id]={at:Math.max(Date.now(),stampAt(d)+1),by:meId()};
+    file.trash=(file.trash||[]).filter((_,i)=>i!==entryIndex);
+    logActivity(file,"restored",k,t.record.id,t.record.name||t.record.title||"a record");
+    try{
+      const sha=await spaceWrite(path,file,cur.sha,`Arbor: restore`);
+      sharedFileShas[projectId]=sha; sharedBase[projectId]=sharedFileBase(file);
+      detachProjectFile(projectId); attachProjectFile(file); resetRecordBaseline();
+      try{ localStorage.setItem(spaceCacheKey(projectId),JSON.stringify({file,sha})); }catch(e){}
+      return true;
+    }catch(e){ if(e.status===409) continue; throw e; }
+  }
+  return false;
+}
+/* Stop sharing, or leave one someone else shared. Either way the records can
+   be kept: they move into the private store with their ids intact, so the
+   links between them still work. */
+async function leaveSharedProject(pr,keepCopy){
+  const id=pr.id;
+  if(keepCopy){
+    SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{ if(spOf(x)===id) setSp(x,null); }));
+    (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(spOf(e)===id) setSp(e,null); }));
+  } else {
+    detachProjectFile(id);
+  }
+  pr.shared=undefined; setSp(pr,null);
+  delete sharedDirty[id]; delete sharedBase[id]; delete sharedFileShas[id];
+  try{ localStorage.removeItem(spaceCacheKey(id)); }catch(e){}
+  // the file stays in the repository; only the index stops pointing at it
+  try{
+    const idx=await spaceLoadIndex();
+    if(idx.json&&(idx.json.projects||[]).some(x=>x.id===id)){
+      idx.json.projects=(idx.json.projects||[]).filter(x=>x.id!==id);
+      await spaceWrite("space.json",idx.json,idx.sha,`Arbor: stop sharing ${pr.name||id}`);
+    }
+  }catch(e){}
+  resetRecordBaseline(); persist(); render();
+  toast(keepCopy?"Stopped sharing — your copy is kept":"Stopped sharing");
+}
+/* Attaching a private note to a shared experiment shares it. That is usually
+   what you want, and it is also the one ordinary action that can share
+   something by accident — so anything newly shared this way waits, says so,
+   and can be taken back with one click before it goes. */
+const SHARE_UNDO_MS=10000;
+let pendingShares={};
+function noticeNewlyShared(){
+  if(!spaceConnected())return;
+  sharedProjects().forEach(p=>{
+    const base=sharedBase[p.id]; if(!base)return;
+    const known=new Set([...Object.keys(base.rec||{}),...Object.keys(base.diary||{})]);
+    const fresh=[];
+    SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{
+      const r=resolveShare(coll,x);
+      if(r.shared&&r.project===p.id&&!known.has(x.id)&&!pendingShares[x.id]) fresh.push([coll,x]);
+    }));
+    if(!fresh.length)return;
+    const [coll,x]=fresh[0];
+    pendingShares[x.id]=setTimeout(()=>{ delete pendingShares[x.id]; },SHARE_UNDO_MS);
+    const what=SHARE_ONE[coll]||"record";
+    toast(`This ${what} will be shared with your collaborator`,{
+      label:"Keep private",
+      fn:()=>{ x.share=SHARE_PRIVATE; clearTimeout(pendingShares[x.id]); delete pendingShares[x.id];
+        persist(); render(); toast("Kept private"); }});
+  });
+}
+function openSharedTrash(pr){
+  const cached=(()=>{ try{ return JSON.parse(localStorage.getItem(spaceCacheKey(pr.id))||"null"); }catch(e){ return null; } })();
+  const file=cached&&cached.file;
+  const rows=(file&&file.trash)||[];
+  modal(`<h3>Deleted from ${esc(pr.name||"this project")}</h3>
+    <div class="sr-sub">Kept for ${TRASH_DAYS} days, and visible to you both.</div>
+    <div class="sr-body">${rows.length?rows.map((t,i)=>`<div class="sr-row">
+        <span class="sr-label">${esc(t.record&&(t.record.name||t.record.title)||SHARE_ONE[t.coll]||"a record")}</span>
+        <span class="sr-why">${esc(fmtDMY(todayDateStrOf(new Date(t.at))))}</span>
+        <button type="button" class="btn ghost tr-restore" data-i="${i}" style="font-size:11px;padding:2px 8px">Put it back</button>
+      </div>`).join(""):`<div class="sr-empty">Nothing has been deleted.</div>`}</div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+  document.querySelectorAll(".tr-restore").forEach(b=>b.onclick=async()=>{
+    b.disabled=true; b.textContent="…";
+    try{ await restoreFromTrash(pr.id,+b.dataset.i); closeModal(); render(); toast("Restored"); }
+    catch(e){ b.disabled=false; b.textContent="Put it back"; toast(String(e.message||e).slice(0,70)); }
+  });
+}
+function openSharedActivity(pr){
+  const cached=(()=>{ try{ return JSON.parse(localStorage.getItem(spaceCacheKey(pr.id))||"null"); }catch(e){ return null; } })();
+  const rows=((cached&&cached.file&&cached.file.activity)||[]).slice().reverse();
+  const names={}; ((cached&&cached.file&&cached.file.members)||[]).forEach(m=>{ names[m.id]=m.name; });
+  modal(`<h3>Activity in ${esc(pr.name||"this project")}</h3>
+    <div class="sr-body">${rows.length?rows.map(r=>`<div class="sr-row">
+      <span class="sr-label">${esc(names[r.by]||(r.by===meId()?"You":r.by))} ${esc(r.did)} ${esc(r.label||"")}</span>
+      <span class="sr-why">${esc(fmtDMY(todayDateStrOf(new Date(r.at))))}</span></div>`).join("")
+      :`<div class="sr-empty">Nothing recorded yet.</div>`}</div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+}
 /* ── SHARING, PHASE 1: the resolver ─────────────────────────────────────────
    One function decides, for every record, whether it is shared, through which
    project, and why. It reads only the workspace and has no side effects, so the
@@ -2748,10 +2925,14 @@ function shareRowHTML(coll,x,parentAnimal){
 }
 function wireShareRow(host,x,onChange){
   const seg=host.querySelector(".share-seg"); if(!seg)return;
-  seg.addEventListener("click",ev=>{
+  seg.addEventListener("click",async ev=>{
     const b=ev.target.closest("button"); if(!b)return;
-    x.share=b.dataset.v||undefined;
-    persist();
+    const want=b.dataset.v||undefined;
+    // taking back something already in a shared file is a real removal, not
+    // just a setting: it has to leave their copy too
+    if(want===SHARE_PRIVATE&&spOf(x)&&spaceConnected()){
+      try{ await unshareRecord(seg.dataset.coll,x); }catch(e){ toast(String(e.message||e).slice(0,70)); }
+    } else { x.share=want; persist(); }
     if(onChange) onChange();
   });
 }
@@ -2844,6 +3025,12 @@ function idsOf(db){
   });
   return out;
 }
+/* A mark is either a bare timestamp, as the private engine has always written,
+   or {at,by,kind} as a shared file writes so the other person can be told who
+   removed what. Reading `+{...}` gives NaN, which silently scored every shared
+   deletion as zero and let deleted records come back, so both shapes are
+   understood here and the richer one is kept when it wins. */
+function stampAt(v){ return typeof v==="number"?v:((v&&typeof v==="object"&&+v.at)||0); }
 function unionStamps(a,b){
   const out={};
   [a,b].forEach(m=>{
@@ -2851,14 +3038,14 @@ function unionStamps(a,b){
     Object.keys(m).forEach(c=>{
       const src=m[c]; if(!src||typeof src!=="object")return;
       const o=out[c]=out[c]||{};
-      Object.keys(src).forEach(id=>{ const t=+src[id]||0; if(t>(o[id]||0)) o[id]=t; });
+      Object.keys(src).forEach(id=>{ if(stampAt(src[id])>stampAt(o[id])) o[id]=src[id]; });
     });
   });
   return out;
 }
 function deadIn(stamps){
   const dels=(stamps&&stamps.deletions)||{}, revs=(stamps&&stamps.revivals)||{};
-  return (c,id)=>(((dels[c]||{})[id])||0)>(((revs[c]||{})[id])||0);
+  return (c,id)=>stampAt((dels[c]||{})[id])>stampAt((revs[c]||{})[id]);
 }
 function isDeletedHere(c,id){ return deadIn(DB)(c,id); }
 function resetRecordBaseline(){ recordBaseline=idsOf(DB); }
@@ -2882,12 +3069,13 @@ function recordDeletions(){
     if(gone.length&&!allowMassRemoval&&gone.length>=min&&gone.length>=before.size*MASS_FRACTION){
       refused={key:c,gone:gone.length,had:before.size};
     } else gone.forEach(id=>{
-      const d=dels[c]=dels[c]||{}, r=(revs[c]||{})[id]||0;
+      // stampAt, because a mark may be a bare timestamp or {at,by,kind}
+      const d=dels[c]=dels[c]||{}, r=stampAt((revs[c]||{})[id]);
       d[id]=Math.max(t,r+1);
     });
     after.forEach(id=>{
       if(before.has(id))return;
-      const d=(dels[c]||{})[id]||0, r=(revs[c]||{})[id]||0;
+      const d=stampAt((dels[c]||{})[id]), r=stampAt((revs[c]||{})[id]);
       if(d>r) (revs[c]=revs[c]||{})[id]=Math.max(t,d+1);
     });
   });
@@ -3109,6 +3297,7 @@ function persist(){
   if(!bootLoaded){ persistDuringBoot=true; return; }
   recordDeletions();   // what this change removed, marked as deleted by it
   noteSharedChanges();
+  noticeNewlyShared();
   DB.updatedAt=Date.now(); localDirty=true;
   saveLocalView();   // filters/zoom/collapse stay on this device (see LOCAL_VIEW_KEYS)
   clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160);
@@ -6738,6 +6927,9 @@ function projectModal(pr,after){
           <button type="button" class="btn ghost" id="pm_review" style="font-size:12px">What would be shared?</button>
           <button type="button" class="btn accent" id="pm_publish" style="font-size:12px">${
             spaceConnected()?"Send to collaborator":"Set up sharing first"}</button>
+          ${spaceConnected()?`<button type="button" class="btn ghost" id="pm_trash" style="font-size:12px">🗑 Deleted</button>
+            <button type="button" class="btn ghost" id="pm_activity" style="font-size:12px">🕘 Activity</button>
+            <button type="button" class="btn ghost" id="pm_leave" style="font-size:12px">Stop sharing</button>`:""}
         </div>
       </div>
     </div>
@@ -6811,6 +7003,15 @@ function projectModal(pr,after){
       persist(); paintShareSummary(); };
   });
   document.getElementById("pm_review").onclick=()=>{ save(); openShareReview(); };
+  if(document.getElementById("pm_trash")) document.getElementById("pm_trash").onclick=()=>{ save(); openSharedTrash(pr); };
+  if(document.getElementById("pm_activity")) document.getElementById("pm_activity").onclick=()=>{ save(); openSharedActivity(pr); };
+  if(document.getElementById("pm_leave")) document.getElementById("pm_leave").onclick=async()=>{
+    const keep=confirm(`Stop sharing "${pr.name||"this project"}"?\n\nOK — keep your own copy of everything in it.\nCancel the next prompt to remove it from this Arbor instead.`);
+    if(!keep&&!confirm("Remove the shared records from this Arbor as well? Your collaborator keeps their copy."))return;
+    save();
+    try{ await leaveSharedProject(pr,keep); closeModal(); if(after)after(); }
+    catch(e){ toast(String(e.message||e).slice(0,70)); }
+  };
   document.getElementById("pm_publish").onclick=async()=>{
     if(!spaceConnected()){ closeModal(); openSpaceSetup(); return; }
     save();
