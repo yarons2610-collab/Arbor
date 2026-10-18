@@ -2013,6 +2013,121 @@ function stampAuthorship(){
   SHAREABLE.forEach(k=>(Array.isArray(DB[k])?DB[k]:[]).forEach(x=>{ if(x&&!x.by) x.by=me; }));
   (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&!e.by) e.by=me; }));
 }
+/* ── SHARING, PHASE 1: the resolver ─────────────────────────────────────────
+   One function decides, for every record, whether it is shared, through which
+   project, and why. It reads only the workspace and has no side effects, so the
+   review screen, the sharing controls, "see as collaborator", the publisher and
+   the leak detector all call this and cannot disagree with each other.
+
+   Every branch that is not the last one returns private. Shared is what is left
+   when every check has passed, never a fallback — the whole model fails closed.
+
+   Phase 1 answers the question without acting on it. A project is marked shared
+   locally and nothing leaves this device. */
+function sharedProjects(){ return (DB.projects||[]).filter(p=>p&&p.shared); }
+function isProjectShared(id){ return (DB.projects||[]).some(p=>p&&p.id===id&&p.shared); }
+function projDefaults(p){
+  const d=(p&&p.shareDefaults)||{};
+  return {timeline:d.timeline==="private"?"private":"shared",
+          diary:d.diary==="private"?"private":"shared"};
+}
+// Free text is the thing worth protecting when a record straddles a shared and
+// a private project: it is where the other project's work gets described.
+const CARRIES_TEXT={notes:1,readings:1,protocols:1,other:1,diary:1};
+/* Which projects a record belongs to. The link is different for every kind,
+   which is exactly why this lives in one place. */
+function projectsOfRecord(coll,x){
+  if(!x)return [];
+  if(coll==="projects") return [x.id];
+  if(coll==="experiments") return x.projectId?[x.projectId]:[];
+  if(coll==="schedule"){
+    if(x.projectId) return [x.projectId];
+    const ex=x.experimentId?expById(x.experimentId):null;
+    return ex&&ex.projectId?[ex.projectId]:[];
+  }
+  if(coll==="animals"){
+    const out=new Set();
+    animalSteps(x.id).forEach(ex=>{ if(ex.projectId) out.add(ex.projectId); });
+    return [...out];
+  }
+  // notes and library records attach by being linked from a project or one of
+  // its experiments
+  const kind={notes:"note",readings:"reading",protocols:"protocol",other:"other"}[coll];
+  if(kind){
+    const out=new Set();
+    (DB.projects||[]).forEach(p=>{ if((p.links||[]).some(l=>l.kind===kind&&l.id===x.id)) out.add(p.id); });
+    (DB.experiments||[]).forEach(e=>{ if((e.links||[]).some(l=>l.kind===kind&&l.id===x.id)&&e.projectId) out.add(e.projectId); });
+    return [...out];
+  }
+  return [];
+}
+const SHARE_NO=(why)=>({shared:false,project:null,why});
+/* resolve(coll, record, parentAnimal) → {shared, project, why}
+   `why` is shown to the person verbatim, so it is written as an explanation
+   rather than a code. */
+function resolveShare(coll,x,parentAnimal){
+  if(!x) return SHARE_NO("no record");
+  if(x.share===SHARE_PRIVATE) return SHARE_NO("you marked it private");
+  // a diary entry has no project of its own; it lives or dies with its animal
+  if(coll==="diary"){
+    const a=parentAnimal;
+    if(!a) return SHARE_NO("no animal");
+    const pa=resolveShare("animals",a);
+    if(!pa.shared) return SHARE_NO(`${a.name||"its animal"} is not shared`);
+    if(x.share===SHARE_SHARED) return {shared:true,project:pa.project,why:"you shared this entry"};
+    const amb=projectsOfRecord("animals",a).filter(id=>!isProjectShared(id));
+    if(amb.length) return SHARE_NO(`${a.name||"its animal"} is also in ${projName(amb[0])}, which isn't shared`);
+    return projDefaults(projById(pa.project)).diary==="shared"
+      ? {shared:true,project:pa.project,why:`on ${a.name||"a shared animal"}`}
+      : SHARE_NO("this project keeps diary entries private");
+  }
+  const P=projectsOfRecord(coll,x);
+  if(!P.length) return SHARE_NO("not attached to a project");
+  const S=P.filter(isProjectShared);
+  if(!S.length) return SHARE_NO(P.length===1?`${projName(P[0])} isn't shared`:"none of its projects are shared");
+  // a child is never more visible than its parent
+  if(coll==="schedule"&&x.experimentId){
+    const ex=expById(x.experimentId);
+    if(ex&&!resolveShare("experiments",ex).shared) return SHARE_NO(`${ex.title||"its experiment"} is private`);
+  }
+  if(x.share===SHARE_SHARED) return {shared:true,project:S[0],why:"you shared it"};
+  if(CARRIES_TEXT[coll]&&P.length>S.length){
+    const other=P.find(id=>!isProjectShared(id));
+    return SHARE_NO(`also in ${projName(other)}, which isn't shared`);
+  }
+  if(coll==="schedule") return projDefaults(projById(S[0])).timeline==="shared"
+    ? {shared:true,project:S[0],why:`in ${projName(S[0])}`}
+    : SHARE_NO("this project keeps timeline items private");
+  return {shared:true,project:S[0],why:`in ${projName(S[0])}`};
+}
+function projName(id){ const p=projById(id); return p?(p.name||"(unnamed project)"):"a project"; }
+/* Everything that would be shared right now, grouped by collection, plus the
+   reasons for everything that would not. Pure: it answers, it never acts. */
+function shareReview(){
+  const out={shared:{},private:{},counts:{shared:0,private:0}};
+  const add=(bucket,coll,x,r,label)=>{
+    (out[bucket][coll]=out[bucket][coll]||[]).push({id:x.id,label,why:r.why,project:r.project});
+    out.counts[bucket]++;
+  };
+  SHAREABLE.forEach(coll=>{
+    (DB[coll]||[]).forEach(x=>{
+      const r=resolveShare(coll,x);
+      const label=x.name||x.title||"(untitled)";
+      // only report the private ones that could plausibly have been shared, or
+      // the list is every record in the workspace
+      if(r.shared) add("shared",coll,x,r,label);
+      else if(projectsOfRecord(coll,x).some(isProjectShared)||x.share===SHARE_PRIVATE)
+        add("private",coll,x,r,label);
+    });
+  });
+  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
+    const r=resolveShare("diary",e,a);
+    const label=`${a.name||"?"} — ${diaryTypeDef(e.type).label} ${fmtDMY(e.date)}`;
+    if(r.shared) add("shared","diary",e,r,label);
+    else if(resolveShare("animals",a).shared) add("private","diary",e,r,label);
+  }));
+  return out;
+}
 const MASS_MIN=5, MASS_MIN_DIARY=20, MASS_FRACTION=0.5;
 let recordBaseline=null;      // ids as of the last recorded save of a loaded workspace
 let allowMassRemoval=false;   // set only around an explicit restore, import or reset
