@@ -2259,6 +2259,7 @@ function buildProjectFile(pr,prev){
     file.animals.push(copy);
   });
   file.defs=buildDefs(file);
+  file.libraries=buildSharedLibraries(pr,file);
   return file;
 }
 /* Refuses the write rather than describing the problem afterwards. Looks for
@@ -2391,12 +2392,16 @@ function attachProjectFile(file){
   // person's own library
   DB.sharedDefs=DB.sharedDefs||{};
   if(file.defs) DB.sharedDefs[id]=file.defs;
+  DB.sharedLibs=DB.sharedLibs||{};
+  if(file.libraries) DB.sharedLibs[id]=file.libraries;
 }
 /* Take them all back out — used before re-attaching, so a record removed from
    the file disappears instead of lingering. */
 function detachProjectFile(id){
   SHAREABLE.forEach(coll=>{ if(Array.isArray(DB[coll])) DB[coll]=DB[coll].filter(x=>spOf(x)!==id); });
   (DB.animals||[]).forEach(a=>{ if(Array.isArray(a.diary)) a.diary=a.diary.filter(e=>spOf(e)!==id); });
+  if(DB.sharedDefs) delete DB.sharedDefs[id];
+  if(DB.sharedLibs) delete DB.sharedLibs[id];
 }
 let sharedFileShas={};
 /* Read every shared project this space lists and put it on screen. Falls back
@@ -2779,6 +2784,43 @@ function openSharedActivity(pr){
       <span class="sr-why">${esc(fmtDMY(todayDateStrOf(new Date(r.at))))}</span></div>`).join("")
       :`<div class="sr-empty">Nothing recorded yet.</div>`}</div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+}
+/* ── SHARING, PHASE 6: libraries ────────────────────────────────────────────
+   Sending the definitions a record needs is one thing; sharing a library is
+   another, and it is deliberate per library rather than implied. Entries show
+   who added them and either of you can edit them; your own entries stay your
+   own. */
+const SHARED_LIBS=[["viruses","virusLib","name"],["sites","siteLib","name"],
+                   ["procedures","procedureLib","id"]];
+function libShareMode(pr,kind){ return ((pr&&pr.libShare)||{})[kind]||"none"; }
+/* What this project contributes to the shared libraries, by the project's own
+   setting: nothing, the entries used by what is shared, or the whole library. */
+function buildSharedLibraries(pr,file){
+  const out={};
+  SHARED_LIBS.forEach(([kind,cfgKey,idKey])=>{
+    const mode=libShareMode(pr,kind);
+    if(mode==="none")return;
+    const all=DB.config[cfgKey]||[];
+    if(mode==="all"){ out[kind]=all.map(x=>Object.assign({},x,{by:x.by||meId()})); return; }
+    // "used": whatever the shared records actually name
+    const used=new Set();
+    (file.animals||[]).forEach(a=>((a.surgeryDetail||{}).injections||[]).forEach(i=>{
+      if(kind==="viruses"&&i.virus) used.add(i.virus);
+      if(kind==="sites"){ if(i.siteRegion) used.add(i.siteRegion); if(i.partnerRegion) used.add(i.partnerRegion); }
+      if(kind==="procedures"&&(a.surgeryDetail||{}).fromTemplate) used.add((a.surgeryDetail||{}).fromTemplate);
+    }));
+    out[kind]=all.filter(x=>used.has(x[idKey])).map(x=>Object.assign({},x,{by:x.by||meId()}));
+  });
+  return out;
+}
+/* Shared library entries read alongside this person's own, marked so it is
+   obvious which is which, and never written into their config. */
+function sharedLibEntries(kind){
+  const out=[];
+  Object.keys(DB.sharedLibs||{}).forEach(id=>((DB.sharedLibs[id]||{})[kind]||[]).forEach(x=>{
+    if(!out.some(y=>(y.name||y.id)===(x.name||x.id))) out.push(Object.assign({},x,{fromShared:true}));
+  }));
+  return out;
 }
 /* ── SHARING, PHASE 1: the resolver ─────────────────────────────────────────
    One function decides, for every record, whether it is shared, through which
@@ -6922,6 +6964,12 @@ function projectModal(pr,after){
             <button type="button" data-v="shared" class="${projDefaults(pr).diary==="shared"?"on":""}">Shared</button>
             <button type="button" data-v="private" class="${projDefaults(pr).diary==="private"?"on":""}">Private</button>
           </div></div>
+        <div class="share-opt"><span>Materials used by this project</span>
+          <div class="seg" id="pm_libshare">
+            <button type="button" data-v="none" class="${libShareMode(pr,"viruses")==="none"?"on":""}">Don't share</button>
+            <button type="button" data-v="used" class="${libShareMode(pr,"viruses")==="used"?"on":""}">Only what it uses</button>
+            <button type="button" data-v="all" class="${libShareMode(pr,"viruses")==="all"?"on":""}">Whole libraries</button>
+          </div></div>
         <div class="share-note" id="pm_share_sum"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button type="button" class="btn ghost" id="pm_review" style="font-size:12px">What would be shared?</button>
@@ -6994,6 +7042,15 @@ function projectModal(pr,after){
     pr.shared=shBox.checked||undefined;
     if(pr.shared&&!pr.shareDefaults) pr.shareDefaults={timeline:"shared",diary:"shared"};
     shOpts.hidden=!pr.shared; persist(); paintShareSummary();
+  };
+  const libSeg=document.getElementById("pm_libshare");
+  if(libSeg) libSeg.onclick=ev=>{
+    const b=ev.target.closest("button"); if(!b)return;
+    // one setting across the three libraries: splitting them asks three
+    // questions where nobody has three different answers
+    pr.libShare={viruses:b.dataset.v,sites:b.dataset.v,procedures:b.dataset.v};
+    libSeg.querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b));
+    persist(); paintShareSummary();
   };
   [["pm_sd_timeline","timeline"],["pm_sd_diary","diary"]].forEach(([elId,key])=>{
     const seg=document.getElementById(elId); if(!seg)return;
@@ -11185,7 +11242,34 @@ function daysSinceDate(a,iso){
 // in-place sort, so nothing that stores an index into the raw
 // DB.config.diaryTypes array (see paintDTRows) gets its indices scrambled.
 function diaryTypeDefs(){ return [...(DB.config.diaryTypes||[])].sort((a,b)=>(a.label||"").localeCompare(b.label||"")); }
-function diaryTypeDef(key){ return diaryTypeDefs().find(t=>t.key===key) || {key,label:key||"—",icon:"❔",color:"var(--ink-faint)",timeline:false,fields:[]}; }
+/* An entry shared by someone else may use a type this workspace has never
+   heard of. Its definition travelled with it (see buildDefs), kept apart from
+   this person's own library so neither overwrites the other — so a shared
+   entry reads correctly without "Behavior" quietly appearing in your own list
+   of entry types. Your own definition wins where both exist, because that is
+   the one your other entries use. */
+function sharedDefType(key){
+  const spaces=DB.sharedDefs||{};
+  for(const id of Object.keys(spaces)){
+    const t=((spaces[id]||{}).diaryTypes||[]).find(x=>x.key===key);
+    if(t) return Object.assign({timeline:false,fields:[]},t,{fromShared:true});
+  }
+  return null;
+}
+function diaryTypeDef(key){
+  return diaryTypeDefs().find(t=>t.key===key) || sharedDefType(key)
+    || {key,label:key||"—",icon:"❔",color:"var(--ink-faint)",timeline:false,fields:[]};
+}
+/* The viruses and injection sites a shared surgery names, so a collaborator
+   reading it sees a real name rather than a bare string with nothing behind
+   it. Read-only, and never merged into their own libraries. */
+function sharedDefList(kind){
+  const out=[]; const spaces=DB.sharedDefs||{};
+  Object.keys(spaces).forEach(id=>((spaces[id]||{})[kind]||[]).forEach(x=>{
+    if(!out.some(y=>y.name===x.name)) out.push(Object.assign({},x,{fromShared:true}));
+  }));
+  return out;
+}
 // How long an entry of this type runs when it has no explicit end time —
 // each type can set its own (e.g. a procedure that always takes about an
 // hour); a type that hasn't set one falls back to half an hour, not
