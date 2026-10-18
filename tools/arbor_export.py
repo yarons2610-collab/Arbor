@@ -590,6 +590,17 @@ def build_sheets(w):
            for k, v in (w.db.get("inventory") or {}).items()]
     sheets.append(Sheet("Stock", ["Material", "Status", "Note"], inv, sort=[0], wide=[2]))
 
+    # the legacy outline, last: superseded by Timeline, but exporting it keeps
+    # the workbook a complete record of what the workspace still holds
+    doms = {d["id"]: d for d in (w.db.get("domains") or []) if d.get("id")}
+    outline = [[t.get("title") or "", (doms.get(t.get("domainId")) or {}).get("name") or "",
+                t.get("status") or "", t.get("deadline") or "", t.get("endDate") or "",
+                plain(t.get("notes"))]
+               for t in (w.db.get("tasks") or [])]
+    sheets.append(Sheet("Outline tasks",
+                        ["Name", "Soma", "Status", "Start", "End", "Notes"],
+                        outline, sort=[0], wide=[5]))
+
     return [s for s in sheets if s.rows]
 
 
