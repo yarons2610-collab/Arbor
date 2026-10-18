@@ -7744,10 +7744,16 @@ function renderExperiments(){
   hideDoneChk.addEventListener("change",()=>{ DB.config.expTaskHideDone=hideDoneChk.checked; persist(); renderExperiments(); });
   viewBySel.addEventListener("change",()=>{ DB.config.expViewBy=viewBySel.value; persist(); renderExperiments(); });
 
-  if(!DB.experiments.length){
+  /* A project holding no experiments used to be unreachable on this page: the
+     empty state fired on experiments alone and returned before a single
+     project was drawn, and Flat view only ever draws experiment cards. A
+     project shared with you arrives exactly like that — tasks, no experiments
+     — so none of it could be seen, whichever view was chosen. */
+  const hasExp=DB.experiments.length, hasProj=(DB.projects||[]).length;
+  if(!hasExp&&!hasProj){
     host.appendChild(Object.assign(document.createElement("div"),
-      {className:"empty",textContent:"No experiments yet."}));
-  } else if((DB.config.expViewBy||"flat")==="project"){
+      {className:"empty",textContent:"No projects or experiments yet."}));
+  } else if((DB.config.expViewBy||"flat")==="project"||!hasExp){
     // A lens on the same flat list, not a different one — every section below
     // draws its cards with the exact same drawExperimentCard used in Flat
     // view, just clustered by experiment.projectId instead of shown in one
@@ -7801,6 +7807,31 @@ function renderExperiments(){
       unassigned.forEach(ex=>grid.appendChild(drawExperimentCard(ex)));
     }
   } else {
+    // Flat stays flat — experiment cards in one grid — but the projects sit
+    // above it as chips, so one with nothing in it yet is still there to open.
+    if(hasProj){
+      const strip=document.createElement("div");
+      strip.style.cssText="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px";
+      strip.innerHTML=[...DB.projects]
+        .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")))
+        .map(pr=>{
+          const n=DB.experiments.filter(e=>e.projectId===pr.id).length
+                 +taskList().filter(t=>!t.isEvent&&t.projectId===pr.id).length;
+          return `<button type="button" class="proj-chip" data-id="${escAttr(pr.id)}"
+            style="display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line2);
+            background:var(--panel2);border-radius:20px;padding:4px 11px 4px 5px;cursor:pointer;
+            font-size:12px;color:var(--ink-dim)">
+            <span class="chip" style="background:${escAttr(pr.color||"#7db4ff")}"></span>
+            ${esc(pr.name||"(unnamed project)")}
+            ${n?`<span style="color:var(--ink-faint);font-size:11px">${n}</span>`:""}
+          </button>`;
+        }).join("");
+      host.appendChild(strip);
+      strip.querySelectorAll(".proj-chip").forEach(b=>{
+        const pr=(DB.projects||[]).find(x=>x.id===b.dataset.id);
+        if(pr) b.onclick=()=>projectModal(pr,()=>renderExperiments());
+      });
+    }
     const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
     DB.experiments.forEach(ex=>grid.appendChild(drawExperimentCard(ex)));
   }
