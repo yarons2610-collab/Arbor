@@ -1459,7 +1459,7 @@ let saveTimer=null, storageOK=null;
 let storageError=null;
 async function arborSave(db){
   try{
-    const res=await window.arbor.save(db);
+    const res=await window.arbor.save(privateDB(db));
     if(res&&res.ok===false) return String(res.error||"storage write failed");
     return null;
   }catch(e){ return String((e&&e.message)||e); }
@@ -1584,7 +1584,7 @@ async function loadDB(){
         const usable=isRealWorkspace(localCopy);
         if(usable) restoreSyncMark(localCopy); else lastSyncedBase=null;
         DB=usable?mergeWorkspaces(remote,localCopy,lastSyncedBase):remote;
-        const carried=JSON.stringify(DB)!==remoteJSON;
+        const carried=JSON.stringify(privateDB(DB))!==remoteJSON;
         lastSyncedBase=agreedBase;
         applyLocalView();   // this device's own filters/zoom, not the last device's
         migrate();
@@ -1941,14 +1941,88 @@ function mergeConfig(remoteCfg,localCfg,base,dead){
    record after its mark. A record is deleted while its deletion is newer than
    its revival. Both maps merge by keeping the later stamp, so every device
    converges on the same answer whatever order they sync in. */
+/* ── SHARING, PHASE 0: the fields and the split, with nothing shared yet ──
+   A workspace is about to stop being one person's private pile. Records gain
+   three things: who made them (`by`), whether they are shared (`share`), and —
+   in memory only — which shared project file they came from (`sp`).
+
+   Nothing here shares anything. With no shared projects, every record has no
+   `sp`, so every path below behaves exactly as it did before. That is the
+   point: the plumbing lands first and is proved inert, before the code that
+   can send anything anywhere exists. */
+const SHARE_PRIVATE="private", SHARE_SHARED="shared";
+// Collections whose records can be shared. Config lists, the legacy outline and
+// device state are not here, and so can never acquire a project marker.
+const SHAREABLE=["projects","experiments","schedule","animals","notes",
+                 "readings","protocols","other"];
+/* Who this workspace belongs to. One short token, made once and then fixed,
+   because it is baked into every id minted from here on. It syncs between this
+   person's own devices — they are the same person — and Phase 2 attaches a
+   display name to it when a shared space is joined. */
+function meId(){ return (DB.me&&DB.me.id)||"me"; }
+function ensureIdentity(){
+  if(!DB.me||typeof DB.me!=="object") DB.me={};
+  if(!DB.me.id){
+    // 4 characters is plenty to tell two people apart, and keeps ids readable
+    DB.me.id=Math.random().toString(36).slice(2,6).replace(/[^a-z0-9]/g,"x");
+  }
+  if(typeof DB.me.name!=="string") DB.me.name="";
+}
+/* A record's home. Undefined means this workspace's own private store; a string
+   is the id of the shared project file it belongs to. Never serialised: it
+   describes where a record lives, which is not a fact about the record. */
+function spOf(x){ return x&&x.__sp; }
+function setSp(x,sp){ if(!x)return x; if(sp)Object.defineProperty(x,"__sp",{value:sp,enumerable:false,configurable:true,writable:true}); else delete x.__sp; return x; }
+/* The workspace as this device's private store should hold it: everything that
+   is not in a shared project file. Used everywhere DB leaves memory, so a
+   shared record can never be written into the Gist or the local copy. */
+function privateDB(db){
+  const out={...db};
+  SHAREABLE.forEach(k=>{ if(Array.isArray(out[k])) out[k]=out[k].filter(x=>!spOf(x)); });
+  if(Array.isArray(out.animals)) out.animals=out.animals.map(a=>{
+    if(!Array.isArray(a.diary)||!a.diary.some(spOf)) return a;
+    return {...a,diary:a.diary.filter(e=>!spOf(e))};
+  });
+  return out;
+}
+/* Merging with the Gist is about private records only, but the result replaces
+   the whole in-memory workspace — so the shared records have to be lifted out
+   first and put back after, or a sync would quietly empty every shared project
+   from the screen. With nothing shared this is exactly the old merge. */
+function mergeIntoWorkspace(remote,base){
+  const held=[];
+  SHAREABLE.forEach(k=>(Array.isArray(DB[k])?DB[k]:[]).forEach(x=>{ if(spOf(x)) held.push([k,x]); }));
+  const heldDiary=[];
+  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(spOf(e)) heldDiary.push([a.id,e]); }));
+  const merged=mergeWorkspaces(remote,privateDB(DB),base);
+  held.forEach(([k,x])=>{ if(!Array.isArray(merged[k])) merged[k]=[]; 
+    if(!merged[k].some(y=>y&&y.id===x.id)) merged[k].push(x); });
+  if(heldDiary.length){
+    const byId=new Map((merged.animals||[]).filter(a=>a&&a.id).map(a=>[a.id,a]));
+    heldDiary.forEach(([aid,e])=>{ const a=byId.get(aid); if(!a)return;
+      if(!Array.isArray(a.diary)) a.diary=[];
+      if(!a.diary.some(y=>y&&y.id===e.id)) a.diary.push(e); });
+  }
+  return merged;
+}
+/* Every record this workspace holds and nobody has claimed yet is this
+   person's. Stamped on save rather than at each of the dozens of places a
+   record is created, so no creation path can be missed. */
+function stampAuthorship(){
+  const me=meId();
+  SHAREABLE.forEach(k=>(Array.isArray(DB[k])?DB[k]:[]).forEach(x=>{ if(x&&!x.by) x.by=me; }));
+  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&!e.by) e.by=me; }));
+}
 const MASS_MIN=5, MASS_MIN_DIARY=20, MASS_FRACTION=0.5;
 let recordBaseline=null;      // ids as of the last recorded save of a loaded workspace
 let allowMassRemoval=false;   // set only around an explicit restore, import or reset
 function idsOf(db){
   const out={};
-  MERGE_KEYS.forEach(k=>{ out[k]=new Set((Array.isArray(db[k])?db[k]:[]).map(x=>x&&x.id).filter(Boolean)); });
+  // records in a shared project file are not this store's to delete: their
+  // comings and goings are recorded in that file, by the code that owns it
+  MERGE_KEYS.forEach(k=>{ out[k]=new Set((Array.isArray(db[k])?db[k]:[]).filter(x=>!spOf(x)).map(x=>x&&x.id).filter(Boolean)); });
   out.diary=new Set();
-  (Array.isArray(db.animals)?db.animals:[]).forEach(a=>(a&&Array.isArray(a.diary)?a.diary:[]).forEach(e=>{ if(e&&e.id) out.diary.add(e.id); }));
+  (Array.isArray(db.animals)?db.animals:[]).forEach(a=>(a&&Array.isArray(a.diary)?a.diary:[]).forEach(e=>{ if(e&&e.id&&!spOf(e)) out.diary.add(e.id); }));
   out.inventory=new Set(Object.keys(db.inventory||{}));
   KEYED_CONFIG_LISTS.forEach(({key,idOf})=>{
     const l=(db.config||{})[key];
@@ -2166,14 +2240,14 @@ async function runSync(){
       // had never reached the Gist, so the next conflict read their absence
       // there as "deleted on another device" and dropped them for good.
       const agreedBase=snapshotBase(remote);
-      DB=mergeWorkspaces(remote,DB,lastSyncedBase);
+      DB=mergeIntoWorkspace(remote,lastSyncedBase);
       lastSyncedBase=agreedBase;
       resetRecordBaseline(); applyLocalView(); migrate();
       lastSyncedRemoteVersion=remote.__gistVersion;
       saveSyncMark();
       undoStack.length=0;   // those entries describe records this pull replaced
       localDirty=true; syncPending=true;
-      try{ await window.arbor.save(DB); }catch(e){}
+      try{ await window.arbor.save(privateDB(DB)); }catch(e){}
       render(); syncTopCollapsed();
       setSaveState(storageOK?"saved":"failed",storageFailDetail());
       return;
@@ -2183,12 +2257,12 @@ async function runSync(){
     // push can never take a record off the Gist by leaving it out.
     if(remote&&remote.domains&&healInPlace(DB,remote)){
       resetRecordBaseline();
-      try{ await window.arbor.save(DB); }catch(e){}
+      try{ await window.arbor.save(privateDB(DB)); }catch(e){}
       render();
     }
-    const pushedVersion=await gistSave(JSON.stringify(DB));
+    const pushedVersion=await gistSave(JSON.stringify(privateDB(DB)));
     if(pushedVersion) lastSyncedRemoteVersion=pushedVersion;
-    lastSyncedBase=snapshotBase(DB); saveSyncMark();
+    lastSyncedBase=snapshotBase(privateDB(DB)); saveSyncMark();
     lastSyncAt=Date.now(); syncBackoffUntil=0; syncFailures=0; localDirty=false; setSaveState("synced");
   }catch(e){
     lastSyncAt=Date.now();
@@ -2223,7 +2297,7 @@ async function flushSave(){
   if(!bootLoaded)return;
   clearTimeout(saveTimer);
   try{
-    const res=window.arbor.saveSync(DB);
+    const res=window.arbor.saveSync(privateDB(DB));
     if(res===false){ storageError="storage write failed"; storageOK=false;
       console.error("Arbor final save failed — workspace not written"); }
   }catch(e){ storageError=String((e&&e.message)||e); storageOK=false;
@@ -2277,14 +2351,14 @@ async function autoPull(){
       // through. Before this, the warning only cleared once an edit happened
       // to push.
       const agreedBase=snapshotBase(remote), remoteJSON=JSON.stringify(remote);
-      DB=mergeWorkspaces(remote,DB,lastSyncedBase);
-      const differs=JSON.stringify(DB)!==remoteJSON;
+      DB=mergeIntoWorkspace(remote,lastSyncedBase);
+      const differs=JSON.stringify(privateDB(DB))!==remoteJSON;
       lastSyncedBase=agreedBase;
       resetRecordBaseline(); applyLocalView(); migrate();
       lastSyncedRemoteVersion=remote.__gistVersion;
       saveSyncMark();
       undoStack.length=0;
-      try{ await window.arbor.save(DB); }catch(e){}
+      try{ await window.arbor.save(privateDB(DB)); }catch(e){}
       render(); syncTopCollapsed();
       if(differs){ localDirty=true; setSaveState("saved"); scheduleSync(); }
       else setSaveState("synced");
@@ -2296,13 +2370,13 @@ async function autoPull(){
     // reached the other on 12/10: what the Gist lacks without a deletion mark
     // stays here, and goes back up.
     const agreedBase=snapshotBase(remote), remoteJSON=JSON.stringify(remote);
-    DB=mergeWorkspaces(remote,DB,lastSyncedBase);
-    const differs=JSON.stringify(DB)!==remoteJSON;
+    DB=mergeIntoWorkspace(remote,lastSyncedBase);
+    const differs=JSON.stringify(privateDB(DB))!==remoteJSON;
     lastSyncedBase=agreedBase;
     resetRecordBaseline(); applyLocalView(); migrate();
     lastSyncedRemoteVersion=remote.__gistVersion; saveSyncMark();
     undoStack.length=0;   // those entries describe records this pull just replaced
-    try{ await window.arbor.save(DB); }catch(e){}          // keep the local disk copy in step too
+    try{ await window.arbor.save(privateDB(DB)); }catch(e){}          // keep the local disk copy in step too
     render(); syncTopCollapsed();
     if(differs){ localDirty=true; setSaveState("saved"); scheduleSync(); }
     else setSaveState("synced");
@@ -2546,6 +2620,12 @@ function migrate(){                       // backfill fields added in later vers
   }
   // the tag library itself, once every animal's label has been folded away
   if(DB.tags) delete DB.tags;
+  // Sharing, phase 0. Identity first: every id minted below carries it.
+  ensureIdentity();
+  // Private additions to shared records, keyed by the shared record's id. Empty
+  // until there is something shared to add to.
+  if(!DB.overlays||typeof DB.overlays!=="object") DB.overlays={};
+  stampAuthorship();
   // somata (DB.domains) gained a free-text outline: the plan for the project in
   // the user's own words. Additive only — nothing else about a soma changed.
   // A soma is a paper now: what was its free-text outline is its abstract, and
@@ -2749,7 +2829,12 @@ function migrate(){                       // backfill fields added in later vers
   // nothing, but they still have to reach disk and the Gist like any others.
   if(typeof topUpOpenDiarySeries==="function"&&topUpOpenDiarySeries()) persist();
 }
-const uid=p=>p+Math.random().toString(36).slice(2,8);
+/* An id now says who made it. Two people creating records at the same moment
+   in separate workspaces could otherwise land on the same six random
+   characters, and once both records are in one shared file that is
+   unrecoverable. The prefix stays first, so everything that tests a prefix
+   still works, and diaryOccId stays deterministic. */
+const uid=p=>p+meId()+"_"+Math.random().toString(36).slice(2,10);
 
 /* ---------- SEED: loads the user's uploaded workspace verbatim ---------- */
 function seed(){
@@ -12361,7 +12446,7 @@ function showGistSetup(){
       if(remote&&remote.domains){DB=remote;lastSyncedBase=snapshotBase(remote);applyLocalView();migrate();resetRecordBaseline();lastSyncedRemoteVersion=remote.__gistVersion;saveSyncMark();render();
         msg("Connected as @"+login+" — loaded your existing workspace ✓","var(--gcamp)");}
       else{msg("Connected as @"+login+" — saving current workspace…","var(--gcamp)");
-        lastSyncedRemoteVersion=await gistSave(JSON.stringify(DB)); lastSyncedBase=snapshotBase(DB); saveSyncMark();}
+        lastSyncedRemoteVersion=await gistSave(JSON.stringify(privateDB(DB))); lastSyncedBase=snapshotBase(privateDB(DB)); saveSyncMark();}
       setSaveState("synced");
       scheduleAutoPull();
       setTimeout(()=>closeModal(),1400);
@@ -12388,7 +12473,7 @@ document.getElementById("syncBtn").addEventListener("click",()=>showGistSetup())
 document.getElementById("saveState").addEventListener("click",()=>{
   const st=document.getElementById("saveState").dataset.state;
   if(st==="failed"||st==="noapi"||st==="off"||st==="syncwarn"||st==="throttled"){
-    download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");
+    download("arbor_workspace.json",JSON.stringify(privateDB(DB),null,2),"application/json");
     toast("JSON backup downloaded — import this via ⋯ to restore"); }
 });
 // best-effort flush when leaving or backgrounding the page
@@ -12919,7 +13004,7 @@ function renderMenuModal(){
       <button class="btn danger" id="m_reset">↺ Reset to seed</button></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`, {center:true});
   document.getElementById("m_history").addEventListener("click",openHistoryModal);
-  document.getElementById("m_export").addEventListener("click",()=>{download("arbor_workspace.json",JSON.stringify(DB,null,2),"application/json");toast("Exported JSON");});
+  document.getElementById("m_export").addEventListener("click",()=>{download("arbor_workspace.json",JSON.stringify(privateDB(DB),null,2),"application/json");toast("Exported JSON");});
   document.getElementById("m_excel").addEventListener("click",()=>{exportFullDatabaseExcel();toast("Exported Excel workbook");});
   document.getElementById("m_import").addEventListener("click",async ()=>{
     const text=await window.arbor.openJSON(); if(text==null)return;
