@@ -2423,6 +2423,7 @@ async function publishProject(pr,opts){
     await spaceWrite("space.json",next,idx.sha,`Arbor: share ${pr.name||pr.id}`);
   }
   markPublished(file);
+  sharedFileShas[pr.id]=sha; sharedBase[pr.id]=sharedFileBase(file);
   try{ localStorage.setItem(spaceCacheKey(pr.id),JSON.stringify({file,sha})); }catch(e){}
   // whatever moved out of the private store has to leave it there too
   resetRecordBaseline();
@@ -2518,6 +2519,7 @@ async function loadSharedProjects(){
 const SHARED_POLL_MS=5000, SHARED_PUSH_MS=1500, SHARED_MAX_TRIES=5;
 let spaceHeadSha=null;          // the repo's last-seen head commit
 const sharedLeft=new Set();     // projects left here, not to be re-discovered
+const sharedMissing={};         // polls in a row a project has been absent from the index
 /* The whole repository in one request: this sha moves whenever anything in it
    does. While it sits still there is nothing to fetch, and nothing to pay for. */
 async function spaceHead(){
@@ -2692,10 +2694,13 @@ async function sharedPoll(force){
   if(sharedInFlight||inSeeAs()||document.hidden||!bootLoaded||!spaceConnected())return;
   sharedInFlight=true; let changed=false;
   try{
+    noteSharedChanges();   // nothing stays stranded by the order things happened in
     let head=null;
     try{ head=await spaceHead(); }catch(e){ head=null; }
     // Nothing has been written since the last look, so there is nothing to read.
-    if(head&&head===spaceHeadSha&&!force){ return; }
+    // ...unless a project is part-way through being confirmed gone, which
+    // needs a second look at an index nothing has written to since the first.
+    if(head&&head===spaceHeadSha&&!force&&!Object.keys(sharedMissing).length){ return; }
     for(const p of sharedProjects()){ try{ if(await pullProject(p.id)) changed=true; }catch(e){} }
     try{
       const idx=await spaceLoadIndex();
@@ -2720,6 +2725,36 @@ async function sharedPoll(force){
             toast(`${(r.json.project&&r.json.project.name)||"A project"} was shared with you`);
           }catch(e){}
         }
+        /* ...and the mirror of it. Stopping sharing takes the project out of
+           the index but leaves its file in the repository, so a collaborator
+           polling the files it already holds would go on reading one that is
+           no longer shared with them — forever. Absence has to be acted on,
+           but carefully: it is also what a half-written index looks like, so
+           nothing goes until it has been missing twice, a project this
+           workspace created is never dropped on someone else's say-so, and
+           anything written here is kept as your own rather than destroyed. */
+        const listed=new Set((idx.json.projects||[]).map(e=>e&&e.id));
+        (DB.projects||[]).slice().forEach(p=>{
+          if(!p||!p.id) return;
+          if(listed.has(p.id)){ delete sharedMissing[p.id]; return; }
+          if(spOf(p)!==p.id) return;                       // not one that came from the space
+          if(p.id.indexOf("_"+meId()+"_")>=0) return;      // mine: only I decide
+          sharedMissing[p.id]=(sharedMissing[p.id]||0)+1;
+          if(sharedMissing[p.id]<2) return;
+          delete sharedMissing[p.id];
+          const name=p.name||"A project";
+          let kept=0;
+          SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{
+            if(spOf(x)===p.id&&x.by===meId()&&x.id!==p.id){ setSp(x,null); kept++; } }));
+          (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
+            if(spOf(e)===p.id&&e.by===meId()){ setSp(e,null); kept++; } }));
+          detachProjectFile(p.id);
+          delete sharedFileShas[p.id]; delete sharedBase[p.id]; delete sharedDirty[p.id];
+          try{ localStorage.removeItem(spaceCacheKey(p.id)); }catch(e){}
+          changed=true;
+          toast(kept?`${name} is no longer shared with you — your own ${kept} entr${kept===1?"y is":"ies are"} kept`
+                    :`${name} is no longer shared with you`);
+        });
       }
     }catch(e){}
     if(head) spaceHeadSha=head;
