@@ -2510,7 +2510,20 @@ async function loadSharedProjects(){
 
    Every write cites the version it read and retries on refusal, which is the
    thing a repository gives and a Gist cannot. */
-const SHARED_POLL_MS=20000, SHARED_PUSH_MS=1500, SHARED_MAX_TRIES=5;
+/* 20s was chosen when every poll cost one request per shared project, so the
+   bill grew with the number of projects. The head-commit check below made that
+   flat — one request per poll however much is shared — which buys an interval
+   short enough that a collaborator's edit lands while you are still looking at
+   the row it changed. */
+const SHARED_POLL_MS=5000, SHARED_PUSH_MS=1500, SHARED_MAX_TRIES=5;
+let spaceHeadSha=null;          // the repo's last-seen head commit
+const sharedLeft=new Set();     // projects left here, not to be re-discovered
+/* The whole repository in one request: this sha moves whenever anything in it
+   does. While it sits still there is nothing to fetch, and nothing to pay for. */
+async function spaceHead(){
+  const r=await spaceRequest("GET",`/repos/${spaceRepo()}/commits?per_page=1&t=${Date.now()}`);
+  return (r&&r[0]&&r[0].sha)||null;
+}
 let sharedBase={};        // per project: hashes of what we last agreed
 let sharedDirty={};       // per project: a change waiting to go out
 let sharedTimer=null, sharedPollTimer=null, sharedInFlight=false;
@@ -2675,23 +2688,54 @@ async function runSharedPush(){
     render();
   }
 }
-async function sharedPoll(){
+async function sharedPoll(force){
   if(sharedInFlight||inSeeAs()||document.hidden||!bootLoaded||!spaceConnected())return;
   sharedInFlight=true; let changed=false;
   try{
+    let head=null;
+    try{ head=await spaceHead(); }catch(e){ head=null; }
+    // Nothing has been written since the last look, so there is nothing to read.
+    if(head&&head===spaceHeadSha&&!force){ return; }
     for(const p of sharedProjects()){ try{ if(await pullProject(p.id)) changed=true; }catch(e){} }
     try{
       const idx=await spaceLoadIndex();
       if(idx.json&&idx.json.members){ DB.sharedMembers=DB.sharedMembers||{};
         idx.json.members.forEach(m=>{ if(m&&m.id&&JSON.stringify(DB.sharedMembers[m.id])!==JSON.stringify(m)){
           DB.sharedMembers[m.id]=m; changed=true; } }); }
+      /* A project shared after this device last started is named in the index
+         and nowhere else. Discovery used to happen only at boot, so being
+         invited to a project meant seeing nothing at all until you happened to
+         reload — the project simply was not there. */
+      if(idx.json){
+        const known=new Set((DB.projects||[]).map(x=>x&&x.id));
+        for(const entry of (idx.json.projects||[])){
+          if(!entry||!entry.id||known.has(entry.id)||sharedLeft.has(entry.id)) continue;
+          try{
+            const r=await spaceRead(entry.file||projectFilePath(entry.id));
+            if(!r.json) continue;
+            sharedFileShas[entry.id]=r.sha; sharedBase[entry.id]=sharedFileBase(r.json);
+            try{ localStorage.setItem(spaceCacheKey(entry.id),JSON.stringify({file:r.json,sha:r.sha})); }catch(e){}
+            detachProjectFile(entry.id); attachProjectFile(r.json);
+            resetRecordBaseline(); changed=true;
+            toast(`${(r.json.project&&r.json.project.name)||"A project"} was shared with you`);
+          }catch(e){}
+        }
+      }
     }catch(e){}
+    if(head) spaceHeadSha=head;
   } finally{ sharedInFlight=false; if(changed) render(); }
 }
 function startSharedSync(){
   clearInterval(sharedPollTimer);
   if(!spaceConnected())return;
   sharedPollTimer=setInterval(sharedPoll,SHARED_POLL_MS);
+  // Polling stops while the tab is hidden, so coming back would otherwise mean
+  // waiting out an interval before seeing anything. Ask once, straight away.
+  if(!startSharedSync._wired){
+    startSharedSync._wired=true;
+    document.addEventListener("visibilitychange",()=>{ if(!document.hidden) sharedPoll(true); });
+    window.addEventListener("focus",()=>sharedPoll(true));
+  }
 }
 /* ── SHARING, PHASE 5: taking things back ──────────────────────────────────
    Nothing shared is destroyed silently (R7). A deletion goes to a trash you
@@ -2802,6 +2846,7 @@ async function leaveSharedProject(pr,keepCopy){
     detachProjectFile(id);
   }
   pr.shared=undefined; setSp(pr,null);
+  sharedLeft.add(id);   // the index write below is not instant; do not re-add meanwhile
   delete sharedDirty[id]; delete sharedBase[id]; delete sharedFileShas[id];
   try{ localStorage.removeItem(spaceCacheKey(id)); }catch(e){}
   // the file stays in the repository; only the index stops pointing at it
