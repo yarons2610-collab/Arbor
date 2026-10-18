@@ -2934,11 +2934,7 @@ function projectsOfRecord(coll,x){
     const ex=x.experimentId?expById(x.experimentId):null;
     return ex&&ex.projectId?[ex.projectId]:[];
   }
-  if(coll==="animals"){
-    const out=new Set();
-    animalSteps(x.id).forEach(ex=>{ if(ex.projectId) out.add(ex.projectId); });
-    return [...out];
-  }
+  if(coll==="animals") return animalProjects(x.id).map(p=>p.id);
   // notes and library records attach by being linked from a project or one of
   // its experiments
   const kind={notes:"note",readings:"reading",protocols:"protocol",other:"other"}[coll];
@@ -7220,13 +7216,31 @@ function animalGroups(aid){
 function animalSteps(aid){
   return DB.experiments.filter(st=>(st.links||[]).some(l=>l.kind==="animal"&&l.id===aid)||(st.groups||{})[aid]);
 }
+/* An animal can sit in a project directly, without an experiment in between —
+   a project may not have experiments yet, or may never need them. Reading
+   membership only through experiments made such an animal belong to nothing,
+   so it could not be filtered by project and, once sharing existed, could not
+   be shared at all. */
+function animalProjectLinks(aid){
+  return (DB.projects||[]).filter(p=>(p.links||[]).some(l=>l.kind==="animal"&&l.id===aid));
+}
+// every project an animal belongs to, through an experiment or directly
+function animalProjects(aid){
+  const out=new Map();
+  animalSteps(aid).forEach(ex=>{ const p=ex.projectId&&projById(ex.projectId); if(p) out.set(p.id,p); });
+  animalProjectLinks(aid).forEach(p=>out.set(p.id,p));
+  return [...out.values()];
+}
 // "Experimental (CNO) › Group A", or just the experiment's own name, or
 // nothing — whatever is the most specific true thing about where this animal sits.
 function animalWhere(a){
   const g=animalGroups(a.id)[0];
   if(g)return `${g.st.title||"(unnamed experiment)"} \u203a ${g.g.name||"(unnamed group)"}`;
   const es=animalSteps(a.id);
-  return es.length?(es[0].title||"(unnamed experiment)"):"";
+  if(es.length) return es[0].title||"(unnamed experiment)";
+  // attached straight to a project, with no experiment in between
+  const ps=animalProjectLinks(a.id);
+  return ps.length?(ps[0].name||"(unnamed project)"):"";
 }
 // Which experiment an animal is shown as belonging to when it is in several —
 // settled by name so the answer never depends on storage order.
@@ -7263,32 +7277,43 @@ const edgeCSS=c=>c?`border-right:3px solid ${c};`:"";
 // put it into another one.
 // The same choice as mountAttachments, but for an animal that does not exist
 // yet: selections accumulate in `pending` and are written once it has an id.
+/* A new animal can be put into an experiment or straight into a project — the
+   same choice the editor gives once the animal exists. Offering only
+   experiments meant an animal for a project that has none could not be
+   attached to anything at all, and so could never be shared. */
 function mountPendingExperiments(host,pending){
   const draw=()=>{
-    const all=DB.experiments;
-    if(!all.length){ host.innerHTML=`<div class="pc-empty">No experiments yet.</div>`; return; }
+    const all=[...DB.experiments,...DB.projects];
+    if(!all.length){ host.innerHTML=`<div class="pc-empty">No experiments or projects yet.</div>`; return; }
+    const findOne=row=>all.find(x=>x.id===(row.expId||row.projectId));
     host.innerHTML=`${pending.map((row,i)=>{
-        const found=all.find(x=>x.id===row.expId); if(!found)return "";
+        const found=findOne(row); if(!found)return "";
+        const isExp=found.title!=null;
         return `<div class="ag-row" data-i="${i}">
-          <span class="ag-where">${esc(found.title||"(unnamed experiment)")}</span>
-          <select class="ag-pick"><option value="">—</option>${(found.groupDefs||[]).map(g=>
-            `<option value="${g.id}" ${row.groupId===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>
+          <span class="ag-where">${esc(entityLabel(found))}</span>
+          ${isExp?`<select class="ag-pick"><option value="">—</option>${(found.groupDefs||[]).map(g=>
+            `<option value="${g.id}" ${row.groupId===g.id?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("")}</select>`:""}
           <button class="ag-del" title="Remove">✕</button>
         </div>`;
-      }).join("")||`<div class="pc-empty">Not in any experiment yet.</div>`}
+      }).join("")||`<div class="pc-empty">Not in an experiment or project yet.</div>`}
       <div class="ag-add">
-        <select id="ag_pendsel"><option value="">＋ add to an experiment…</option>${
-          all.filter(x=>!pending.some(r=>r.expId===x.id))
-             .map(x=>`<option value="${x.id}">${esc(x.title||"(unnamed experiment)")}</option>`).join("")}</select>
+        <select id="ag_pendsel"><option value="">＋ add to an experiment or project…</option>${
+          expProjOptionsHTML(pending.map(r=>r.expId||r.projectId))}</select>
       </div>`;
     host.querySelectorAll(".ag-row").forEach(el=>{
       const row=pending[+el.dataset.i];
-      el.querySelector(".ag-pick").addEventListener("change",e=>{ row.groupId=e.target.value||null; });
+      const pick=el.querySelector(".ag-pick");
+      if(pick) pick.addEventListener("change",e=>{ row.groupId=e.target.value||null; });
       el.querySelector(".ag-del").onclick=()=>{ pending.splice(+el.dataset.i,1); draw(); };
     });
     host.querySelector("#ag_pendsel").addEventListener("change",e=>{
-      if(!e.target.value)return;
-      pending.push({expId:e.target.value,groupId:null}); draw();
+      const v=e.target.value; if(!v)return;
+      const found=expOrProjById(v); if(!found)return;
+      // an experiment has a title, a project a name — the same test the rest
+      // of the app uses to tell them apart
+      if(found.title!=null) pending.push({expId:v,groupId:null});
+      else pending.push({projectId:v,groupId:null});
+      draw();
     });
   };
   draw();
@@ -7370,10 +7395,11 @@ function applyPendingLinks(link,pending){
 // write the held choices onto the experiments now that the animal has an id
 function applyPendingExperiments(aid,pending){
   pending.forEach(row=>{
-    const st=expById(row.expId); if(!st)return;
+    const st=row.projectId?projById(row.projectId):expById(row.expId);
+    if(!st)return;
     st.links=st.links||[];
     if(!st.links.some(l=>l.kind==="animal"&&l.id===aid)) st.links.push({kind:"animal",id:aid});
-    if(row.groupId){ st.groups=st.groups||{}; st.groups[aid]=row.groupId; }
+    if(row.groupId&&!row.projectId){ st.groups=st.groups||{}; st.groups[aid]=row.groupId; }
   });
 }
 function mountAttachments(host,link,opts){
@@ -11685,8 +11711,9 @@ function renderAnimals(){
   // two-level picker (that was the old animalCohort naming/design bug)
   const inProject=(a,pid)=>{
     if(pid==="all")return true;
-    if(pid==="none")return !animalSteps(a.id).some(st=>st.projectId);
-    return animalSteps(a.id).some(st=>st.projectId===pid);
+    const ps=animalProjects(a.id);
+    if(pid==="none")return !ps.length;
+    return ps.some(p=>p.id===pid);
   };
   let list=DB.animals.filter(a=>
     inCage(a,animalCage) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
