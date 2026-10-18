@@ -2205,6 +2205,226 @@ function openSpaceSetup(){
     closeModal(); render(); toast("Disconnected from the shared repository");
   };
 }
+/* ── SHARING, PHASE 3: publishing, and the check that guards it ─────────────
+   Building the file a collaborator reads, and refusing to send it if anything
+   private is in it. The check runs before every write, in the app and in the
+   tests, because the resolver being right is the assumption everything else
+   rests on and assumptions are what fail quietly. */
+function projectFilePath(id){ return `projects/${id}.json`; }
+function spaceCacheKey(id){ return "arbor_space_file_"+id; }
+/* The definitions a shared record cannot be read without: an entry of type
+   "Behavior" means nothing without the definition of Behavior. Sent read-only
+   and labelled with whose library they came from. Free text inside a
+   definition is left out — sharing a library entry in full is its own,
+   deliberate act. */
+function buildDefs(file){
+  const used=new Set();
+  (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>used.add(e.type)));
+  const types=(DB.config.diaryTypes||[]).filter(t=>used.has(t.key)).map(t=>({
+    key:t.key,label:t.label,icon:t.icon,color:t.color,timeline:!!t.timeline,
+    fields:(t.fields||[]).map(f=>({key:f.key,label:f.label,type:f.type,options:f.options}))}));
+  const names=new Set(), sites=new Set();
+  (file.animals||[]).forEach(a=>((a.surgeryDetail||{}).injections||[]).forEach(i=>{
+    if(i.virus) names.add(i.virus); if(i.siteRegion) sites.add(i.siteRegion); if(i.partnerRegion) sites.add(i.partnerRegion); }));
+  return {
+    by:meId(),
+    diaryTypes:types,
+    viruses:(DB.config.virusLib||[]).filter(v=>names.has(v.name))
+      .map(v=>({name:v.name,type:v.type,promoter:v.promoter,titer:v.titer})),
+    sites:(DB.config.siteLib||[]).filter(x=>sites.has(x.name))
+      .map(x=>({name:x.name,ap:x.ap,ml:x.ml,dv:x.dv})),
+  };
+}
+/* Everything the resolver says belongs to this project, and nothing else. The
+   diary is filtered entry by entry, so a shared animal can carry private
+   entries that simply are not here. */
+function buildProjectFile(pr,prev){
+  const file={schema:1,projectId:pr.id,
+    project:{...pr,links:(pr.links||[]).slice()},
+    experiments:[],animals:[],schedule:[],notes:[],readings:[],protocols:[],other:[],
+    deletions:(prev&&prev.deletions)||{},revivals:(prev&&prev.revivals)||{},
+    written:{at:Date.now(),by:meId()}};
+  const mine=(coll,x)=>{ const r=resolveShare(coll,x); return r.shared&&r.project===pr.id; };
+  ["experiments","schedule","notes","readings","protocols","other"].forEach(coll=>{
+    (DB[coll]||[]).forEach(x=>{ if(mine(coll,x)) file[coll].push(JSON.parse(JSON.stringify(x))); });
+  });
+  (DB.animals||[]).forEach(a=>{
+    if(!mine("animals",a))return;
+    const copy=JSON.parse(JSON.stringify(a));
+    copy.diary=(a.diary||[]).filter(e=>{ const r=resolveShare("diary",e,a); return r.shared&&r.project===pr.id; })
+      .map(e=>JSON.parse(JSON.stringify(e)));
+    // an ambiguous animal keeps its profile but not the words written about it
+    const amb=projectsOfRecord("animals",a).some(id=>!isProjectShared(id));
+    if(amb){ copy.comments=""; copy.commentsRich=false; }
+    file.animals.push(copy);
+  });
+  file.defs=buildDefs(file);
+  return file;
+}
+/* Refuses the write rather than describing the problem afterwards. Looks for
+   three things: a record the resolver calls private, the id of any private
+   record anywhere in the file including inside links and group maps, and a run
+   of text long enough to have come from a private record. */
+const LEAK_TEXT_RUN=24;
+// singular, for sentences about one record
+const SHARE_ONE={projects:"project",experiments:"experiment",schedule:"timeline item",
+                 animals:"animal",notes:"note",readings:"paper",protocols:"protocol",
+                 other:"library record",diary:"diary entry"};
+function leakCheck(file,pr){
+  const problems=[];
+  const sharedIds=new Set();
+  // the project record itself lives at the top of the file, not in a list
+  if(file.project&&file.project.id) sharedIds.add(file.project.id);
+  ["experiments","schedule","notes","readings","protocols","other","animals"].forEach(coll=>{
+    (file[coll]||[]).forEach(x=>{
+      sharedIds.add(x.id);
+      const r=resolveShare(coll,DB[coll].find(y=>y.id===x.id)||x);
+      if(!r.shared||r.project!==pr.id) problems.push(`${coll} "${x.name||x.title||x.id}" is private but is in the file`);
+    });
+  });
+  (file.animals||[]).forEach(a=>{
+    const live=(DB.animals||[]).find(y=>y.id===a.id);
+    (a.diary||[]).forEach(e=>{ sharedIds.add(e.id);
+      const r=resolveShare("diary",(live&&(live.diary||[]).find(y=>y.id===e.id))||e,live||a);
+      if(!r.shared||r.project!==pr.id) problems.push(`a diary entry on ${a.name||a.id} is private but is in the file`);
+    });
+  });
+  // every id in this workspace that is NOT in the file must not appear in it
+  const json=JSON.stringify(file);
+  const privateIds=[];
+  SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{ if(x.id&&!sharedIds.has(x.id)) privateIds.push([coll,x]); }));
+  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e.id&&!sharedIds.has(e.id)) privateIds.push(["diary",e]); }));
+  privateIds.forEach(([coll,x])=>{
+    if(json.includes('"'+x.id+'"'))
+      problems.push(`the id of a private ${SHARE_ONE[coll]||coll} (${x.name||x.title||x.id}) appears in the file`);
+  });
+  // and no long run of a private record's own words
+  const texts=[];
+  privateIds.forEach(([coll,x])=>{
+    [x.notes,x.comments,x.title,x.name,x.question,x.description,x.outcome,
+     x.body,(x.data||{}).note].forEach(t=>{
+      const plain=richTextPlain(richBodyHTML(t,true)).trim();
+      if(plain.length>=LEAK_TEXT_RUN) texts.push([coll,x,plain]);
+    });
+  });
+  texts.forEach(([coll,x,t])=>{
+    for(let i=0;i+LEAK_TEXT_RUN<=t.length;i+=LEAK_TEXT_RUN){
+      const run=t.slice(i,i+LEAK_TEXT_RUN);
+      if(json.includes(run)){ problems.push(`text from a private ${SHARE_ONE[coll]||coll} appears in the file`); break; }
+    }
+  });
+  return [...new Set(problems)];
+}
+/* Marks every record the file carries as living in that file, so the private
+   store stops holding them. They stay in memory and on screen. */
+function markPublished(file){
+  const id=file.projectId;
+  const mark=(coll,ids)=>(DB[coll]||[]).forEach(x=>{ if(ids.has(x.id)) setSp(x,id); });
+  ["experiments","schedule","notes","readings","protocols","other"].forEach(coll=>
+    mark(coll,new Set((file[coll]||[]).map(x=>x.id))));
+  const animalIds=new Set((file.animals||[]).map(a=>a.id));
+  (DB.animals||[]).forEach(a=>{
+    if(!animalIds.has(a.id))return;
+    setSp(a,id);
+    const shared=new Set(((file.animals||[]).find(x=>x.id===a.id)||{diary:[]}).diary.map(e=>e.id));
+    (a.diary||[]).forEach(e=>{ if(shared.has(e.id)) setSp(e,id); });
+  });
+  (DB.projects||[]).forEach(p=>{ if(p.id===id) setSp(p,id); });
+}
+/* Share a project for the first time, or push what has changed since. R5: the
+   file is confirmed written before anything is taken out of the private store,
+   so a failure anywhere leaves everything where it was. */
+async function publishProject(pr,opts){
+  if(!spaceConnected()) throw new Error("This device is not connected to a shared repository.");
+  const path=projectFilePath(pr.id);
+  const cur=await spaceRead(path);
+  const file=buildProjectFile(pr,cur.json);
+  const problems=leakCheck(file,pr);
+  if(problems.length){
+    const e=new Error("Nothing was sent — "+problems[0]);
+    e.problems=problems; throw e;
+  }
+  const sha=await spaceWrite(path,file,cur.sha,
+    `Arbor: ${cur.json?"update":"share"} ${pr.name||pr.id}`);
+  // the index names it so the other side knows to look
+  const idx=await spaceLoadIndex();
+  const list=(idx.json&&idx.json.projects)||[];
+  if(!list.some(x=>x.id===pr.id)){
+    const next=idx.json||{schema:1,name:"Arbor shared space",members:[],projects:[]};
+    next.projects=list.concat([{id:pr.id,file:path,sharedBy:meId(),since:todayDateStr()}]);
+    await spaceWrite("space.json",next,idx.sha,`Arbor: share ${pr.name||pr.id}`);
+  }
+  markPublished(file);
+  try{ localStorage.setItem(spaceCacheKey(pr.id),JSON.stringify({file,sha})); }catch(e){}
+  // whatever moved out of the private store has to leave it there too
+  resetRecordBaseline();
+  await arborSave(DB);
+  if(!opts||!opts.quiet) toast(`Shared "${pr.name||"project"}"`);
+  return file;
+}
+/* The other side: take a project file and put its records into this workspace,
+   marked as belonging to that file. Records already here keep their place. */
+function attachProjectFile(file){
+  const id=file.projectId;
+  const put=(coll,rows)=>{
+    if(!Array.isArray(DB[coll])) DB[coll]=[];
+    (rows||[]).forEach(x=>{
+      const at=DB[coll].findIndex(y=>y&&y.id===x.id);
+      const rec=setSp(JSON.parse(JSON.stringify(x)),id);
+      if(at>=0) DB[coll][at]=rec; else DB[coll].push(rec);
+    });
+  };
+  if(file.project) put("projects",[file.project]);
+  ["experiments","schedule","notes","readings","protocols","other"].forEach(c=>put(c,file[c]));
+  (file.animals||[]).forEach(a=>{
+    const at=(DB.animals||[]).findIndex(y=>y&&y.id===a.id);
+    const copy=setSp(JSON.parse(JSON.stringify(a)),id);
+    copy.diary=(a.diary||[]).map(e=>setSp(JSON.parse(JSON.stringify(e)),id));
+    if(at>=0){
+      // keep any private entries this workspace holds on the same animal
+      const keep=((DB.animals[at].diary)||[]).filter(e=>!spOf(e));
+      copy.diary=copy.diary.concat(keep);
+      DB.animals[at]=copy;
+    } else DB.animals.push(copy);
+  });
+  // definitions the entries cannot be read without, kept apart from the
+  // person's own library
+  DB.sharedDefs=DB.sharedDefs||{};
+  if(file.defs) DB.sharedDefs[id]=file.defs;
+}
+/* Take them all back out — used before re-attaching, so a record removed from
+   the file disappears instead of lingering. */
+function detachProjectFile(id){
+  SHAREABLE.forEach(coll=>{ if(Array.isArray(DB[coll])) DB[coll]=DB[coll].filter(x=>spOf(x)!==id); });
+  (DB.animals||[]).forEach(a=>{ if(Array.isArray(a.diary)) a.diary=a.diary.filter(e=>spOf(e)!==id); });
+}
+let sharedFileShas={};
+/* Read every shared project this space lists and put it on screen. Falls back
+   to the cached copy, so a shared project is readable offline. */
+async function loadSharedProjects(){
+  if(!spaceConnected()) return 0;
+  let idx=null;
+  try{ idx=(await spaceLoadIndex()).json; }catch(e){ idx=null; }
+  const listed=(idx&&idx.projects)||[];
+  let n=0;
+  for(const entry of listed){
+    let file=null,sha=null;
+    try{ const r=await spaceRead(entry.file||projectFilePath(entry.id)); file=r.json; sha=r.sha; }
+    catch(e){ /* offline or unreachable: the cache below answers */ }
+    if(!file){
+      try{ const c=JSON.parse(localStorage.getItem(spaceCacheKey(entry.id))||"null"); if(c){ file=c.file; sha=c.sha; } }catch(e){}
+    } else {
+      try{ localStorage.setItem(spaceCacheKey(entry.id),JSON.stringify({file,sha})); }catch(e){}
+    }
+    if(!file) continue;
+    sharedFileShas[entry.id]=sha;
+    detachProjectFile(entry.id);
+    attachProjectFile(file);
+    n++;
+  }
+  if(n) resetRecordBaseline();
+  return n;
+}
 /* ── SHARING, PHASE 1: the resolver ─────────────────────────────────────────
    One function decides, for every record, whether it is shared, through which
    project, and why. It reads only the workspace and has no side effects, so the
@@ -6335,7 +6555,11 @@ function projectModal(pr,after){
             <button type="button" data-v="private" class="${projDefaults(pr).diary==="private"?"on":""}">Private</button>
           </div></div>
         <div class="share-note" id="pm_share_sum"></div>
-        <button type="button" class="btn ghost" id="pm_review" style="font-size:12px">What would be shared?</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn ghost" id="pm_review" style="font-size:12px">What would be shared?</button>
+          <button type="button" class="btn accent" id="pm_publish" style="font-size:12px">${
+            spaceConnected()?"Send to collaborator":"Set up sharing first"}</button>
+        </div>
       </div>
     </div>
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="pm_del">Delete project</button></div>
@@ -6408,6 +6632,23 @@ function projectModal(pr,after){
       persist(); paintShareSummary(); };
   });
   document.getElementById("pm_review").onclick=()=>{ save(); openShareReview(); };
+  document.getElementById("pm_publish").onclick=async()=>{
+    if(!spaceConnected()){ closeModal(); openSpaceSetup(); return; }
+    save();
+    if(!pr.shared){ toast("Turn sharing on for this project first"); return; }
+    const rev=shareReview();
+    const n=rev.counts.shared;
+    if(!confirm(`Send ${n} record${n===1?"":"s"} to your collaborator?\n\nThey will be able to read everything listed under "What would be shared?". Anything you have kept private stays on this device.`))return;
+    try{
+      shSum.textContent="Sending…";
+      await publishProject(pr);
+      paintShareSummary();
+    }catch(e){
+      shSum.textContent="";
+      // a refused send is the detector doing its job; say what it found
+      alert(String(e.message||e)+(e.problems&&e.problems.length>1?`\n\nand ${e.problems.length-1} more.`:""));
+    }
+  };
   paintShareSummary();
   document.getElementById("pm_del").onclick=()=>{
     const n=DB.experiments.filter(ex=>ex.projectId===pr.id).length;
@@ -13971,6 +14212,10 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
     resetRecordBaseline();   // deletions are recorded against what was loaded
     bootLoaded=true;         // from here on, saving and syncing are allowed
     render(); pruneOrphanFiles(); syncTopCollapsed();
+    // shared projects come after the private workspace, never before: they are
+    // attached to it, and attaching to a half-loaded workspace is how records
+    // end up in the wrong store
+    if(spaceConnected()) loadSharedProjects().then(n=>{ if(n) render(); }).catch(()=>{});
     // Save locally always (captures any seed/migration changes) — but NEVER push
     // to the Gist automatically on boot. Boot used to always call doWrite(), which
     // pushes to the Gist whenever a token exists, regardless of whether the load
