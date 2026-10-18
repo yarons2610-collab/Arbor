@@ -201,6 +201,9 @@
   .sr-more,.sr-empty{font-family:var(--mono);font-size:11px;color:var(--ink-faint);padding:6px 0}
   .sp-intro{font-size:12.5px;color:var(--ink-dim);line-height:1.6;margin:0 0 14px}
   .sp-msg{font-family:var(--mono);font-size:11.5px;min-height:16px;margin:8px 0 2px;line-height:1.5}
+  .sp-same{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-dim);
+    margin:0 0 10px;cursor:pointer;line-height:1.5}
+  .sp-same input{width:auto;margin:0;flex:0 0 auto}
   .sp-help{margin:6px 0 2px}
   .sp-help summary{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);cursor:pointer}
   .sp-help ol{font-size:12.5px;color:var(--ink-dim);line-height:1.6;margin:8px 0 0;padding-left:1.2em}
@@ -2076,7 +2079,13 @@ function stampAuthorship(){
    Each device keeps its own token. It is never the Gist token and can never
    reach a Gist. */
 const SPACE_TOKEN_KEY="arbor_space_token", SPACE_REPO_KEY="arbor_space_repo";
-function spaceToken(){ return localStorage.getItem(SPACE_TOKEN_KEY)||""; }
+// A classic token carrying both gist and repo reaches the private workspace and
+// the shared repository alike, so two tokens per person is one more than anyone
+// needs. When this flag is set the sync token does both jobs; the separate slot
+// stays for whoever wants the tighter split, or a fine-grained repo token.
+const SPACE_SAME_KEY="arbor_space_same_token";
+function spaceSameToken(){ return localStorage.getItem(SPACE_SAME_KEY)==="1"; }
+function spaceToken(){ return spaceSameToken()?gistToken():(localStorage.getItem(SPACE_TOKEN_KEY)||""); }
 function spaceRepo(){ return localStorage.getItem(SPACE_REPO_KEY)||""; }   // "owner/name"
 function spaceConnected(){ return !!(spaceToken()&&spaceRepo()); }
 async function spaceRequest(method,path,body){
@@ -2141,9 +2150,17 @@ async function spaceJoin(name){
    can read things it has no business reading. Checked at connect time and
    reported, rather than assumed. */
 async function spaceCheckToken(){
-  const out={login:null,repoOk:false,canWrite:false,scopeNarrow:null,note:""};
+  const out={login:null,repoOk:false,canWrite:false,scopeNarrow:null,note:"",noAccess:false};
   const me=await spaceRequest("GET","/user"); out.login=me&&me.login;
-  const repo=await spaceRequest("GET",`/repos/${spaceRepo()}`);
+  let repo=null;
+  try{ repo=await spaceRequest("GET",`/repos/${spaceRepo()}`); }
+  catch(e){
+    // GitHub answers a private repository you have no access to with 404, the
+    // same as one that does not exist. Saying "not found" sends people hunting
+    // for a typo when the real answer is that nobody invited them yet.
+    if(e&&e.status===404){ out.noAccess=true; return out; }
+    throw e;
+  }
   out.repoOk=!!repo;
   out.canWrite=!!(repo&&repo.permissions&&(repo.permissions.push||repo.permissions.admin));
   if(repo&&repo.private===false) out.note="This repository is public — anyone can read what you share into it.";
@@ -2163,8 +2180,10 @@ function openSpaceSetup(){
     <div class="fld"><label>Repository</label>
       <input id="sp_repo" placeholder="owner/arbor-shared" value="${escAttr(spaceRepo())}"
         autocomplete="off" style="font-family:var(--mono);font-size:12.5px"></div>
-    <div class="fld"><label>Your access token for it</label>
-      <input id="sp_tok" type="password" placeholder="github_pat_…" value="${connected?"••••••••••••":""}"
+    <label class="sp-same"><input type="checkbox" id="sp_same" ${spaceSameToken()?"checked":""}>
+      Use the same token I already connected for sync</label>
+    <div class="fld" id="sp_tokwrap" ${spaceSameToken()?'hidden':""}><label>Your access token for it</label>
+      <input id="sp_tok" type="password" placeholder="github_pat_…" value="${connected&&!spaceSameToken()?"••••••••••••":""}"
         autocomplete="off" style="font-family:var(--mono);font-size:12.5px"></div>
     <div class="fld"><label>Your name, as your collaborator sees it</label>
       <input id="sp_name" value="${escAttr(spaceMemberName())}" placeholder="Yaron"></div>
@@ -2176,6 +2195,9 @@ function openSpaceSetup(){
           <span class="mono">github.com/settings/tokens</span> with
           <b>Contents: read and write</b>, and pastes it here. Never share a token
           with each other.</li>
+        <li>One token can do both jobs: a <b>classic</b> token with <b>gist</b> and
+          <b>repo</b> checked covers your own workspace and the shared repository.
+          Connect it under Sync first, then tick the box above and you are done.</li>
       </ol>
       <p class="sp-tip">A token can only be limited to a single repository when that
         repository belongs to you, or to a GitHub organisation you are a member of.
@@ -2194,16 +2216,25 @@ function openSpaceSetup(){
   document.getElementById("sp_go").onclick=async()=>{
     const repo=document.getElementById("sp_repo").value.trim().replace(/^https?:\/\/github\.com\//,"").replace(/\.git$/,"");
     const tokIn=document.getElementById("sp_tok").value.trim();
+    const same=document.getElementById("sp_same").checked;
     const name=document.getElementById("sp_name").value.trim();
     if(!/^[^/\s]+\/[^/\s]+$/.test(repo)){ msg("Write the repository as owner/name.","var(--overdue)"); return; }
-    const tok=(tokIn&&!/^•+$/.test(tokIn))?tokIn:spaceToken();
+    if(same&&!gistToken()){ msg("Connect your sync token first, under Sync across devices.","var(--overdue)"); return; }
+    const prevRepo=spaceRepo(), prevTok=localStorage.getItem(SPACE_TOKEN_KEY)||"", prevSame=spaceSameToken();
+    const tok=same?gistToken():((tokIn&&!/^•+$/.test(tokIn))?tokIn:prevTok);
     if(!tok){ msg("Paste your token for that repository.","var(--overdue)"); return; }
-    const prevRepo=spaceRepo(), prevTok=spaceToken();
-    localStorage.setItem(SPACE_REPO_KEY,repo); localStorage.setItem(SPACE_TOKEN_KEY,tok);
+    localStorage.setItem(SPACE_REPO_KEY,repo);
+    if(same) localStorage.setItem(SPACE_SAME_KEY,"1");
+    else { localStorage.removeItem(SPACE_SAME_KEY); localStorage.setItem(SPACE_TOKEN_KEY,tok); }
     msg("Checking…");
     try{
       const chk=await spaceCheckToken();
-      if(!chk.canWrite){ throw new Error("That token cannot write to "+repo+"."); }
+      if(chk.noAccess){ throw new Error("@"+chk.login+" cannot see "+repo+
+        ". Either the name is wrong, or you have not been given access to it yet — a private "+
+        "repository looks exactly like a missing one. Ask its owner to add you as a collaborator "+
+        "(or, if it is in an organisation, to invite you), accept the invitation by email, then check again."); }
+      if(!chk.canWrite){ throw new Error("@"+chk.login+" can read "+repo+" but not write to it. "+
+        "Whoever owns it needs to give you Write, not Read."); }
       DB.me.name=name||DB.me.name||chk.login||"me"; persist();
       await spaceJoin(DB.me.name);
       const warn=[chk.note,
@@ -2215,13 +2246,21 @@ function openSpaceSetup(){
       // a failed check must not leave a half-connected device behind
       if(prevRepo) localStorage.setItem(SPACE_REPO_KEY,prevRepo); else localStorage.removeItem(SPACE_REPO_KEY);
       if(prevTok) localStorage.setItem(SPACE_TOKEN_KEY,prevTok); else localStorage.removeItem(SPACE_TOKEN_KEY);
-      msg(String(e.message||e).slice(0,160),"var(--overdue)");
+      if(prevSame) localStorage.setItem(SPACE_SAME_KEY,"1"); else localStorage.removeItem(SPACE_SAME_KEY);
+      msg(String(e.message||e).slice(0,400),"var(--overdue)");
     }
+  };
+  const same=document.getElementById("sp_same");
+  same.onchange=()=>{
+    document.getElementById("sp_tokwrap").hidden=same.checked;
+    if(same.checked&&!gistToken()) msg("Connect your sync token first, under Sync across devices.","var(--amber)");
+    else msg("");
   };
   const d=document.getElementById("sp_disc");
   if(d) d.onclick=()=>{
     if(!confirm("Disconnect this device from the shared repository? Shared projects stop updating here. Nothing is deleted."))return;
     localStorage.removeItem(SPACE_TOKEN_KEY); localStorage.removeItem(SPACE_REPO_KEY);
+    localStorage.removeItem(SPACE_SAME_KEY);
     closeModal(); render(); toast("Disconnected from the shared repository");
   };
 }
@@ -13736,7 +13775,9 @@ function showGistSetup(){
          &nbsp;&nbsp;&nbsp;→ <b>Personal access tokens → Tokens (classic)</b><br>
          &nbsp;&nbsp;&nbsp;→ <b>Generate new token (classic)</b><br>
       2. Name: anything &middot; Expiration: <b>No expiration</b><br>
-      3. Scope: check <b>gist</b> only<br>
+      3. Scope: check <b>gist</b><br>
+         &nbsp;&nbsp;&nbsp;<span style="color:var(--ink-faint)">also check <b>repo</b> if you
+         share projects with a collaborator — then this one token does both</span><br>
       4. Click Generate, copy the token (starts with <b>ghp_</b>)
     </div>
     <div class="fld"><label>Paste your token here</label>
