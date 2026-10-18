@@ -199,6 +199,12 @@
   .sr-label{flex:1;min-width:0;font-size:12.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sr-why{font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 1 auto;text-align:right}
   .sr-more,.sr-empty{font-family:var(--mono);font-size:11px;color:var(--ink-faint);padding:6px 0}
+  .sp-intro{font-size:12.5px;color:var(--ink-dim);line-height:1.6;margin:0 0 14px}
+  .sp-msg{font-family:var(--mono);font-size:11.5px;min-height:16px;margin:8px 0 2px;line-height:1.5}
+  .sp-help{margin:6px 0 2px}
+  .sp-help summary{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);cursor:pointer}
+  .sp-help ol{font-size:12.5px;color:var(--ink-dim);line-height:1.6;margin:8px 0 0;padding-left:1.2em}
+  .sp-help .mono{font-family:var(--mono);font-size:11.5px;color:var(--ink)}
   .see-as-bar{position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;gap:12px;align-items:center;justify-content:center;
     flex-wrap:wrap;background:linear-gradient(180deg,#2a2112,#1d1708);border-top:1px solid var(--gold);
     color:var(--gold);font-family:var(--mono);font-size:11.5px;
@@ -2043,6 +2049,162 @@ function stampAuthorship(){
   SHAREABLE.forEach(k=>(Array.isArray(DB[k])?DB[k]:[]).forEach(x=>{ if(x&&!x.by) x.by=me; }));
   (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&!e.by) e.by=me; }));
 }
+/* ── SHARING, PHASE 2: the shared space ─────────────────────────────────────
+   Shared data lives in a private GitHub repository you both have access to, not
+   in a Gist. A token that can write one of your Gists can write every Gist you
+   own, including the private workspace — GitHub has no way to narrow it — and a
+   Gist has one owner, so two people cannot each write with their own login. A
+   repository fixes both: each person uses a token limited to that one
+   repository, and every write cites the version it read, so neither of you can
+   overwrite the other unseen.
+
+   Each device keeps its own token. It is never the Gist token and can never
+   reach a Gist. */
+const SPACE_TOKEN_KEY="arbor_space_token", SPACE_REPO_KEY="arbor_space_repo";
+function spaceToken(){ return localStorage.getItem(SPACE_TOKEN_KEY)||""; }
+function spaceRepo(){ return localStorage.getItem(SPACE_REPO_KEY)||""; }   // "owner/name"
+function spaceConnected(){ return !!(spaceToken()&&spaceRepo()); }
+async function spaceRequest(method,path,body){
+  const r=await fetch("https://api.github.com"+path,{
+    method,cache:"no-store",
+    headers:{"Authorization":"token "+spaceToken(),"Accept":"application/vnd.github+json",
+             "Content-Type":"application/json"},
+    body:body?JSON.stringify(body):undefined});
+  if(!r.ok){
+    const t=await r.text(); let detail=t.slice(0,200);
+    try{ const j=JSON.parse(t); if(j&&j.message) detail=j.message; }catch(_){}
+    const err=new Error("GitHub "+r.status+": "+detail);
+    err.status=r.status;
+    const ra=r.headers.get("retry-after"); if(ra) err.retryAfter=+ra||60;
+    throw err;
+  }
+  return r.status===204?null:r.json();
+}
+// base64 that survives Hebrew, arrows and anything else a note may hold
+function b64encode(str){
+  const bytes=new TextEncoder().encode(str); let bin="";
+  bytes.forEach(b=>{ bin+=String.fromCharCode(b); });
+  return btoa(bin);
+}
+function b64decode(b64){
+  const bin=atob(String(b64||"").replace(/\s/g,""));
+  const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+/* Reading a file gives its content and the sha that identifies this version;
+   writing quotes that sha back, and GitHub refuses the write if the file has
+   moved on. That is the compare-and-swap a Gist cannot do. */
+async function spaceRead(path){
+  const repo=spaceRepo();
+  try{
+    const r=await spaceRequest("GET",`/repos/${repo}/contents/${path}?ref=main&t=${Date.now()}`);
+    return {json:JSON.parse(b64decode(r.content)),sha:r.sha};
+  }catch(e){ if(e.status===404) return {json:null,sha:null}; throw e; }
+}
+async function spaceWrite(path,obj,sha,message){
+  const repo=spaceRepo();
+  const body={message:message||`Arbor: update ${path}`,content:b64encode(JSON.stringify(obj,null,1)),branch:"main"};
+  if(sha) body.sha=sha;
+  const r=await spaceRequest("PUT",`/repos/${repo}/contents/${path}`,body);
+  return r&&r.content&&r.content.sha;
+}
+/* Who you are in the space. The member id is the one baked into every id this
+   workspace mints, so it is settled once and then left alone. */
+function spaceMemberName(){ return (DB.me&&DB.me.name)||""; }
+async function spaceLoadIndex(){ return spaceRead("space.json"); }
+async function spaceJoin(name){
+  const {json,sha}=await spaceLoadIndex();
+  const idx=json||{schema:1,name:"Arbor shared space",members:[],projects:[]};
+  const me={id:meId(),name:name||spaceMemberName()||"me",joined:todayDateStr()};
+  const at=idx.members.findIndex(m=>m.id===me.id);
+  if(at>=0) idx.members[at]={...idx.members[at],...me}; else idx.members.push(me);
+  await spaceWrite("space.json",idx,sha,`Arbor: ${me.name} joined`);
+  return idx;
+}
+/* A token that can reach more than the one shared repository is a token that
+   can read things it has no business reading. Checked at connect time and
+   reported, rather than assumed. */
+async function spaceCheckToken(){
+  const out={login:null,repoOk:false,canWrite:false,scopeNarrow:null,note:""};
+  const me=await spaceRequest("GET","/user"); out.login=me&&me.login;
+  const repo=await spaceRequest("GET",`/repos/${spaceRepo()}`);
+  out.repoOk=!!repo;
+  out.canWrite=!!(repo&&repo.permissions&&(repo.permissions.push||repo.permissions.admin));
+  if(repo&&repo.private===false) out.note="This repository is public — anyone can read what you share into it.";
+  try{
+    // a fine-grained token limited to one repository lists exactly that one
+    const list=await spaceRequest("GET","/installation/repositories");
+    out.scopeNarrow=!!(list&&list.total_count===1);
+  }catch(e){ out.scopeNarrow=null; }   // classic tokens cannot answer this
+  return out;
+}
+function openSpaceSetup(){
+  const connected=spaceConnected();
+  modal(`<h3>Sharing with a collaborator</h3>
+    <p class="sp-intro">Shared projects live in a private GitHub repository you both have access to.
+      Your own workspace keeps syncing to your Gist exactly as before, and nothing from it goes
+      into the repository except the projects you choose to share.</p>
+    <div class="fld"><label>Repository</label>
+      <input id="sp_repo" placeholder="owner/arbor-shared" value="${escAttr(spaceRepo())}"
+        autocomplete="off" style="font-family:var(--mono);font-size:12.5px"></div>
+    <div class="fld"><label>Your access token for it</label>
+      <input id="sp_tok" type="password" placeholder="github_pat_…" value="${connected?"••••••••••••":""}"
+        autocomplete="off" style="font-family:var(--mono);font-size:12.5px"></div>
+    <div class="fld"><label>Your name, as your collaborator sees it</label>
+      <input id="sp_name" value="${escAttr(spaceMemberName())}" placeholder="Yaron"></div>
+    <details class="sp-help"><summary>How to set this up</summary>
+      <ol>
+        <li>Create a <b>private</b> repository you both can write — one owned by a GitHub
+          organisation you both belong to, since a single-repository token cannot be made
+          for a repository owned by somebody else's personal account.</li>
+        <li>Add your collaborator to it with write access.</li>
+        <li>Each of you makes your own fine-grained token at
+          <span class="mono">github.com/settings/tokens</span>, limited to that one repository,
+          with <b>Contents: read and write</b>.</li>
+        <li>Paste yours here. Never share a token with each other.</li>
+      </ol></details>
+    <div id="sp_msg" class="sp-msg"></div>
+    <div class="actions">
+      ${connected?'<button class="btn danger" id="sp_disc" style="margin-right:auto">Disconnect</button>':""}
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn accent" id="sp_go">${connected?"Check again":"Connect"}</button>
+    </div>`,{center:true});
+  const msg=(t,c)=>{ const el=document.getElementById("sp_msg"); el.textContent=t; el.style.color=c||"var(--ink-faint)"; };
+  document.getElementById("sp_go").onclick=async()=>{
+    const repo=document.getElementById("sp_repo").value.trim().replace(/^https?:\/\/github\.com\//,"").replace(/\.git$/,"");
+    const tokIn=document.getElementById("sp_tok").value.trim();
+    const name=document.getElementById("sp_name").value.trim();
+    if(!/^[^/\s]+\/[^/\s]+$/.test(repo)){ msg("Write the repository as owner/name.","var(--overdue)"); return; }
+    const tok=(tokIn&&!/^•+$/.test(tokIn))?tokIn:spaceToken();
+    if(!tok){ msg("Paste your token for that repository.","var(--overdue)"); return; }
+    const prevRepo=spaceRepo(), prevTok=spaceToken();
+    localStorage.setItem(SPACE_REPO_KEY,repo); localStorage.setItem(SPACE_TOKEN_KEY,tok);
+    msg("Checking…");
+    try{
+      const chk=await spaceCheckToken();
+      if(!chk.canWrite){ throw new Error("That token cannot write to "+repo+"."); }
+      DB.me.name=name||DB.me.name||chk.login||"me"; persist();
+      await spaceJoin(DB.me.name);
+      const warn=[chk.note,
+        chk.scopeNarrow===false?"This token can reach more than this one repository — a token limited to it alone is safer.":""]
+        .filter(Boolean).join(" ");
+      msg(`Connected as @${chk.login}.`+(warn?" "+warn:""),warn?"var(--amber)":"var(--gcamp)");
+      setTimeout(()=>{ closeModal(); render(); },warn?2600:1200);
+    }catch(e){
+      // a failed check must not leave a half-connected device behind
+      if(prevRepo) localStorage.setItem(SPACE_REPO_KEY,prevRepo); else localStorage.removeItem(SPACE_REPO_KEY);
+      if(prevTok) localStorage.setItem(SPACE_TOKEN_KEY,prevTok); else localStorage.removeItem(SPACE_TOKEN_KEY);
+      msg(String(e.message||e).slice(0,160),"var(--overdue)");
+    }
+  };
+  const d=document.getElementById("sp_disc");
+  if(d) d.onclick=()=>{
+    if(!confirm("Disconnect this device from the shared repository? Shared projects stop updating here. Nothing is deleted."))return;
+    localStorage.removeItem(SPACE_TOKEN_KEY); localStorage.removeItem(SPACE_REPO_KEY);
+    closeModal(); render(); toast("Disconnected from the shared repository");
+  };
+}
 /* ── SHARING, PHASE 1: the resolver ─────────────────────────────────────────
    One function decides, for every record, whether it is shared, through which
    project, and why. It reads only the workspace and has no side effects, so the
@@ -2231,6 +2393,7 @@ function openShareReview(){
       <button type="button" data-b="private">Private <span class="sr-n">${rev.counts.private}</span></button></div>
     <div id="sr_body" class="sr-body"></div>
     <div class="actions">
+      <button class="btn ghost" id="sr_space" style="margin-right:auto">⚙ ${spaceConnected()?"Shared repository":"Set up sharing"}</button>
       <button class="btn ghost" id="sr_seeas">👁 See as collaborator</button>
       <button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
   const body=document.getElementById("sr_body");
@@ -2240,6 +2403,7 @@ function openShareReview(){
     document.querySelectorAll(".sr-tabs button").forEach(x=>x.classList.toggle("on",x===b));
     paint(b.dataset.b);
   });
+  document.getElementById("sr_space").onclick=()=>{ closeModal(); openSpaceSetup(); };
   document.getElementById("sr_seeas").onclick=()=>{ closeModal(); enterSeeAs(); };
 }
 let seeAs=null;
