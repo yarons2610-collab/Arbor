@@ -206,6 +206,13 @@
   .sp-help ol{font-size:12.5px;color:var(--ink-dim);line-height:1.6;margin:8px 0 0;padding-left:1.2em}
   .sp-tip{font-size:12px;color:var(--ink-faint);line-height:1.6;margin:10px 0 0;
     border-left:2px solid var(--line2);padding-left:10px}
+  /* who made it: its own channel, so the project's own colour keeps its meaning */
+  .by-badge{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+    width:14px;height:14px;border-radius:50%;font-family:var(--mono);font-size:8.5px;
+    font-weight:700;color:#0b0e14;margin-right:5px;vertical-align:1px}
+  .cal-evt-timed .by-badge,.cal-evt .by-badge{width:12px;height:12px;font-size:7.5px;margin-right:4px}
+  .sr-bycol{display:flex;align-items:center;gap:7px;margin-right:auto;font-size:12.5px;color:var(--ink-dim);cursor:pointer}
+  .sr-bycol input{width:auto;margin:0}
   .sp-help .mono{font-family:var(--mono);font-size:11.5px;color:var(--ink)}
   .see-as-bar{position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;gap:12px;align-items:center;justify-content:center;
     flex-wrap:wrap;background:linear-gradient(180deg,#2a2112,#1d1708);border-top:1px solid var(--gold);
@@ -1394,6 +1401,7 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   expTaskSort:"alpha", expTaskGroup:"none", notesSort:"updated_desc",
   // Notes list filter: search text, and the experiments/projects picked (any of them).
   notesFilter:{q:"",links:[]}, notesView:"cards", notesGroup:"owner", matSubTab:"sites", calZoom:"auto",
+  colourByAuthor:false,
   // Whether the Timeline's all-day strip and the app's own top bar are
   // collapsed to reclaim vertical space, mainly relevant on a phone.
   calAlldayCollapsed:false, topCollapsed:false,
@@ -1886,7 +1894,7 @@ function changedHere(base,coll,id,obj){
    the calendar jumping zoom while being read. Kept here instead, and put back
    over whatever a pull brings in. */
 const LOCAL_VIEW_KEYS=["calMode","calFilters","calAlldayCollapsed","topCollapsed",
-  "animalFilters","notesFilter","notesSort","notesView","notesGroup","matSubTab","calZoom","expTaskSort","expTaskGroup","expViewBy"];
+  "animalFilters","notesFilter","notesSort","notesView","notesGroup","matSubTab","calZoom","colourByAuthor","expTaskSort","expTaskGroup","expViewBy"];
 const VIEW_STATE_KEY="arbor_view_state";
 function saveLocalView(){
   try{
@@ -2267,6 +2275,14 @@ function buildProjectFile(pr,prev){
   });
   file.defs=buildDefs(file);
   file.libraries=buildSharedLibraries(pr,file);
+  /* Who everyone is travels with the file, not only in space.json. Otherwise a
+     name learned at boot is all you ever have, and somebody who joined since
+     shows up as a raw id on every row they made. Carried in the file, it also
+     survives being read from the offline cache. */
+  const seen={}; Object.keys(DB.sharedMembers||{}).forEach(k=>{ seen[k]=DB.sharedMembers[k]; });
+  seen[meId()]={id:meId(),name:(DB.me&&DB.me.name)||""};
+  (prev&&prev.members||[]).forEach(m=>{ if(m&&m.id&&!seen[m.id]) seen[m.id]=m; });
+  file.members=Object.values(seen);
   return file;
 }
 /* Refuses the write rather than describing the problem afterwards. Looks for
@@ -2399,6 +2415,8 @@ function attachProjectFile(file){
   // person's own library
   DB.sharedDefs=DB.sharedDefs||{};
   if(file.defs) DB.sharedDefs[id]=file.defs;
+  if(file.members) { DB.sharedMembers=DB.sharedMembers||{};
+    file.members.forEach(m=>{ if(m&&m.id) DB.sharedMembers[m.id]=m; }); }
   DB.sharedLibs=DB.sharedLibs||{};
   if(file.libraries) DB.sharedLibs[id]=file.libraries;
 }
@@ -2430,6 +2448,8 @@ async function loadSharedProjects(){
     }
     if(!file) continue;
     sharedFileShas[entry.id]=sha;
+    if(idx&&idx.members){ DB.sharedMembers=DB.sharedMembers||{};
+      idx.members.forEach(m=>{ if(m&&m.id) DB.sharedMembers[m.id]=m; }); }
     detachProjectFile(entry.id);
     attachProjectFile(file);
     n++;
@@ -2608,6 +2628,12 @@ async function sharedPoll(){
   sharedInFlight=true; let changed=false;
   try{
     for(const p of sharedProjects()){ try{ if(await pullProject(p.id)) changed=true; }catch(e){} }
+    try{
+      const idx=await spaceLoadIndex();
+      if(idx.json&&idx.json.members){ DB.sharedMembers=DB.sharedMembers||{};
+        idx.json.members.forEach(m=>{ if(m&&m.id&&JSON.stringify(DB.sharedMembers[m.id])!==JSON.stringify(m)){
+          DB.sharedMembers[m.id]=m; changed=true; } }); }
+    }catch(e){}
   } finally{ sharedInFlight=false; if(changed) render(); }
 }
 function startSharedSync(){
@@ -2792,6 +2818,53 @@ function openSharedActivity(pr){
       :`<div class="sr-empty">Nothing recorded yet.</div>`}</div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
 }
+/* ── WHO MADE IT ────────────────────────────────────────────────────────────
+   Colour on the Timeline already means something — a project's hue, an
+   experiment's shade of it — so authorship cannot take it over without
+   destroying what the colours say. It gets its own channel instead: a small
+   initial in that person's colour, and, if you want it louder, their colour on
+   the chip's left edge where the project's own colour is least load-bearing. */
+const MEMBER_COLOURS=["#7db4ff","#f2b756","#a98cff","#3fd0d6","#ff8a6b","#54e08a"];
+function spaceMembers(){
+  const out=[];
+  Object.keys(DB.sharedMembers||{}).forEach(id=>{ out.push(DB.sharedMembers[id]); });
+  return out;
+}
+function memberOf(id){
+  if(!id) return null;
+  if(id===meId()) return {id,name:(DB.me&&DB.me.name)||"You",colour:memberColour(id),you:true};
+  const m=(DB.sharedMembers||{})[id];
+  return m?Object.assign({},m,{colour:memberColour(id)}):{id,name:id,colour:memberColour(id)};
+}
+/* By position in the membership, sorted by id so both sides agree without
+   having to negotiate. Hashing the id was the obvious thing and was wrong: two
+   people land on the same colour often enough that it happened on the first
+   test, and a shared colour is worse than no colour. Derived every time rather
+   than stored, so it cannot be fixed at a value that later collides. */
+function memberColour(id){
+  const ids=Object.keys(DB.sharedMembers||{});
+  if(id&&!ids.includes(id)) ids.push(id);
+  ids.sort();
+  const at=ids.indexOf(id);
+  return MEMBER_COLOURS[(at<0?0:at)%MEMBER_COLOURS.length];
+}
+function memberInitial(id){
+  const m=memberOf(id);
+  const n=String((m&&m.name)||id||"?").trim();
+  return (n[0]||"?").toUpperCase();
+}
+// shown only on records somebody else made, in a project you share — your own
+// work does not need a badge on every row
+function authorBadgeHTML(x){
+  if(!x||!spOf(x))return "";
+  const by=x.by; if(!by||by===meId())return "";
+  const m=memberOf(by);
+  return `<span class="by-badge" style="background:${m.colour}" title="${escAttr(m.name||by)}">${esc(memberInitial(by))}</span>`;
+}
+function authorEdge(x){
+  if(!DB.config.colourByAuthor||!x||!spOf(x))return null;
+  return x.by?memberColour(x.by):null;
+}
 /* ── SHARING, PHASE 6: libraries ────────────────────────────────────────────
    Sending the definitions a record needs is one thing; sharing a library is
    another, and it is deliberate per library rather than implied. Entries show
@@ -2972,7 +3045,28 @@ function shareRowHTML(coll,x,parentAnimal){
       ? `Shared with your collaborator — ${esc(r.why)}`
       : `Private — ${esc(r.why)}`}</div></div>`;
 }
-function wireShareRow(host,x,onChange){
+/* Change the project a task belongs to and its sharing outcome changes with
+   it. Repainted where it stands rather than by reopening the editor, which
+   would throw away whatever else is half-typed. Also covers a record moving
+   from no project to one, where the control itself appears for the first
+   time. */
+function refreshShareRow(host,coll,x,parentAnimal,onChange){
+  if(!host)return;
+  const html=shareRowHTML(coll,x,parentAnimal);
+  const existing=host.querySelector(".share-row");
+  if(!html){ if(existing) existing.remove(); return; }
+  const holder=document.createElement("div"); holder.innerHTML=html;
+  const fresh=holder.firstElementChild;
+  if(existing) existing.replaceWith(fresh);
+  else {
+    // it had no project before, so there was nothing to replace — put it where
+    // the markup would have placed it, above the buttons
+    const actions=host.querySelector(".drow")||host.querySelector(".actions");
+    if(actions) actions.parentNode.insertBefore(fresh,actions); else host.appendChild(fresh);
+  }
+  wireShareRow(host,x,onChange,coll,parentAnimal);
+}
+function wireShareRow(host,x,onChange,coll,parentAnimal){
   const seg=host.querySelector(".share-seg"); if(!seg)return;
   seg.addEventListener("click",async ev=>{
     const b=ev.target.closest("button"); if(!b)return;
@@ -2982,6 +3076,7 @@ function wireShareRow(host,x,onChange){
     if(want===SHARE_PRIVATE&&spOf(x)&&spaceConnected()){
       try{ await unshareRecord(seg.dataset.coll,x); }catch(e){ toast(String(e.message||e).slice(0,70)); }
     } else { x.share=want; persist(); }
+    refreshShareRow(host,coll||seg.dataset.coll,x,parentAnimal,onChange);
     if(onChange) onChange();
   });
 }
@@ -3022,6 +3117,8 @@ function openShareReview(){
     <div id="sr_body" class="sr-body"></div>
     <div class="actions">
       <button class="btn ghost" id="sr_space" style="margin-right:auto">⚙ ${spaceConnected()?"Shared repository":"Set up sharing"}</button>
+      <label class="sr-bycol"><input type="checkbox" id="sr_bycol" ${DB.config.colourByAuthor?"checked":""}>
+        <span>Colour by who made it</span></label>
       <button class="btn ghost" id="sr_seeas">👁 See as collaborator</button>
       <button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
   const body=document.getElementById("sr_body");
@@ -3031,6 +3128,9 @@ function openShareReview(){
     document.querySelectorAll(".sr-tabs button").forEach(x=>x.classList.toggle("on",x===b));
     paint(b.dataset.b);
   });
+  document.getElementById("sr_bycol").onchange=e=>{
+    DB.config.colourByAuthor=e.target.checked; persist(); render();
+  };
   document.getElementById("sr_space").onclick=()=>{ closeModal(); openSpaceSetup(); };
   document.getElementById("sr_seeas").onclick=()=>{ closeModal(); enterSeeAs(); };
 }
@@ -4933,16 +5033,16 @@ function expShade(ex){
    "is this the lab or my own time" is answered by the shape of the chip, and
    hue is left free to say which project, experiment or entry type something
    belongs to. */
-function chipSkinTimed(isEvent,col,overdue){
-  const edge=overdue?"var(--overdue)":col;
+function chipSkinTimed(isEvent,col,overdue,authorCol){
+  const edge=overdue?"var(--overdue)":(authorCol||col);
   return isEvent
     ? `background:${col}1f;color:${hexMix(col,"#ffffff",0.55)};border:1.5px solid ${col}aa;border-left:4px solid ${edge};`
     : `background:${col}dd;color:#fff;border-left:3px solid ${edge}dd;`;
 }
 // the all-day strip and month view draw everything as a light wash already, so
 // there an event drops the wash entirely rather than gaining one
-function chipSkinBar(isEvent,col,overdue){
-  const edge=overdue?"var(--overdue)":col;
+function chipSkinBar(isEvent,col,overdue,authorCol){
+  const edge=overdue?"var(--overdue)":(authorCol||col);
   return isEvent
     ? `background:transparent;border:1px solid ${col}aa;border-left:3px solid ${edge};color:${hexMix(col,"#ffffff",0.5)}`
     : `background:${col}22;border-left:3px solid ${edge};color:${overdue?"var(--overdue)":col}`;
@@ -6554,7 +6654,7 @@ function taskEditor(t,after,occWhen,occEndDate){
       <button class="btn ghost" id="tk_dup">⧉ Duplicate</button>
     </div>
     <div class="actions"><button class="btn accent" id="tk_save">Done</button></div>`,{wide:true});
-  wireShareRow(document.getElementById("modal"),t,()=>taskEditor(t,after,occWhen,occEndDate));
+  wireShareRow(document.getElementById("modal"),t,null,"schedule");
   // The end follows the start the way it does in a calendar: an end already set
   // keeps its length, and an empty one is suggested half an hour on. Repainting
   // by hand because the end's own button only relabels itself when picked.
@@ -6609,7 +6709,11 @@ function taskEditor(t,after,occWhen,occEndDate){
   });
   // an event has no "Part of" field at all — nothing to attach to an experiment
   const tkExp=document.getElementById("tk_exp");
-  if(tkExp) tkExp.addEventListener("change",e=>setTaskTarget(t,e.target.value));
+  if(tkExp) tkExp.addEventListener("change",e=>{
+    setTaskTarget(t,e.target.value);
+    // what it belongs to decides whether it is shared, so say so straight away
+    refreshShareRow(document.getElementById("modal"),"schedule",t,null,null);
+  });
   const tkColorAuto=document.getElementById("tk_color_auto");
   // An event's stand-in for the experiment colour a task would otherwise
   // inherit — see taskColorOf's own comment for the priority order (an
@@ -6864,7 +6968,7 @@ function experimentModal(st,after){
     ${shareRowHTML("experiments",st)}
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="sm_del">Delete experiment</button></div>
     <div class="actions"><button class="btn accent" id="sm_save">Done</button></div>`,{wide:true});
-  wireShareRow(document.getElementById("modal"),st,()=>experimentModal(st,after));
+  wireShareRow(document.getElementById("modal"),st,null,"experiments");
   // The plan is the heart of the experiment — worth seeing in full rather
   // than scrolled inside a fixed 3-row box the moment it grows past that.
   autoGrowTextarea(document.getElementById("sm_desc"));
@@ -6898,6 +7002,7 @@ function experimentModal(st,after){
       return;
     }
     st.projectId=e.target.value||null; persist();
+    refreshShareRow(document.getElementById("modal"),"experiments",st,null,null);
   });
 
   function drawGroupDefs(){
@@ -8347,12 +8452,12 @@ function renderMonthView(host){
       if(it.kind==="step"){
         const st=it.st, col=calColor(st);
         chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
-        chip.style.cssText=chipSkinBar(calIsEvent(st),col,false);
+        chip.style.cssText=chipSkinBar(calIsEvent(st),col,false,authorEdge(st.src||st));
         // A plain task gets a checkmark right on the chip; an experiment does
         // not — it is already accountable through its outcome field.
         const ckHTML=st.kind==="task"
           ?`<button type="button" class="cal-evt-ck${calDone(st)?" on":""}" title="${calDone(st)?"Done — click to undo":"Mark done"}"></button>`:"";
-        chip.innerHTML=`<div class="et">${ckHTML}${eventIconHTML(st.src)}${esc(st.title||"(unnamed task)")}</div>`;
+        chip.innerHTML=`<div class="et">${ckHTML}${authorBadgeHTML(st.src||st)}${eventIconHTML(st.src)}${esc(st.title||"(unnamed task)")}</div>`;
         chip.title=st.title||"";
         if(st.kind==="task"){
           const ck=chip.querySelector(".cal-evt-ck");
@@ -8373,7 +8478,7 @@ function renderMonthView(host){
         chip=document.createElement("div"); chip.className="cal-evt";
         chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
         const ckHTML=`<button type="button" class="cal-evt-ck${e.done?" on":""}" title="${e.done?"Done — click to undo":"Mark done"}"></button>`;
-        chip.innerHTML=`<div class="et">${ckHTML}${def.icon} ${esc(a.name)}${e.date>today0?" (planned)":""}</div>`;
+        chip.innerHTML=`<div class="et">${ckHTML}${authorBadgeHTML(e)}${def.icon} ${esc(a.name)}${e.date>today0?" (planned)":""}</div>`;
         chip.title=`${def.label} — ${a.name} — ${e.date}`;
         chip.querySelector(".cal-evt-ck").addEventListener("click",ev=>{ ev.stopPropagation(); setDiaryDone(e,!e.done); renderTimeline(); });
         chip.onclick=()=>{ animalSearch=a.name; switchTo("animals"); };   // one-off jump, not a saved search — see openCalItem's own note
@@ -8563,10 +8668,10 @@ function renderTimeline(){
       const col=calColor(t);
       const overdue=dueClass(t.deadline,calDone(t)?"done":"",t.endDate)==="overdue";
       const chip=document.createElement("div"); chip.className="cal-evt cal-evt-span";
-      chip.style.cssText=chipSkinBar(calIsEvent(t),col,overdue);
+      chip.style.cssText=chipSkinBar(calIsEvent(t),col,overdue,authorEdge(t.src||t));
       const ckHTML=t.kind==="task"
         ?`<button type="button" class="cal-evt-ck${calDone(t)?" on":""}" title="${calDone(t)?"Done — click to undo":"Mark done"}"></button>`:"";
-      chip.innerHTML=`<div class="et">${ckHTML}${eventIconHTML(t.src)}${esc(t.title)}</div>`;
+      chip.innerHTML=`<div class="et">${ckHTML}${authorBadgeHTML(t.src||t)}${eventIconHTML(t.src)}${esc(t.title)}</div>`;
       chip.title=t.title+(t.endDate?` (through ${t.endDate.slice(0,10)})`:"");
       if(t.kind==="task"){
         const ck=chip.querySelector(".cal-evt-ck");
@@ -8607,7 +8712,7 @@ function renderTimeline(){
         const dc=diaryColors(an,def);
         chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
         const ckHTML=`<button type="button" class="cal-evt-ck${e.done?" on":""}" title="${e.done?"Done — click to undo":"Mark done"}"></button>`;
-        chip.innerHTML=`<div class="et">${ckHTML}${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
+        chip.innerHTML=`<div class="et">${ckHTML}${authorBadgeHTML(e)}${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
         chip.title=`${def.label} — ${an.name} — ${e.date}${isFuture?" (scheduled)":""}`;
         const ck=chip.querySelector(".cal-evt-ck");
         ck.addEventListener("pointerdown",ev=>ev.stopPropagation());
@@ -8729,7 +8834,7 @@ function renderTimeline(){
         evt.dataset.layKey=layKey; evt.dataset.layDay=String(di);
         if(calDragKey===layKey) evt.classList.add("cal-evt-ghost");
         if(calFlashKey&&calFlashKey===t.id) evt.classList.add("cal-evt-found");
-        evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);${chipSkinTimed(calIsEvent(t),col,overdue)}z-index:2`;
+        evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);${chipSkinTimed(calIsEvent(t),col,overdue,authorEdge(t.src||t))}z-index:2`;
         const clock=m=>{ const d=new Date(sg.date+"T00:00:00"); d.setMinutes(m); return d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); };
         const timeStr=sg.i?`… until ${clock(sg.endMin)}`
           :dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})+(sg.totalMin!==60?` (${sg.totalMin}m)`:"");
@@ -10760,7 +10865,7 @@ function renderNotes(){
       if(col) el.style.setProperty("--nc",col);
       const stamp=n.updated?fmtDMY(todayDateStrOf(new Date(n.updated))):"";
       el.innerHTML=`
-        <div class="nc-title" dir="auto">${esc(n.title||"(untitled)")}</div>
+        <div class="nc-title" dir="auto">${authorBadgeHTML(n)}${esc(n.title||"(untitled)")}</div>
         ${n.drawing?`<img class="nc-draw" src="${n.drawing}" alt="">`:""}
         <div class="nc-body" dir="auto"${preview?"":' style="color:var(--ink-faint)"'}>${preview?esc(preview.slice(0,240)):"(empty)"}</div>
         <div class="nc-foot">
@@ -11724,7 +11829,7 @@ function animalCard(a){
   card.innerHTML=`
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="width:9px;height:9px;border-radius:50%;background:${animalStateColor(a)};flex:0 0 auto" title="${escAttr([a.alive?"Alive":lifeLabel(a),...animalFlags(a).map(f=>f.label)].join(" · "))}"></span>
-      <span style="font-weight:500;font-size:14px">${esc(a.name)}</span>
+      ${authorBadgeHTML(a)}<span style="font-weight:500;font-size:14px">${esc(a.name)}</span>
       ${/* said in words, not only as a dot: an animal can be sacrificed AND
             excluded, and the whole point of splitting them is seeing both */""}
       ${(!a.alive?[{label:lifeLabel(a),color:lifeColor(a)}]:[]).concat(animalFlags(a))
