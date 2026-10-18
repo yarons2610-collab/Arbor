@@ -175,6 +175,36 @@
   .dd-row:hover{background:var(--panel)}
   .dd-row.on{color:var(--ink);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
   .dd-check{cursor:pointer}
+  /* sharing: green means it leaves this device, magenta means it does not */
+  .share-row .share-seg{margin-bottom:4px}
+  .share-why{font-family:var(--mono);font-size:10.5px;color:var(--mruby)}
+  .share-why.on{color:var(--gcamp)}
+  .share-box{border:1px solid var(--line2);border-radius:11px;padding:12px 14px;margin:14px 0 0;background:var(--panel2)}
+  .share-main{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:var(--ink)}
+  .share-main input{width:auto;margin:0}
+  .share-opt{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:12.5px;color:var(--ink-dim)}
+  .share-opt > span{flex:1;min-width:150px}
+  .share-note{font-family:var(--mono);font-size:10.5px;color:var(--gcamp);margin:10px 0 8px;line-height:1.5}
+  .sr-sub{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin:-6px 0 12px}
+  .sr-tabs{display:flex;gap:6px;margin-bottom:10px}
+  .sr-tabs button{background:var(--panel2);border:1px solid var(--line2);color:var(--ink-dim);border-radius:8px;
+    padding:5px 11px;font-size:12.5px;cursor:pointer}
+  .sr-tabs button.on{color:var(--ink);border-color:var(--gold)}
+  .sr-n{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-left:5px}
+  .sr-body{max-height:50vh;overflow-y:auto}
+  .sr-group{margin-bottom:14px}
+  .sr-head{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);
+    padding:4px 0;position:sticky;top:0;background:var(--panel)}
+  .sr-row{display:flex;gap:10px;align-items:baseline;padding:3px 0;border-bottom:1px solid var(--line)}
+  .sr-label{flex:1;min-width:0;font-size:12.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sr-why{font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 1 auto;text-align:right}
+  .sr-more,.sr-empty{font-family:var(--mono);font-size:11px;color:var(--ink-faint);padding:6px 0}
+  .see-as-bar{position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;gap:12px;align-items:center;justify-content:center;
+    flex-wrap:wrap;background:linear-gradient(180deg,#2a2112,#1d1708);border-top:1px solid var(--gold);
+    color:var(--gold);font-family:var(--mono);font-size:11.5px;
+    padding:9px max(16px,env(safe-area-inset-left,0px)) calc(9px + env(safe-area-inset-bottom,0px))}
+  .see-as-bar button{background:var(--gold);color:#1a1405;border:0;border-radius:7px;padding:5px 12px;font-size:11.5px;cursor:pointer;font-weight:600}
+  body.see-as .app{outline:2px solid var(--gold);outline-offset:-2px}
   /* Picking a mouse is a different job from picking an option: there can be
      dozens, most of them retired, and the name alone ("T2I-3") does not say
      which one. Wide enough for a line of context, tall enough to scan. */
@@ -2090,6 +2120,7 @@ function resolveShare(coll,x,parentAnimal){
     const ex=expById(x.experimentId);
     if(ex&&!resolveShare("experiments",ex).shared) return SHARE_NO(`${ex.title||"its experiment"} is private`);
   }
+  if(coll==="projects") return {shared:true,project:x.id,why:"you turned sharing on"};
   if(x.share===SHARE_SHARED) return {shared:true,project:S[0],why:"you shared it"};
   if(CARRIES_TEXT[coll]&&P.length>S.length){
     const other=P.find(id=>!isProjectShared(id));
@@ -2127,6 +2158,112 @@ function shareReview(){
     else if(resolveShare("animals",a).shared) add("private","diary",e,r,label);
   }));
   return out;
+}
+/* ── SHARING, PHASE 1b: showing the answer ──────────────────────────────────
+   Nothing below decides anything; it all asks resolveShare() and renders what
+   comes back. The outcome is always spelled out in words next to the control,
+   because a three-way setting whose effect you have to work out is exactly how
+   someone shares a thing they meant to keep. */
+// written out rather than pluralised by rule, which produced "entrys"
+const SHARE_COLLS={projects:"Projects",experiments:"Experiments",schedule:"Timeline items",
+                   animals:"Animals",notes:"Notes",readings:"Papers",protocols:"Protocols",
+                   other:"Library records",diary:"Diary entries"};
+function shareRowHTML(coll,x,parentAnimal){
+  // a record that can never be shared gets no control at all, rather than one
+  // that is disabled and invites a fight with it
+  if(coll!=="diary"&&!projectsOfRecord(coll,x).length&&x.share!==SHARE_PRIVATE)
+    return "";
+  if(coll==="diary"&&!resolveShare("animals",parentAnimal).shared&&x.share!==SHARE_PRIVATE)
+    return "";
+  const r=resolveShare(coll,x,parentAnimal), v=x.share||"";
+  const mine=!x.by||x.by===meId();
+  const opt=(val,lab)=>`<button type="button" data-v="${val}" class="${v===val?"on":""}">${lab}</button>`;
+  return `<div class="fld share-row"><label>Sharing</label>
+    <div class="seg share-seg" data-coll="${coll}" data-id="${escAttr(x.id)}">
+      ${opt("","Follow the project")}${opt("shared","Share")}${opt("private",mine?"Keep private":"Hide for me")}
+    </div>
+    <div class="share-why ${r.shared?"on":""}">${r.shared
+      ? `Shared with your collaborator — ${esc(r.why)}`
+      : `Private — ${esc(r.why)}`}</div></div>`;
+}
+function wireShareRow(host,x,onChange){
+  const seg=host.querySelector(".share-seg"); if(!seg)return;
+  seg.addEventListener("click",ev=>{
+    const b=ev.target.closest("button"); if(!b)return;
+    x.share=b.dataset.v||undefined;
+    persist();
+    if(onChange) onChange();
+  });
+}
+/* The workspace as the collaborator would see it. Built by the same resolver,
+   so it cannot disagree with what the review screen claims. */
+function collaboratorView(db){
+  const out={...db};
+  SHAREABLE.forEach(coll=>{
+    if(Array.isArray(out[coll])) out[coll]=out[coll].filter(x=>resolveShare(coll,x).shared);
+  });
+  out.animals=(out.animals||[]).map(a=>({...a,
+    diary:(a.diary||[]).filter(e=>resolveShare("diary",e,a).shared)}));
+  // their Arbor has none of this
+  out.overlays={};
+  return out;
+}
+/* Seeing their view means rendering a different workspace, which must never
+   reach disk. Every path that writes checks this first. */
+/* The most important screen in the design: the only way to know what is shared
+   is to be shown it, grouped and with a reason on every line. Opened before the
+   first share, and from the project editor any time after. */
+function openShareReview(){
+  const rev=shareReview(), sp=sharedProjects();
+  const group=(bucket)=>Object.keys(rev[bucket]).map(coll=>{
+    const rows=rev[bucket][coll];
+    if(!rows.length)return "";
+    return `<div class="sr-group"><div class="sr-head">${esc(SHARE_COLLS[coll]||coll)}
+      <span class="sr-n">${rows.length}</span></div>
+      ${rows.slice(0,40).map(r=>`<div class="sr-row"><span class="sr-label">${esc(r.label)}</span>
+        <span class="sr-why">${esc(r.why)}</span></div>`).join("")}
+      ${rows.length>40?`<div class="sr-more">…and ${rows.length-40} more</div>`:""}</div>`;
+  }).join("");
+  modal(`<h3>What your collaborator can see</h3>
+    ${sp.length?`<div class="sr-sub">Shared project${sp.length>1?"s":""}: ${sp.map(p=>esc(p.name||"(unnamed)")).join(", ")}</div>`
+      :`<div class="sr-sub">No project is shared yet. Open a project and turn on sharing to see this fill in.</div>`}
+    <div class="sr-tabs"><button type="button" class="on" data-b="shared">Shared <span class="sr-n">${rev.counts.shared}</span></button>
+      <button type="button" data-b="private">Private <span class="sr-n">${rev.counts.private}</span></button></div>
+    <div id="sr_body" class="sr-body"></div>
+    <div class="actions">
+      <button class="btn ghost" id="sr_seeas">👁 See as collaborator</button>
+      <button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+  const body=document.getElementById("sr_body");
+  const paint=b=>{ body.innerHTML=group(b)||`<div class="sr-empty">Nothing ${b==="shared"?"is shared":"is being held back"}.</div>`; };
+  paint("shared");
+  document.querySelectorAll(".sr-tabs button").forEach(b=>b.onclick=()=>{
+    document.querySelectorAll(".sr-tabs button").forEach(x=>x.classList.toggle("on",x===b));
+    paint(b.dataset.b);
+  });
+  document.getElementById("sr_seeas").onclick=()=>{ closeModal(); enterSeeAs(); };
+}
+let seeAs=null;
+function inSeeAs(){ return !!seeAs; }
+function enterSeeAs(){
+  if(seeAs)return;
+  if(!sharedProjects().length){ toast("No project is shared yet"); return; }
+  seeAs={real:DB};
+  DB=collaboratorView(DB);
+  document.body.classList.add("see-as");
+  let bar=document.getElementById("seeAsBar");
+  if(!bar){ bar=document.createElement("div"); bar.id="seeAsBar"; bar.className="see-as-bar";
+    document.body.appendChild(bar); }
+  bar.innerHTML=`<span>Showing what your collaborator sees. Nothing you do here is saved.</span>
+    <button type="button" id="seeAsOut">Back to my Arbor</button>`;
+  bar.querySelector("#seeAsOut").onclick=exitSeeAs;
+  render();
+}
+function exitSeeAs(){
+  if(!seeAs)return;
+  DB=seeAs.real; seeAs=null;
+  document.body.classList.remove("see-as");
+  const bar=document.getElementById("seeAsBar"); if(bar) bar.remove();
+  render();
 }
 const MASS_MIN=5, MASS_MIN_DIARY=20, MASS_FRACTION=0.5;
 let recordBaseline=null;      // ids as of the last recorded save of a loaded workspace
@@ -2302,7 +2439,7 @@ function healInPlace(db,remote){
 }
 
 async function doWrite(){
-  if(!bootLoaded)return;
+  if(inSeeAs()||!bootLoaded)return;
   setSaveState("saving");
   storageError=await arborSave(DB);
   storageOK=!storageError;
@@ -2320,6 +2457,7 @@ function scheduleSync(){
   syncTimer=setTimeout(runSync,wait);
 }
 async function runSync(){
+  if(inSeeAs()){ syncPending=true; return; }
   if(!bootLoaded){ syncPending=true; return; }
   if(syncInFlight){ syncPending=true; return; }
   if(!gistToken()){ syncPending=false; return; }
@@ -2402,6 +2540,10 @@ async function runSync(){
   }
 }
 function persist(){
+  // Showing the collaborator's view swaps DB for a filtered copy. Saving that
+  // would write their view over the real workspace, which is the whole of the
+  // 12/10 failure in one line. Every write path checks this.
+  if(inSeeAs()) return;
   if(!bootLoaded){ persistDuringBoot=true; return; }
   recordDeletions();   // what this change removed, marked as deleted by it
   DB.updatedAt=Date.now(); localDirty=true;
@@ -2409,7 +2551,7 @@ function persist(){
   clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160);
 }
 async function flushSave(){
-  if(!bootLoaded)return;
+  if(inSeeAs()||!bootLoaded)return;
   clearTimeout(saveTimer);
   try{
     const res=window.arbor.saveSync(privateDB(DB));
@@ -2452,6 +2594,7 @@ function editingInProgress(){
   return !!ae&&(["INPUT","TEXTAREA","SELECT"].includes(ae.tagName)||ae.isContentEditable);
 }
 async function autoPull(){
+  if(inSeeAs())return;
   if(document.hidden)return;   // focusing the tab pulls immediately; see below
   if(!gistToken()||localDirty||syncInFlight||syncPending||editingInProgress())return;
   try{
@@ -5604,11 +5747,13 @@ function taskEditor(t,after,occWhen,occEndDate){
     <div class="fld"><label>Notes</label><textarea id="tk_notes" rows="3">${esc(t.notes||"")}</textarea></div>
     ${t.isEvent?"":`<div class="fld"><label>Part of</label>
       <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>`}
+    ${shareRowHTML("schedule",t)}
     <div class="drow" style="margin-top:16px;gap:8px">
       <button class="btn danger" id="tk_del">Delete task</button>
       <button class="btn ghost" id="tk_dup">⧉ Duplicate</button>
     </div>
     <div class="actions"><button class="btn accent" id="tk_save">Done</button></div>`,{wide:true});
+  wireShareRow(document.getElementById("modal"),t,()=>taskEditor(t,after,occWhen,occEndDate));
   // The end follows the start the way it does in a calendar: an end already set
   // keeps its length, and an empty one is suggested half an hour on. Repainting
   // by hand because the end's own button only relabels itself when picked.
@@ -5915,8 +6060,10 @@ function experimentModal(st,after){
     <div class="fld"><label>Outcome</label>
       <textarea id="sm_out" rows="3">${esc(st.outcome||"")}</textarea></div>
     <div class="fld"><label>Uses</label><div id="sm_links"></div></div>
+    ${shareRowHTML("experiments",st)}
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="sm_del">Delete experiment</button></div>
     <div class="actions"><button class="btn accent" id="sm_save">Done</button></div>`,{wide:true});
+  wireShareRow(document.getElementById("modal"),st,()=>experimentModal(st,after));
   // The plan is the heart of the experiment — worth seeing in full rather
   // than scrolled inside a fixed 3-row box the moment it grows past that.
   autoGrowTextarea(document.getElementById("sm_desc"));
@@ -6009,6 +6156,24 @@ function projectModal(pr,after){
     <div class="fld"><label>Notes</label>
       <textarea id="pm_notes" rows="3">${esc(pr.notes||"")}</textarea></div>
     <div class="fld"><label>Uses</label><div id="pm_links"></div></div>
+    <div class="share-box">
+      <label class="share-main"><input type="checkbox" id="pm_shared" ${pr.shared?"checked":""}>
+        <span>Share this project with a collaborator</span></label>
+      <div id="pm_shareopts" ${pr.shared?"":"hidden"}>
+        <div class="share-opt"><span>Timeline items in this project</span>
+          <div class="seg" id="pm_sd_timeline">
+            <button type="button" data-v="shared" class="${projDefaults(pr).timeline==="shared"?"on":""}">Shared</button>
+            <button type="button" data-v="private" class="${projDefaults(pr).timeline==="private"?"on":""}">Private</button>
+          </div></div>
+        <div class="share-opt"><span>Diary entries on its animals</span>
+          <div class="seg" id="pm_sd_diary">
+            <button type="button" data-v="shared" class="${projDefaults(pr).diary==="shared"?"on":""}">Shared</button>
+            <button type="button" data-v="private" class="${projDefaults(pr).diary==="private"?"on":""}">Private</button>
+          </div></div>
+        <div class="share-note" id="pm_share_sum"></div>
+        <button type="button" class="btn ghost" id="pm_review" style="font-size:12px">What would be shared?</button>
+      </div>
+    </div>
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="pm_del">Delete project</button></div>
     <div class="actions"><button class="btn accent" id="pm_save">Done</button></div>`,{wide:true});
   const save=()=>{
@@ -6050,6 +6215,36 @@ function projectModal(pr,after){
     toast(`${kids.length} experiment${kids.length!==1?"s":""} now shaded from this project`);
   };
   mountLinkEditor(document.getElementById("pm_links"),pr,()=>{});
+  /* Sharing. Phase 1 marks the project and shows the consequences; nothing
+     leaves this device until the publishing phase. The running total is the
+     point of the box — it answers "how much am I about to hand over" without
+     opening anything. */
+  const shBox=document.getElementById("pm_shared"), shOpts=document.getElementById("pm_shareopts");
+  const shSum=document.getElementById("pm_share_sum");
+  function paintShareSummary(){
+    if(!pr.shared){ shSum.textContent=""; return; }
+    const rev=shareReview();
+    const n=k=>(rev.shared[k]||[]).length;
+    const bits=[[n("experiments"),"experiment"],[n("animals"),"animal"],[n("diary"),"diary entry"],
+                [n("schedule"),"timeline item"],[n("notes"),"note"],
+                [n("readings")+n("protocols")+n("other"),"library record"]]
+      .filter(([c])=>c).map(([c,w])=>`${c} ${w}${c===1?"":(w.endsWith("y")?"":"s")}`.replace("diary entrys","diary entries"));
+    shSum.textContent=bits.length?("Would share "+bits.join(", ")+"."):"Nothing in this project would be shared yet.";
+  }
+  shBox.onchange=()=>{
+    pr.shared=shBox.checked||undefined;
+    if(pr.shared&&!pr.shareDefaults) pr.shareDefaults={timeline:"shared",diary:"shared"};
+    shOpts.hidden=!pr.shared; persist(); paintShareSummary();
+  };
+  [["pm_sd_timeline","timeline"],["pm_sd_diary","diary"]].forEach(([elId,key])=>{
+    const seg=document.getElementById(elId); if(!seg)return;
+    seg.onclick=ev=>{ const b=ev.target.closest("button"); if(!b)return;
+      pr.shareDefaults=Object.assign({timeline:"shared",diary:"shared"},pr.shareDefaults,{[key]:b.dataset.v});
+      seg.querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b));
+      persist(); paintShareSummary(); };
+  });
+  document.getElementById("pm_review").onclick=()=>{ save(); openShareReview(); };
+  paintShareSummary();
   document.getElementById("pm_del").onclick=()=>{
     const n=DB.experiments.filter(ex=>ex.projectId===pr.id).length;
     if(!confirm(`Delete "${pr.name||"this project"}"?${n?` ${n} experiment${n!==1?"s":""} currently in it will become unassigned.`:""}`))return;
@@ -13112,12 +13307,14 @@ document.getElementById("menuBtn").addEventListener("click",()=>{ renderMenuModa
 function renderMenuModal(){
   modal(`<h3>Backup &amp; restore</h3>
     <div class="actions" style="justify-content:flex-start;flex-wrap:wrap;margin-top:0">
+      <button class="btn" id="m_sharing">🤝 Sharing</button>
       <button class="btn accent" id="m_history">🕘 Earlier versions</button>
       <button class="btn" id="m_export">↓ Export JSON</button>
       <button class="btn" id="m_excel">↓ Export Excel</button>
       <button class="btn" id="m_import">↑ Import JSON</button>
       <button class="btn danger" id="m_reset">↺ Reset to seed</button></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`, {center:true});
+  document.getElementById("m_sharing").addEventListener("click",()=>{ closeModal(); openShareReview(); });
   document.getElementById("m_history").addEventListener("click",openHistoryModal);
   document.getElementById("m_export").addEventListener("click",()=>{download("arbor_workspace.json",JSON.stringify(privateDB(DB),null,2),"application/json");toast("Exported JSON");});
   document.getElementById("m_excel").addEventListener("click",()=>{exportFullDatabaseExcel();toast("Exported Excel workbook");});
