@@ -2425,6 +2425,184 @@ async function loadSharedProjects(){
   if(n) resetRecordBaseline();
   return n;
 }
+/* ── SHARING, PHASE 4: both of you editing ──────────────────────────────────
+   A project file now has two writers. The merge is the same three-way shape
+   the private sync uses — what we last agreed, what we have, what is there now
+   — applied field by field, so renaming a session while the other person moves
+   it keeps both. Only the same field of the same record can collide, and the
+   later edit wins while the log keeps the other.
+
+   Every write cites the version it read and retries on refusal, which is the
+   thing a repository gives and a Gist cannot. */
+const SHARED_POLL_MS=20000, SHARED_PUSH_MS=1500, SHARED_MAX_TRIES=5;
+let sharedBase={};        // per project: hashes of what we last agreed
+let sharedDirty={};       // per project: a change waiting to go out
+let sharedTimer=null, sharedPollTimer=null, sharedInFlight=false;
+function sharedFileBase(file){
+  const rec={},diary={};
+  ["experiments","schedule","notes","readings","protocols","other","animals"].forEach(k=>{
+    (file[k]||[]).forEach(x=>{ if(x&&x.id) rec[x.id]=hashJSON(k==="animals"?animalFields(x):x); });
+  });
+  (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) diary[e.id]=hashJSON(e); }));
+  if(file.project&&file.project.id) rec[file.project.id]=hashJSON(file.project);
+  return {rec,diary};
+}
+function changedSince(base,id,obj,isDiary){
+  const was=base&&((isDiary?base.diary:base.rec)||{})[id];
+  return was!==undefined&&was!==hashJSON(obj);
+}
+/* Merge what is on GitHub now with what this device holds. `base` is what the
+   two last agreed on; without it the remote's version of anything shared wins,
+   because this device cannot show that it changed anything. */
+function mergeProjectFile(remote,mine,base){
+  const out=JSON.parse(JSON.stringify(remote));
+  out.deletions=unionStamps(remote.deletions,mine.deletions);
+  out.revivals=unionStamps(remote.revivals,mine.revivals);
+  const dead=deadIn({deletions:out.deletions,revivals:out.revivals});
+  const lists=["experiments","schedule","notes","readings","protocols","other"];
+  lists.forEach(k=>{
+    const have=new Map((out[k]||[]).map((x,i)=>[x.id,i]));
+    (mine[k]||[]).forEach(x=>{
+      if(!x||!x.id)return;
+      const at=have.get(x.id);
+      // absence is never a deletion: a record the remote lacks is kept
+      if(at==null){ (out[k]=out[k]||[]).push(x); return; }
+      if(changedSince(base,x.id,x)) out[k][at]=mergeFields(out[k][at],x,base,x.id);
+    });
+    out[k]=(out[k]||[]).filter(x=>!(x&&x.id&&dead(k,x.id)));
+  });
+  const byId=new Map((out.animals||[]).map((a,i)=>[a.id,i]));
+  (mine.animals||[]).forEach(a=>{
+    if(!a||!a.id)return;
+    const at=byId.get(a.id);
+    if(at==null){ (out.animals=out.animals||[]).push(a); return; }
+    const ra=out.animals[at];
+    if(changedSince(base,a.id,animalFields(a)))
+      out.animals[at]=Object.assign({},mergeFields(animalFields(ra),animalFields(a),base,a.id),{diary:ra.diary});
+    const merged=out.animals[at];
+    const have=new Map((merged.diary||[]).map((e,i)=>[e.id,i]));
+    (a.diary||[]).forEach(e=>{
+      if(!e||!e.id)return;
+      const j=have.get(e.id);
+      if(j==null){ (merged.diary=merged.diary||[]).push(e); return; }
+      if(changedSince(base,e.id,e,true)) merged.diary[j]=e;
+    });
+    merged.diary=(merged.diary||[]).filter(e=>!(e&&e.id&&dead("diary",e.id)));
+  });
+  if(mine.project&&out.project&&changedSince(base,mine.project.id,mine.project))
+    out.project=mergeFields(out.project,mine.project,base,mine.project.id);
+  out.defs=mine.defs||out.defs;
+  out.written={at:Date.now(),by:meId()};
+  return out;
+}
+/* Field by field: a field this device changed since the agreed copy wins; one
+   it did not keeps whatever is there. That is what lets a rename and a
+   reschedule of the same record both survive. */
+function mergeFields(theirs,mine,base,id){
+  const wasHash=base&&(base.rec||{})[id];
+  if(wasHash===undefined) return mine;          // no agreed copy: this device decides
+  const out=Object.assign({},theirs);
+  Object.keys(mine).forEach(k=>{
+    if(k==="diary")return;
+    if(JSON.stringify(mine[k])!==JSON.stringify(theirs[k])) out[k]=mine[k];
+  });
+  return out;
+}
+/* Push one project. Read, merge, check, write citing the version read; a
+   refusal means the other person wrote first, so start again from the read.
+   Gives up after a few tries and keeps the change queued rather than losing it
+   or forcing it through. */
+async function pushProject(id){
+  const pr=(DB.projects||[]).find(p=>p.id===id);
+  if(!pr||!spaceConnected()) return false;
+  const path=projectFilePath(id);
+  for(let attempt=0;attempt<SHARED_MAX_TRIES;attempt++){
+    const cur=await spaceRead(path);
+    const mine=buildProjectFile(pr,cur.json);
+    const problems=leakCheck(mine,pr);
+    if(problems.length){ console.warn("Arbor: shared write refused —",problems);
+      toast("Not sent: "+problems[0]); return false; }
+    const merged=cur.json?mergeProjectFile(cur.json,mine,sharedBase[id]):mine;
+    const after=leakCheck(merged,pr);
+    if(after.length){ console.warn("Arbor: merged write refused —",after); toast("Not sent: "+after[0]); return false; }
+    try{
+      const sha=await spaceWrite(path,merged,cur.sha,`Arbor: ${pr.name||id}`);
+      sharedFileShas[id]=sha; sharedBase[id]=sharedFileBase(merged);
+      try{ localStorage.setItem(spaceCacheKey(id),JSON.stringify({file:merged,sha})); }catch(e){}
+      detachProjectFile(id); attachProjectFile(merged); resetRecordBaseline();
+      delete sharedDirty[id];
+      return true;
+    }catch(e){
+      if(e.status===409) continue;    // they wrote first; read again and redo
+      throw e;
+    }
+  }
+  return false;   // stays queued, tried again on the next pass
+}
+async function pullProject(id){
+  if(!spaceConnected()) return false;
+  const pr=(DB.projects||[]).find(p=>p.id===id);
+  const cur=await spaceRead(projectFilePath(id));
+  if(!cur.json) return false;
+  if(cur.sha===sharedFileShas[id]&&!sharedDirty[id]) return false;   // nothing moved
+  const merged=(pr&&sharedDirty[id])?mergeProjectFile(cur.json,buildProjectFile(pr,cur.json),sharedBase[id]):cur.json;
+  sharedFileShas[id]=cur.sha; sharedBase[id]=sharedFileBase(cur.json);
+  try{ localStorage.setItem(spaceCacheKey(id),JSON.stringify({file:merged,sha:cur.sha})); }catch(e){}
+  detachProjectFile(id); attachProjectFile(merged); resetRecordBaseline();
+  return true;
+}
+/* Which shared projects a change touched. Compared against the agreed copy
+   rather than guessed, so editing a shared record queues a push and editing a
+   private one does not. */
+function noteSharedChanges(){
+  if(!spaceConnected())return;
+  const seen=new Set();
+  SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{
+    const sp=spOf(x); if(!sp||seen.has(sp))return;
+    if(changedSince(sharedBase[sp],x.id,coll==="animals"?animalFields(x):x)) seen.add(sp);
+  }));
+  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
+    const sp=spOf(e); if(!sp||seen.has(sp))return;
+    if(changedSince(sharedBase[sp],e.id,e,true)) seen.add(sp);
+  }));
+  // a record newly shared, or one that has gone, also needs a push
+  sharedProjects().forEach(p=>{
+    const base=sharedBase[p.id]; if(!base)return;
+    const now=new Set();
+    SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{ if(spOf(x)===p.id) now.add(x.id); }));
+    (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(spOf(e)===p.id) now.add(e.id); }));
+    const was=new Set([...Object.keys(base.rec||{}),...Object.keys(base.diary||{})]);
+    if(now.size!==was.size||[...now].some(id=>!was.has(id))) seen.add(p.id);
+  });
+  seen.forEach(markSharedDirty);
+}
+function markSharedDirty(id){ if(id){ sharedDirty[id]=true; scheduleSharedPush(); } }
+function scheduleSharedPush(){ clearTimeout(sharedTimer); sharedTimer=setTimeout(runSharedPush,SHARED_PUSH_MS); }
+async function runSharedPush(){
+  if(sharedInFlight||inSeeAs()||!bootLoaded||!spaceConnected())return;
+  sharedInFlight=true;
+  try{
+    for(const id of Object.keys(sharedDirty)){
+      try{ await pushProject(id); }catch(e){ console.warn("Arbor: shared push failed",id,e); }
+    }
+  } finally{
+    sharedInFlight=false;
+    if(Object.keys(sharedDirty).length) scheduleSharedPush();
+    render();
+  }
+}
+async function sharedPoll(){
+  if(sharedInFlight||inSeeAs()||document.hidden||!bootLoaded||!spaceConnected())return;
+  sharedInFlight=true; let changed=false;
+  try{
+    for(const p of sharedProjects()){ try{ if(await pullProject(p.id)) changed=true; }catch(e){} }
+  } finally{ sharedInFlight=false; if(changed) render(); }
+}
+function startSharedSync(){
+  clearInterval(sharedPollTimer);
+  if(!spaceConnected())return;
+  sharedPollTimer=setInterval(sharedPoll,SHARED_POLL_MS);
+}
 /* ── SHARING, PHASE 1: the resolver ─────────────────────────────────────────
    One function decides, for every record, whether it is shared, through which
    project, and why. It reads only the workspace and has no side effects, so the
@@ -2930,6 +3108,7 @@ function persist(){
   if(inSeeAs()) return;
   if(!bootLoaded){ persistDuringBoot=true; return; }
   recordDeletions();   // what this change removed, marked as deleted by it
+  noteSharedChanges();
   DB.updatedAt=Date.now(); localDirty=true;
   saveLocalView();   // filters/zoom/collapse stay on this device (see LOCAL_VIEW_KEYS)
   clearTimeout(saveTimer); saveTimer=setTimeout(doWrite,160);
@@ -14215,7 +14394,13 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
     // shared projects come after the private workspace, never before: they are
     // attached to it, and attaching to a half-loaded workspace is how records
     // end up in the wrong store
-    if(spaceConnected()) loadSharedProjects().then(n=>{ if(n) render(); }).catch(()=>{});
+    if(spaceConnected()) loadSharedProjects().then(n=>{
+      sharedProjects().forEach(p=>{
+        try{ const c=JSON.parse(localStorage.getItem(spaceCacheKey(p.id))||"null");
+          if(c&&c.file) sharedBase[p.id]=sharedFileBase(c.file); }catch(e){}
+      });
+      if(n) render();
+    }).catch(()=>{});
     // Save locally always (captures any seed/migration changes) — but NEVER push
     // to the Gist automatically on boot. Boot used to always call doWrite(), which
     // pushes to the Gist whenever a token exists, regardless of whether the load
@@ -14245,6 +14430,7 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
     if(persistDuringBoot){ persistDuringBoot=false; persist(); }
     else if(syncPending&&gistToken()) scheduleSync();
     scheduleAutoPull();
+    startSharedSync();
   }catch(e){ console.error("Arbor failed to start:",e); }
 })();
 </script>
