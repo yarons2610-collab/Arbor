@@ -3290,6 +3290,26 @@ async function unshareRecord(coll,x,parentAnimal){
 }
 /* Delete a shared record: to the trash, visible to both, restorable for 30
    days. Either of you can do it; neither of you loses it by accident. */
+/* Deleting a record that is shared has to be written into the file, not only
+   taken out of this workspace. The merge treats absence as "this device has
+   not seen it" — the rule that stops a stale copy destroying anything — so a
+   local removal is simply undone by the next poll, and the record returns a
+   few seconds later as though the delete had not happened. Twice, in Yaron's
+   case, which is exactly what it looks like from the outside.
+   Private records are removed the ordinary way; shared ones go through the
+   trash, where the other person can see what went and get it back. */
+function removeShared(coll,rows,parentAnimal){
+  const shared=(rows||[]).filter(x=>x&&spOf(x));
+  if(!shared.length) return;
+  (async()=>{
+    for(const x of shared){
+      try{ await trashSharedRecord(coll,x,parentAnimal); }
+      catch(e){ console.warn("Arbor: shared delete failed",e);
+        toast("Couldn't delete from the shared project — "+String(e.message||e).slice(0,60)); }
+    }
+    render();
+  })();
+}
 async function trashSharedRecord(coll,x){
   const id=spOf(x); if(!id) return false;
   const path=projectFilePath(id);
@@ -6775,7 +6795,9 @@ function addTask(init){
            isEvent:false,color:null,eventTypeId:null,created:Date.now(),...(init||{})};
   taskList().push(t); persist(); return t;
 }
-function deleteTask(id){ DB.schedule=taskList().filter(x=>x.id!==id); persist(); }
+function deleteTask(id){
+  const t=taskList().find(x=>x.id===id); if(t) removeShared("schedule",[t]);
+  DB.schedule=taskList().filter(x=>x.id!==id); persist(); }
 // Occurrences of a repeating task all read from the one shared record — real,
 // separate events sharing a rule, not copies of each other. Any edit that
 // needs to apply to fewer than "every occurrence forever" has to ask which
@@ -6876,6 +6898,7 @@ function addExperiment(){
 // was never assigned one in the first place
 function deleteExperiment(id){
   taskList().forEach(t=>{ if(t.experimentId===id) t.experimentId=null; });
+  const ex=DB.experiments.find(x=>x.id===id); if(ex) removeShared("experiments",[ex]);
   DB.experiments=DB.experiments.filter(x=>x.id!==id); persist();
 }
 function addProject(){
@@ -12046,7 +12069,7 @@ function renderNotes(){
       el.querySelector(".nc-del").addEventListener("click",e=>{
         e.stopPropagation();
         if(!confirm(`Delete "${n.title||"this note"}"?`))return;
-        DB.notes=DB.notes.filter(x=>x.id!==n.id); persist(); renderNotes(); toast("Note deleted");
+        removeShared("notes",[n]); DB.notes=DB.notes.filter(x=>x.id!==n.id); persist(); renderNotes(); toast("Note deleted");
       });
       return el;
     }
@@ -12100,7 +12123,7 @@ function renderNotes(){
     row.querySelector(".lit-main").onclick=()=>noteModal(n.id);
     row.querySelector(".lit-del").onclick=()=>{
       if(!confirm(`Delete "${n.title||"this note"}"?`))return;
-      DB.notes=DB.notes.filter(x=>x.id!==n.id); persist(); renderNotes(); toast("Note deleted");
+      removeShared("notes",[n]); DB.notes=DB.notes.filter(x=>x.id!==n.id); persist(); renderNotes(); toast("Note deleted");
     };
     list.appendChild(row);
     if(open){
@@ -12290,7 +12313,7 @@ function noteModal(id,over){
   };
   if(n) document.getElementById("n_del").onclick=()=>{
     if(!confirm(`Delete "${n.title||"this note"}"?`))return;
-    DB.notes=DB.notes.filter(x=>x.id!==n.id); persist(); closeModal(); renderNotes(); toast("Note deleted");
+    removeShared("notes",[n]); DB.notes=DB.notes.filter(x=>x.id!==n.id); persist(); closeModal(); renderNotes(); toast("Note deleted");
   };
 }
 
@@ -13756,6 +13779,7 @@ function paintDiary(container,a,opts){
       // edited from there but never removed from there
       const entry=editingId?a.diary.find(x=>x.id===editingId):null; if(!entry)return;
       const finish=rows=>{ const ids=new Set(rows.map(x=>x.id)); const sid=rows[0]&&rows[0].seriesId;
+        removeShared("diary",rows,a);          // shared ones leave the file too
         a.diary=a.diary.filter(x=>!ids.has(x.id));
         if(sid) closeOpenSeriesIfTailRemoved(a,sid,rows.map(x=>x.date));
         formType=null; editingId=null; persist(); notifyChange();
@@ -14820,7 +14844,9 @@ function animalModal(id,draft){
     }
     persist(); closeModal(); render(); toast(id?"Animal updated":"Animal added");
   };
-  if(id)document.getElementById("am_del").onclick=()=>{ if(confirm("Delete this animal record?")){DB.animals=DB.animals.filter(x=>x.id!==id);persist();closeModal();render();toast("Deleted");}};
+  if(id)document.getElementById("am_del").onclick=()=>{ if(confirm("Delete this animal record?")){
+    removeShared("animals",[a]);
+    DB.animals=DB.animals.filter(x=>x.id!==id);persist();closeModal();render();toast("Deleted");}};
   // A cage-mate in one click: the profile, the procedure and every experiment,
   // group and project the original sits in. Not the diary, and not the death —
   // weights, surgeries and a sacrifice happened to that one animal, not to its
