@@ -2380,7 +2380,7 @@ function buildDefs(file){
      reading what they wrote. */
   const types=(DB.config.diaryTypes||[]).filter(t=>used.has(t.key)).map(t=>({
     key:t.key,label:t.label,icon:t.icon,color:t.color,timeline:!!t.timeline,
-    defaultDuration:t.defaultDuration||null,
+    defaultDuration:t.defaultDuration||null,by:meId(),
     fields:(t.fields||[]).map(f=>({key:f.key,label:f.label,type:f.type,options:f.options}))}));
   const names=new Set(), sites=new Set();
   (file.animals||[]).forEach(a=>((a.surgeryDetail||{}).injections||[]).forEach(i=>{
@@ -2389,9 +2389,9 @@ function buildDefs(file){
     by:meId(),
     diaryTypes:types,
     viruses:(DB.config.virusLib||[]).filter(v=>names.has(v.name))
-      .map(v=>({name:v.name,type:v.type,promoter:v.promoter,titer:v.titer})),
+      .map(v=>({name:v.name,type:v.type,promoter:v.promoter,titer:v.titer,by:meId()})),
     sites:(DB.config.siteLib||[]).filter(x=>sites.has(x.name))
-      .map(x=>({name:x.name,ap:x.ap,ml:x.ml,dv:x.dv})),
+      .map(x=>({name:x.name,ap:x.ap,ml:x.ml,dv:x.dv,by:meId()})),
   };
 }
 /* Everything the resolver says belongs to this project, and nothing else. The
@@ -2457,8 +2457,17 @@ function leakCheck(file,pr){
       if(!r.shared||r.project!==pr.id) problems.push(`a diary entry on ${a.name||a.id} is private but is in the file`);
     });
   });
-  // every id in this workspace that is NOT in the file must not appear in it
-  const json=JSON.stringify(file);
+  /* Every id in this workspace that is not in the file must not appear in it —
+     but deletions, revivals, the trash and the activity log exist precisely to
+     name ids, including the id of something just made private, which is how
+     the other side knows to drop it. Scanning those for "a private id appears
+     in the file" is therefore always true once anybody unshares anything, and
+     it refused every later push from that device, for good, with nothing said
+     but a toast. Ids are looked for in the content; words are still looked for
+     everywhere that holds any. */
+  const bookkeeping={deletions:undefined,revivals:undefined,activity:undefined,trash:undefined};
+  const json=JSON.stringify(Object.assign({},file,bookkeeping));
+  const textJson=JSON.stringify(Object.assign({},file,{deletions:undefined,revivals:undefined}));
   const privateIds=[];
   SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{ if(x.id&&!sharedIds.has(x.id)) privateIds.push([coll,x]); }));
   (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e.id&&!sharedIds.has(e.id)) privateIds.push(["diary",e]); }));
@@ -2478,7 +2487,7 @@ function leakCheck(file,pr){
   texts.forEach(([coll,x,t])=>{
     for(let i=0;i+LEAK_TEXT_RUN<=t.length;i+=LEAK_TEXT_RUN){
       const run=t.slice(i,i+LEAK_TEXT_RUN);
-      if(json.includes(run)){ problems.push(`text from a private ${SHARE_ONE[coll]||coll} appears in the file`); break; }
+      if(textJson.includes(run)){ problems.push(`text from a private ${SHARE_ONE[coll]||coll} appears in the file`); break; }
     }
   });
   return [...new Set(problems)];
@@ -2639,14 +2648,21 @@ async function spaceHead(){
 let sharedBase={};        // per project: hashes of what we last agreed
 let sharedDirty={};       // per project: a change waiting to go out
 let sharedTimer=null, sharedPollTimer=null, sharedInFlight=false;
+/* The agreed copy keeps the records themselves, not only a hash of each. A
+   hash answers "did this change", which is enough to decide whether to merge
+   a record at all, but not "which side changed this field" — and without that
+   a merge can only guess, which it did: whoever wrote second reinstated their
+   own stale value for every field they had not touched. */
 function sharedFileBase(file){
-  const rec={},diary={};
+  const rec={},diary={},recFull={},diaryFull={};
+  const keep=(id,v)=>{ rec[id]=hashJSON(v); recFull[id]=JSON.parse(JSON.stringify(v)); };
   ["experiments","schedule","notes","readings","protocols","other","animals"].forEach(k=>{
-    (file[k]||[]).forEach(x=>{ if(x&&x.id) rec[x.id]=hashJSON(k==="animals"?animalFields(x):x); });
+    (file[k]||[]).forEach(x=>{ if(x&&x.id) keep(x.id,k==="animals"?animalFields(x):x); });
   });
-  (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) diary[e.id]=hashJSON(e); }));
-  if(file.project&&file.project.id) rec[file.project.id]=hashJSON(file.project);
-  return {rec,diary};
+  (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id){
+    diary[e.id]=hashJSON(e); diaryFull[e.id]=JSON.parse(JSON.stringify(e)); } }));
+  if(file.project&&file.project.id) keep(file.project.id,file.project);
+  return {rec,diary,recFull,diaryFull};
 }
 function changedSince(base,id,obj,isDiary){
   const was=base&&((isDiary?base.diary:base.rec)||{})[id];
@@ -2655,6 +2671,48 @@ function changedSince(base,id,obj,isDiary){
 /* Merge what is on GitHub now with what this device holds. `base` is what the
    two last agreed on; without it the remote's version of anything shared wins,
    because this device cannot show that it changed anything. */
+/* A definition is not whoever-wrote-last's to replace. It travels so an entry
+   can be read, and the person who wrote the entry is the one whose definition
+   describes it. So each item belongs to whoever supplied it: mine are refreshed
+   from my library on every write, everybody else's are carried through
+   untouched.
+   "out.defs = mine.defs || out.defs" made the last writer the author of
+   everyone's definitions, which is how a three-hour surgery became a half-hour
+   one the moment the other person moved it. Libraries had the opposite fault —
+   `out` starts as a copy of the remote, so `mine.libraries` was dropped and a
+   library never changed again after the first write. One rule fixes both. */
+function mergeOwnedList(rList,mList,keyOf,fallbackOwner){
+  const owner=x=>(x&&x.by)||fallbackOwner;      // unstamped: whoever wrote them before
+  const rBy=new Map((rList||[]).filter(Boolean).map(x=>[keyOf(x),x]));
+  const out=[],seen=new Set();
+  (mList||[]).forEach(x=>{
+    if(!x)return; const k=keyOf(x); if(seen.has(k))return; seen.add(k);
+    const r=rBy.get(k), o=r?owner(r):null;
+    out.push(o&&o!==meId()?r:x);                // theirs stands; mine refreshes
+  });
+  (rList||[]).forEach(x=>{
+    if(!x)return; const k=keyOf(x); if(seen.has(k))return;
+    if(owner(x)===meId())return;                // was mine, and I supply it no longer
+    seen.add(k); out.push(x);
+  });
+  return out;
+}
+function mergeDefs(remote,mine){
+  const R=remote||{},M=mine||{},fb=R.by;
+  return {by:R.by||meId(),
+    diaryTypes:mergeOwnedList(R.diaryTypes,M.diaryTypes,t=>t.key,fb),
+    viruses:mergeOwnedList(R.viruses,M.viruses,v=>v.name,fb),
+    sites:mergeOwnedList(R.sites,M.sites,x=>x.name,fb)};
+}
+function mergeLibraries(remote,mine){
+  const R=remote||{},M=mine||{},out={};
+  const ID={viruses:"name",sites:"name",procedures:"name"};
+  new Set(Object.keys(R).concat(Object.keys(M))).forEach(kind=>{
+    const k=ID[kind]||"name";
+    out[kind]=mergeOwnedList(R[kind],M[kind],x=>x[k],undefined);
+  });
+  return out;
+}
 function mergeProjectFile(remote,mine,base){
   const out=JSON.parse(JSON.stringify(remote));
   out.deletions=unionStamps(remote.deletions,mine.deletions);
@@ -2686,26 +2744,32 @@ function mergeProjectFile(remote,mine,base){
       if(!e||!e.id)return;
       const j=have.get(e.id);
       if(j==null){ (merged.diary=merged.diary||[]).push(e); return; }
-      if(changedSince(base,e.id,e,true)) merged.diary[j]=e;
+      if(changedSince(base,e.id,e,true)) merged.diary[j]=mergeFields(merged.diary[j],e,base,e.id,true);
     });
     merged.diary=(merged.diary||[]).filter(e=>!(e&&e.id&&dead("diary",e.id)));
   });
   if(mine.project&&out.project&&changedSince(base,mine.project.id,mine.project))
     out.project=mergeFields(out.project,mine.project,base,mine.project.id);
-  out.defs=mine.defs||out.defs;
+  out.defs=mergeDefs(remote.defs,mine.defs);
+  out.libraries=mergeLibraries(remote.libraries,mine.libraries);
   out.written={at:Date.now(),by:meId()};
   return out;
 }
 /* Field by field: a field this device changed since the agreed copy wins; one
    it did not keeps whatever is there. That is what lets a rename and a
    reschedule of the same record both survive. */
-function mergeFields(theirs,mine,base,id){
-  const wasHash=base&&(base.rec||{})[id];
-  if(wasHash===undefined) return mine;          // no agreed copy: this device decides
+function mergeFields(theirs,mine,base,id,isDiary){
+  const was=base&&((isDiary?base.diaryFull:base.recFull)||{})[id];
+  // no agreed copy to compare against: this device decides, as before
+  if(!was) return mine;
   const out=Object.assign({},theirs);
   Object.keys(mine).forEach(k=>{
     if(k==="diary")return;
-    if(JSON.stringify(mine[k])!==JSON.stringify(theirs[k])) out[k]=mine[k];
+    /* Only a field this device actually changed may override theirs. Asking
+       instead whether mine merely *differs* from theirs makes every field I
+       left alone overwrite whatever they did to it — which is how renaming a
+       task on one side was undone by the other side editing its notes. */
+    if(JSON.stringify(mine[k])!==JSON.stringify(was[k])) out[k]=mine[k];
   });
   return out;
 }
@@ -2916,7 +2980,8 @@ async function unshareRecord(coll,x,parentAnimal){
     file.deletions=file.deletions||{};
     (file.deletions[coll==="diary"?"diary":coll]=file.deletions[coll==="diary"?"diary":coll]||{})[x.id]=
       {at:Date.now(),by:meId(),kind:"private"};
-    logActivity(file,"made private",coll,x.id,x.name||x.title||"an entry");
+    // no label: what it was called is the part being taken back
+    logActivity(file,"made private",coll,x.id,"");
     try{
       const sha=await spaceWrite(path,file,cur.sha,`Arbor: make private`);
       sharedFileShas[id]=sha; sharedBase[id]=sharedFileBase(file);
@@ -2935,11 +3000,16 @@ async function trashSharedRecord(coll,x){
   for(let attempt=0;attempt<SHARED_MAX_TRIES;attempt++){
     const cur=await spaceRead(path); if(!cur.json) return false;
     const file=cur.json;
-    let rec=null;
+    let rec=null,fromAnimal=null;
     const k=coll;
     file[k]=(file[k]||[]).filter(y=>{ if(y.id===x.id){ rec=y; return false; } return true; });
-    if(!rec){ (file.animals||[]).forEach(a=>{ a.diary=(a.diary||[]).filter(e=>{ if(e.id===x.id){ rec=e; return false; } return true; }); }); }
-    file.trash=(file.trash||[]).concat([{coll:k,record:rec||JSON.parse(JSON.stringify(x)),at:Date.now(),by:meId()}]);
+    if(!rec){ (file.animals||[]).forEach(a=>{ a.diary=(a.diary||[]).filter(e=>{
+      if(e.id===x.id){ rec=e; fromAnimal=a.id; return false; } return true; }); }); }
+    // which animal's diary it came out of. Without it, putting it back is a
+    // guess, and the guess was wrong: a surgery deleted from one mouse came
+    // back attached to another.
+    file.trash=(file.trash||[]).concat([{coll:k,record:rec||JSON.parse(JSON.stringify(x)),
+      at:Date.now(),by:meId(),animal:fromAnimal||(k==="diary"?(spOf(x)&&x.animalId)||null:null)}]);
     file.deletions=file.deletions||{};
     (file.deletions[k]=file.deletions[k]||{})[x.id]={at:Date.now(),by:meId(),kind:"deleted"};
     logActivity(file,"deleted",k,x.id,x.name||x.title||"a record");
@@ -2964,8 +3034,14 @@ async function restoreFromTrash(projectId,entryIndex){
     const t=(file.trash||[])[entryIndex]; if(!t) return false;
     const k=t.coll;
     if(k==="diary"){
-      const a=(file.animals||[]).find(y=>(y.diary||[]).every(e=>e.id!==t.record.id));
-      if(a){ a.diary=(a.diary||[]).concat([t.record]); }
+      const a=(file.animals||[]).find(y=>y.id===t.animal);
+      /* Only back where it came from. The old rule — the first animal that
+         does not already have it — is not a weaker version of this, it is a
+         different record: it moved a surgery from one mouse to another and
+         said nothing. With no animal recorded there is nothing to be right
+         about, so refuse rather than guess. */
+      if(!a){ toast("Can't restore this entry — the animal it belonged to isn't in this project any more"); return false; }
+      if(!(a.diary||[]).some(e=>e.id===t.record.id)) a.diary=(a.diary||[]).concat([t.record]);
     } else { file[k]=(file[k]||[]).concat([t.record]); }
     // a revival outranks the deletion that put it here
     file.revivals=file.revivals||{};
