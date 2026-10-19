@@ -201,6 +201,10 @@
   .sr-more,.sr-empty{font-family:var(--mono);font-size:11px;color:var(--ink-faint);padding:6px 0}
   .sp-intro{font-size:12.5px;color:var(--ink-dim);line-height:1.6;margin:0 0 14px}
   .sp-msg{font-family:var(--mono);font-size:11.5px;min-height:16px;margin:8px 0 2px;line-height:1.5}
+  .sp-ghost-row{display:flex;align-items:flex-start;gap:10px;margin:10px 0 2px;padding:10px 12px;
+    border:1px solid var(--amber);border-radius:9px;background:var(--panel2);
+    font-size:12px;color:var(--ink-dim);line-height:1.55}
+  .sp-ghost-row button{flex:0 0 auto;font-size:11.5px;align-self:center}
   .sp-same{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-dim);
     margin:0 0 10px;cursor:pointer;line-height:1.5}
   .sp-same input{width:auto;margin:0;flex:0 0 auto}
@@ -2014,6 +2018,56 @@ const SHAREABLE=["projects","experiments","schedule","animals","notes",
    person's own devices — they are the same person — and Phase 2 attaches a
    display name to it when a shared space is joined. */
 function meId(){ return (DB.me&&DB.me.id)||"me"; }
+/* A workspace can have signed its records as somebody it no longer is. The id
+   is minted the first time migrate() runs, and if that happened before the
+   Gist had been connected — a fresh browser, a second computer set up in the
+   wrong order — stampAuthorship() signed everything already there with an id
+   that the synced workspace then replaced. Those signatures are permanent, so
+   "is this mine?" has to mean "was this ever mine", not "does it match the id
+   I happen to carry today". Getting this wrong is not cosmetic: an unrecognised
+   author cannot take their own record back, and loses it rather than keeps it
+   when a project goes away. */
+function myIds(){ const a=(DB.me&&DB.me.aka)||[]; return [meId()].concat(Array.isArray(a)?a:[]); }
+function isMe(by){ return !by||myIds().includes(by); }
+/* Catch the swap as it happens, on the device where it happens: this device
+   signed things as one id, and the workspace it then loaded says another. The
+   first is still this person, so remember it rather than orphaning everything
+   it ever signed. */
+const LAST_ID_KEY="arbor_last_me_id";
+function rememberIdentityChange(){
+  let was=null; try{ was=localStorage.getItem(LAST_ID_KEY); }catch(e){}
+  const now=meId();
+  if(was&&was!==now&&was!=="me"){
+    DB.me.aka=(Array.isArray(DB.me.aka)?DB.me.aka:[]).concat(was.split(",").filter(x=>x&&x!==now));
+    DB.me.aka=[...new Set(DB.me.aka)];
+  }
+  try{ localStorage.setItem(LAST_ID_KEY,now); }catch(e){}
+}
+/* Signatures belonging to nobody this space knows. Limited to records this
+   workspace can show are its own — private ones, and ones in a project whose
+   id this workspace minted — so a collaborator is never offered somebody
+   else's work to sign. */
+function ghostAuthors(){
+  const counts={};
+  const owned=x=>{ const sp=spOf(x); return !sp||sp.indexOf("_"+meId()+"_")>=0; };
+  const look=(x)=>{ const by=x&&x.by;
+    if(!by||isMe(by)||memberKnown(by)||!owned(x))return;
+    counts[by]=(counts[by]||0)+1; };
+  SHAREABLE.forEach(k=>(Array.isArray(DB[k])?DB[k]:[]).forEach(look));
+  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
+    if(!e||!e.by||isMe(e.by)||memberKnown(e.by))return;
+    const sp=spOf(e); if(sp&&sp.indexOf("_"+meId()+"_")<0)return;
+    counts[e.by]=(counts[e.by]||0)+1; }));
+  return Object.keys(counts).map(id=>({id,count:counts[id]})).sort((a,b)=>b.count-a.count);
+}
+function claimGhostAuthor(id){
+  DB.me.aka=[...new Set((Array.isArray(DB.me.aka)?DB.me.aka:[]).concat([id]))];
+  const me=meId(); let n=0;
+  SHAREABLE.forEach(k=>(Array.isArray(DB[k])?DB[k]:[]).forEach(x=>{ if(x&&x.by===id){ x.by=me; n++; } }));
+  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.by===id){ e.by=me; n++; } }));
+  persist();   // rewritten signatures are a change like any other, and travel
+  return n;
+}
 function ensureIdentity(){
   if(!DB.me||typeof DB.me!=="object") DB.me={};
   if(!DB.me.id){
@@ -2206,6 +2260,7 @@ function openSpaceSetup(){
         lets you each keep a token limited to it alone — worth the two minutes, but not
         required. Connecting here says which of the two you have.</p>
       </details>
+    <div id="sp_ghost"></div>
     <div id="sp_msg" class="sp-msg"></div>
     <div class="actions">
       ${connected?'<button class="btn danger" id="sp_disc" style="margin-right:auto">Disconnect</button>':""}
@@ -2213,6 +2268,34 @@ function openSpaceSetup(){
       <button class="btn accent" id="sp_go">${connected?"Check again":"Connect"}</button>
     </div>`,{center:true});
   const msg=(t,c)=>{ const el=document.getElementById("sp_msg"); el.textContent=t; el.style.color=c||"var(--ink-faint)"; };
+  /* Records signed by an id nobody answers to — almost always this person's
+     own workspace before its identity settled. Shown here because this is
+     where who-you-are in the space is decided, and left as a choice because
+     claiming authorship is not something to do on a guess. */
+  function paintGhosts(){
+    const host=document.getElementById("sp_ghost"); if(!host)return;
+    const gs=ghostAuthors();
+    if(!gs.length){ host.innerHTML=""; return; }
+    host.innerHTML=gs.map(g=>`<div class="sp-ghost-row">
+      <span><b>${g.count}</b> of your records are signed <span class="mono">${esc(g.id)}</span>,
+        which nobody in this space answers to. This is what an earlier identity of your own
+        Arbor looks like — from before this workspace had settled on one. Until it is claimed
+        they show a <b>?</b> beside them, you cannot make them private again, and they would
+        be let go rather than kept if a project stopped being shared with you.</span>
+      <button type="button" class="btn ghost" data-id="${escAttr(g.id)}">These are mine</button>
+    </div>`).join("");
+    host.querySelectorAll("button").forEach(b=>{
+      b.onclick=()=>{
+        const id=b.dataset.id;
+        if(!confirm(`Sign ${ghostAuthors().find(g=>g.id===id).count} records as you instead of "${id}"?\n\n`+
+                    `Do this only if that was your own Arbor. If it was somebody else's, their name stays on their work.`))return;
+        const n=claimGhostAuthor(id);
+        toast(`${n} record${n===1?"":"s"} are yours again`);
+        paintGhosts();
+      };
+    });
+  }
+  paintGhosts();
   document.getElementById("sp_go").onclick=async()=>{
     const repo=document.getElementById("sp_repo").value.trim().replace(/^https?:\/\/github\.com\//,"").replace(/\.git$/,"");
     const tokIn=document.getElementById("sp_tok").value.trim();
@@ -2770,9 +2853,9 @@ async function sharedPoll(force){
           const name=p.name||"A project";
           let kept=0;
           SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{
-            if(spOf(x)===p.id&&x.by===meId()&&x.id!==p.id){ setSp(x,null); kept++; } }));
+            if(spOf(x)===p.id&&isMe(x.by)&&x.id!==p.id){ setSp(x,null); kept++; } }));
           (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
-            if(spOf(e)===p.id&&e.by===meId()){ setSp(e,null); kept++; } }));
+            if(spOf(e)===p.id&&isMe(e.by)){ setSp(e,null); kept++; } }));
           detachProjectFile(p.id);
           delete sharedFileShas[p.id]; delete sharedBase[p.id]; delete sharedDirty[p.id];
           try{ localStorage.removeItem(spaceCacheKey(p.id)); }catch(e){}
@@ -2812,7 +2895,7 @@ function logActivity(file,did,coll,id,label){
 async function unshareRecord(coll,x,parentAnimal){
   const id=spOf(x)||spOf(parentAnimal); if(!id) return false;
   const pr=(DB.projects||[]).find(p=>p.id===id); if(!pr) return false;
-  if(x.by&&x.by!==meId()){ toast("Only the person who made this can take it back"); return false; }
+  if(!isMe(x.by)){ toast("Only the person who made this can take it back"); return false; }
   x.share=SHARE_PRIVATE;
   setSp(x,null);                       // it belongs to the private store now
   persist();                           // written home before it leaves the file
@@ -2970,7 +3053,7 @@ function openSharedActivity(pr){
   const names={}; ((cached&&cached.file&&cached.file.members)||[]).forEach(m=>{ names[m.id]=m.name; });
   modal(`<h3>Activity in ${esc(pr.name||"this project")}</h3>
     <div class="sr-body">${rows.length?rows.map(r=>`<div class="sr-row">
-      <span class="sr-label">${esc(names[r.by]||(r.by===meId()?"You":r.by))} ${esc(r.did)} ${esc(r.label||"")}</span>
+      <span class="sr-label">${esc(names[r.by]||(isMe(r.by)?"You":r.by))} ${esc(r.did)} ${esc(r.label||"")}</span>
       <span class="sr-why">${esc(fmtDMY(todayDateStrOf(new Date(r.at))))}</span></div>`).join("")
       :`<div class="sr-empty">Nothing recorded yet.</div>`}</div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
@@ -3029,7 +3112,12 @@ function memberColour(id){
   const at=ids.indexOf(id);
   return MEMBER_COLOURS[(at<0?0:at)%MEMBER_COLOURS.length];
 }
+function memberKnown(id){ return id===meId()||!!((DB.sharedMembers||{})[id]); }
 function memberInitial(id){
+  // An id with no name behind it is not a person's initial. Showing its first
+  // character as one invents a collaborator out of a random string — which is
+  // how "H" appeared beside an animal nobody called H had ever touched.
+  if(!memberKnown(id)) return "?";
   const m=memberOf(id);
   const n=String((m&&m.name)||id||"?").trim();
   return (n[0]||"?").toUpperCase();
@@ -3038,9 +3126,12 @@ function memberInitial(id){
 // work does not need a badge on every row
 function authorBadgeHTML(x){
   if(!x||!spOf(x))return "";
-  const by=x.by; if(!by||by===meId())return "";
+  const by=x.by; if(isMe(by))return "";
   const m=memberOf(by);
-  return `<span class="by-badge" style="background:${m.colour}" title="${escAttr(m.name||by)}">${esc(memberInitial(by))}</span>`;
+  const title=memberKnown(by)?(m.name||by)
+    :"Signed by "+by+", which nobody in this space answers to — most likely an "+
+     "earlier identity of one of your own workspaces.";
+  return `<span class="by-badge" style="background:${m.colour}" title="${escAttr(title)}">${esc(memberInitial(by))}</span>`;
 }
 function authorEdge(x){
   if(!DB.config.colourByAuthor||!x||!spOf(x))return null;
@@ -3212,7 +3303,7 @@ function shareRowHTML(coll,x,parentAnimal){
   if(coll==="diary"&&!resolveShare("animals",parentAnimal).shared&&x.share!==SHARE_PRIVATE)
     return "";
   const r=resolveShare(coll,x,parentAnimal), v=x.share||"";
-  const mine=!x.by||x.by===meId();
+  const mine=isMe(x.by);
   const opt=(val,lab)=>`<button type="button" data-v="${val}" class="${v===val?"on":""}">${lab}</button>`;
   return `<div class="fld share-row"><label>Sharing</label>
     <div class="seg share-seg" data-coll="${coll}" data-id="${escAttr(x.id)}">
@@ -3958,6 +4049,7 @@ function migrate(){                       // backfill fields added in later vers
   if(DB.tags) delete DB.tags;
   // Sharing, phase 0. Identity first: every id minted below carries it.
   ensureIdentity();
+  rememberIdentityChange();
   // Private additions to shared records, keyed by the shared record's id. Empty
   // until there is something shared to add to.
   if(!DB.overlays||typeof DB.overlays!=="object") DB.overlays={};
