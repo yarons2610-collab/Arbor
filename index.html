@@ -2508,6 +2508,19 @@ function buildProjectFile(pr,prev){
     COLLS.forEach(c=>(file[c]||[]).forEach(x=>x&&x.id&&clear(c,x.id)));
     (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>e&&e.id&&clear("diary",e.id)));
   }
+  /* A record lives in exactly one project file — resolveShare picks one, and
+     two files both holding an animal would be two copies merging apart. So a
+     link pointing somewhere this file does not reach is dropped on the way
+     out: the reader cannot follow it, and leaving it in made the id of an
+     animal that lives in a sibling project look, to the leak check, exactly
+     like the id of a private one — which refused the whole write. */
+  const present=new Set();
+  ["experiments","schedule","notes","readings","protocols","other","animals"].forEach(c=>
+    (file[c]||[]).forEach(x=>x&&x.id&&present.add(x.id)));
+  (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>e&&e.id&&present.add(e.id)));
+  const prune=o=>{ if(o&&Array.isArray(o.links)) o.links=o.links.filter(l=>l&&present.has(l.id)); };
+  prune(file.project); (file.experiments||[]).forEach(prune);
+  ["schedule","notes","readings","protocols","other"].forEach(c=>(file[c]||[]).forEach(prune));
   file.defs=buildDefs(file);
   file.libraries=buildSharedLibraries(pr,file);
   /* Who everyone is travels with the file, not only in space.json. Otherwise a
@@ -2559,9 +2572,15 @@ function leakCheck(file,pr){
   const bookkeeping={deletions:undefined,revivals:undefined,activity:undefined,trash:undefined};
   const json=JSON.stringify(Object.assign({},file,bookkeeping));
   const textJson=JSON.stringify(Object.assign({},file,{deletions:undefined,revivals:undefined}));
+  /* "Not in this file" is not the same as private. A record the resolver
+     shares into a sibling project of the same space is one the reader can
+     already see; treating its id as a leak refused writes over nothing. */
   const privateIds=[];
-  SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{ if(x.id&&!sharedIds.has(x.id)) privateIds.push([coll,x]); }));
-  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e.id&&!sharedIds.has(e.id)) privateIds.push(["diary",e]); }));
+  const elsewhere=(coll,x,parent)=>resolveShare(coll,x,parent).shared;
+  SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{
+    if(x.id&&!sharedIds.has(x.id)&&!elsewhere(coll,x)) privateIds.push([coll,x]); }));
+  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
+    if(e.id&&!sharedIds.has(e.id)&&!elsewhere("diary",e,a)) privateIds.push(["diary",e]); }));
   privateIds.forEach(([coll,x])=>{
     if(json.includes('"'+x.id+'"'))
       problems.push(`the id of a private ${SHARE_ONE[coll]||coll} (${x.name||x.title||x.id}) appears in the file`);
@@ -6773,10 +6792,32 @@ function addProject(){
 // deleting a project unassigns its member experiments rather than destroying
 // them — same "attach later" reasoning as deleteExperiment above
 function deleteProject(id){
+  const pr=(DB.projects||[]).find(x=>x.id===id);
+  const wasShared=!!(pr&&pr.shared);
   DB.experiments.forEach(ex=>{ if(ex.projectId===id) ex.projectId=null; });
   // tasks attached straight to it become unattached rather than orphaned
   taskList().forEach(t=>{ if(t.projectId===id) t.projectId=null; });
-  DB.projects=DB.projects.filter(x=>x.id!==id); persist();
+  DB.projects=DB.projects.filter(x=>x.id!==id);
+  /* Deleting a shared project has to stop sharing it as well. Taking it out of
+     this workspace only left it named in the index with no project record here
+     to withdraw it with — so it sat on the collaborator's screen permanently,
+     unreachable from the side that deleted it. The file itself stays, as it
+     does when you simply stop sharing: the index is what points at it. */
+  if(wasShared&&spaceConnected()){
+    sharedLeft.add(id);
+    delete sharedDirty[id]; delete sharedBase[id]; delete sharedFileShas[id];
+    try{ localStorage.removeItem(spaceCacheKey(id)); }catch(e){}
+    (async()=>{
+      try{
+        const idx=await spaceLoadIndex();
+        if(idx.json&&(idx.json.projects||[]).some(x=>x.id===id)){
+          idx.json.projects=(idx.json.projects||[]).filter(x=>x.id!==id);
+          await spaceWrite("space.json",idx.json,idx.sha,`Arbor: stop sharing ${(pr&&pr.name)||id}`);
+        }
+      }catch(e){ console.warn("Arbor: could not unshare the deleted project",e); }
+    })();
+  }
+  persist();
 }
 // A diary entry (a weight, a surgery, a training session…) belongs to the
 // experiment through the animal it was logged for — the same test animalsForStep
