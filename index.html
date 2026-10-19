@@ -2520,8 +2520,15 @@ function buildDefs(file){
   const usedSecs=[];
   animalSections().forEach(sec=>{
     const keys=(sec.fields||[]).map(f=>f.key);
+    /* A section counts as in use when a shared animal *has* it — not when it
+       has been filled in. Asking for rows meant a table created but not yet
+       typed into looked unused, so its definition stayed behind and the other
+       person received values with no vocabulary to read them by, and nothing
+       to take up. An animal that has been shown the section at all is reason
+       enough to send what the section is. */
     const inUse=(file.animals||[]).some(a=>
-      keys.some(k=>((a.custom||{})[k]!=null)||(((a.tables||{})[k]||[]).length)));
+      ((a.secs||{})[sec.id]!=null) ||
+      keys.some(k=>((a.custom||{})[k]!=null)||((a.tables||{})[k]!=null)));
     if(!inUse)return;
     usedSecs.push({id:sec.id,label:sec.label,by:meId(),
       fields:(sec.fields||[]).map(f=>({key:f.key,label:f.label,type:f.type,options:f.options,
