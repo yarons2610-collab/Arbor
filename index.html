@@ -15955,10 +15955,67 @@ function exportFullDatabaseExcel(){
     ["Notes",(DB.notes||[]).length],
   ];
 
+  /* A table field cannot live in a cell, and flattening it to "3 rows" throws
+     away the thing it was built to keep. Each one gets its own sheet in long
+     format — one line per row, per entry — which is the shape a pivot table or
+     a plot wants, and the shape that makes "how did FOV 2 change" answerable
+     in the spreadsheet as well as in the app. */
+  const tableSheets=[];
+  const seenNames={};
+  const sheetName=lbl=>{ let n=(lbl||"Table").slice(0,28); 
+    seenNames[n]=(seenNames[n]||0)+1; return seenNames[n]>1?`${n} ${seenNames[n]}`:n; };
+  const cellOf=(v,sf)=>v==null?"":(sf&&sf.type==="yesno")?(v?"Yes":"No"):(sf&&sf.type==="number")?num(v):v;
+  (DB.config.diaryTypes||[]).forEach(t=>(t.fields||[]).forEach(f=>{
+    if(f.type!=="table")return;
+    const cols=(f.fields||[]).filter(x=>x&&x.key), pers=(f.per||[]).filter(x=>x&&x.key);
+    const rows=[];
+    if(tableAnchor(f)==="animal"){
+      DB.animals.forEach(a=>{
+        const defined=(a.tables||{})[f.key]||[];
+        if(!defined.length)return;
+        const entries=(a.diary||[]).filter(e=>e.type===t.key);
+        defined.forEach(r=>{
+          const base=[a.name||"",...cols.map(sf=>cellOf(r[sf.key],sf))];
+          const measured=entries.filter(e=>perRowValues((e.data||{})[f.key])[r.id]);
+          if(!measured.length){ rows.push([...base,"","",...pers.map(()=>"")]); return; }
+          measured.forEach(e=>{ const v=perRowValues((e.data||{})[f.key])[r.id]||{};
+            rows.push([...base,e.date||"",e.time||"",...pers.map(sf=>cellOf(v[sf.key],sf))]); });
+        });
+      });
+      if(rows.length) tableSheets.push(sheet(sheetName(f.label),
+        ["Animal",...cols.map(sf=>sf.label||sf.key),"Date","Time",...pers.map(sf=>sf.label||sf.key)],rows,0,1,2));
+    } else {
+      DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
+        if(e.type!==t.key)return;
+        tableRows((e.data||{})[f.key]).forEach((r,i)=>rows.push(
+          [a.name||"",e.date||"",e.time||"",i+1,...cols.map(sf=>cellOf(r[sf.key],sf))]));
+      }));
+      if(rows.length) tableSheets.push(sheet(sheetName(f.label),
+        ["Animal","Date","Time","Row",...cols.map(sf=>sf.label||sf.key)],rows,0,1,2));
+    }
+  }));
+  animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
+    if(f.type!=="table")return;
+    const cols=(f.fields||[]).filter(x=>x&&x.key);
+    const rows=[];
+    DB.animals.forEach(a=>((a.tables||{})[f.key]||[]).forEach(r=>
+      rows.push([a.name||"",...cols.map(sf=>cellOf(r[sf.key],sf))])));
+    if(rows.length) tableSheets.push(sheet(sheetName(f.label),
+      ["Animal",...cols.map(sf=>sf.label||sf.key)],rows,0));
+  }));
+  // whatever the lab added to the animal window, beside the built-in columns
+  const customCols=[];
+  animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
+    if(f.type!=="table") customCols.push([sec,f]); }));
   const sheets=[
     sheet("Animals",["Name","Cage","Sex","Strain","Status","Practice","Excluded","Born","Age (weeks)","Sacrificed","Surgeries",
       "Days since last surgery","Latest weight (g)","Head-post","Cranial window","Experiments (group)","Comments"],animals,0),
     sheet("Diary entries",["Animal","Date","Time","End time","Type","Details","Done","Repeats","Logged"],diary,0,1,2),
+    ...(customCols.length?[sheet("Animal fields",
+      ["Animal",...customCols.map(([sec,f])=>`${sec.label||"Section"} · ${f.label||f.key}`)],
+      DB.animals.map(a=>[a.name||"",...customCols.map(([,f])=>cellOf((a.custom||{})[f.key],f))])
+        .filter(r=>r.slice(1).some(v=>v!=="")),0)]:[]),
+    ...tableSheets,
     sheet("Injections",["Animal","Injection #","Depth #","Virus","Virus type","Site region","AP","ML","DV","Volume (nl)",
       "Target region","Target AP","Target ML","Target DV"],inj,0,1,2),
     sheet("Timeline",["When","Until","Duration (min)","Kind","Title","Repeats","Project","Experiment","Materials",

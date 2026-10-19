@@ -276,6 +276,13 @@ class Workspace:
             v = data.get(f.get("key"))
             if v in (None, "", []):
                 continue
+            if f.get("type") == "table":
+                # the rows themselves get their own sheet; here, only how many,
+                # because a table dumped into a cell is unreadable either way
+                n = len(v) if isinstance(v, list) else len(v or {})
+                if n:
+                    bits.append(f"{f.get('label') or f.get('key')}: {n} rows")
+                continue
             if f.get("type") == "yesno":
                 v = "Yes" if v else "No"
             bits.append(f"{f.get('label') or f.get('key')}: {v}")
@@ -436,6 +443,109 @@ def write_overview(wb, w, sheets, source_label):
 
 
 # ── the sheets ────────────────────────────────────────────────────────────────
+def cell_of(v, sf):
+    """A sub-field value as a spreadsheet cell."""
+    if v is None:
+        return ""
+    t = (sf or {}).get("type")
+    if t == "yesno":
+        return "Yes" if v else "No"
+    if t == "number":
+        return v
+    return v
+
+
+def table_sheets(w):
+    """One sheet per table field, in long format — a line per row, per entry.
+
+    A table cannot live in a cell, and flattening it to "3 rows" throws away
+    the thing it was built to keep. Long format is what a pivot table or a plot
+    wants, and it is what makes "how did this row change" answerable in the
+    spreadsheet as well as in the app."""
+    out, used = [], {}
+
+    def name_for(label):
+        n = (label or "Table")[:28]
+        used[n] = used.get(n, 0) + 1
+        return f"{n} {used[n]}" if used[n] > 1 else n
+
+    for t in (w.config.get("diaryTypes") or []):
+        for f in (t.get("fields") or []):
+            if f.get("type") != "table":
+                continue
+            cols = [c for c in (f.get("fields") or []) if c.get("key")]
+            pers = [c for c in (f.get("per") or []) if c.get("key")]
+            rows = []
+            if f.get("anchor") == "animal":
+                for a in w.animals:
+                    defined = (a.get("tables") or {}).get(f["key"]) or []
+                    if not defined:
+                        continue
+                    entries = [e for e in (a.get("diary") or []) if e.get("type") == t.get("key")]
+                    for r in defined:
+                        base = [a.get("name") or ""] + [cell_of(r.get(c["key"]), c) for c in cols]
+                        measured = [e for e in entries
+                                    if ((e.get("data") or {}).get(f["key"]) or {}).get(r.get("id"))]
+                        if not measured:
+                            rows.append(base + ["", ""] + ["" for _ in pers])
+                            continue
+                        for e in measured:
+                            v = ((e.get("data") or {}).get(f["key"]) or {}).get(r.get("id")) or {}
+                            rows.append(base + [e.get("date") or "", e.get("time") or ""]
+                                        + [cell_of(v.get(c["key"]), c) for c in pers])
+                if rows:
+                    out.append(Sheet(name_for(f.get("label")),
+                        ["Animal"] + [c.get("label") or c["key"] for c in cols]
+                        + ["Date", "Time"] + [c.get("label") or c["key"] for c in pers],
+                        rows, sort=[0, 1, 2]))
+            else:
+                for a in w.animals:
+                    for e in (a.get("diary") or []):
+                        if e.get("type") != t.get("key"):
+                            continue
+                        v = (e.get("data") or {}).get(f["key"])
+                        for i, r in enumerate(v if isinstance(v, list) else []):
+                            rows.append([a.get("name") or "", e.get("date") or "",
+                                         e.get("time") or "", i + 1]
+                                        + [cell_of(r.get(c["key"]), c) for c in cols])
+                if rows:
+                    out.append(Sheet(name_for(f.get("label")),
+                        ["Animal", "Date", "Time", "Row"]
+                        + [c.get("label") or c["key"] for c in cols], rows, sort=[0, 1, 2]))
+
+    for sec in (w.config.get("animalSections") or []):
+        for f in (sec.get("fields") or []):
+            if f.get("type") != "table":
+                continue
+            cols = [c for c in (f.get("fields") or []) if c.get("key")]
+            rows = []
+            for a in w.animals:
+                for r in ((a.get("tables") or {}).get(f["key"]) or []):
+                    rows.append([a.get("name") or ""] + [cell_of(r.get(c["key"]), c) for c in cols])
+            if rows:
+                out.append(Sheet(name_for(f.get("label")),
+                    ["Animal"] + [c.get("label") or c["key"] for c in cols], rows, sort=[0]))
+    return out
+
+
+def animal_fields_sheet(w):
+    """Whatever the lab added to the animal window, beside the built-in columns."""
+    cols = [(sec, f) for sec in (w.config.get("animalSections") or [])
+            for f in (sec.get("fields") or []) if f.get("type") != "table"]
+    if not cols:
+        return None
+    rows = []
+    for a in w.animals:
+        r = [a.get("name") or ""] + [cell_of((a.get("custom") or {}).get(f["key"]), f) for _, f in cols]
+        if any(v != "" for v in r[1:]):
+            rows.append(r)
+    if not rows:
+        return None
+    return Sheet("Animal fields",
+                 ["Animal"] + [f"{(sec.get('label') or 'Section')} · {f.get('label') or f['key']}"
+                               for sec, f in cols], rows, sort=[0])
+
+
 def build_sheets(w):
     sheets = []
 
@@ -600,6 +710,12 @@ def build_sheets(w):
     sheets.append(Sheet("Outline tasks",
                         ["Name", "Soma", "Status", "Start", "End", "Notes"],
                         outline, sort=[0], wide=[5]))
+
+    # whatever this lab added for itself, after the sheets that always exist
+    extra = animal_fields_sheet(w)
+    if extra:
+        sheets.append(extra)
+    sheets.extend(table_sheets(w))
 
     return [s for s in sheets if s.rows]
 
