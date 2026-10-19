@@ -201,6 +201,7 @@
   .sr-more,.sr-empty{font-family:var(--mono);font-size:11px;color:var(--ink-faint);padding:6px 0}
   .sp-intro{font-size:12.5px;color:var(--ink-dim);line-height:1.6;margin:0 0 14px}
   .sp-msg{font-family:var(--mono);font-size:11.5px;min-height:16px;margin:8px 0 2px;line-height:1.5}
+  .lf-note{font-size:10.5px;color:var(--ink-faint);line-height:1.5;margin-top:5px}
   .sp-ghost-row{display:flex;align-items:flex-start;gap:10px;margin:10px 0 2px;padding:10px 12px;
     border:1px solid var(--amber);border-radius:9px;background:var(--panel2);
     font-size:12px;color:var(--ink-dim);line-height:1.55}
@@ -2508,19 +2509,14 @@ function buildProjectFile(pr,prev){
     COLLS.forEach(c=>(file[c]||[]).forEach(x=>x&&x.id&&clear(c,x.id)));
     (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>e&&e.id&&clear("diary",e.id)));
   }
-  /* A record lives in exactly one project file — resolveShare picks one, and
-     two files both holding an animal would be two copies merging apart. So a
-     link pointing somewhere this file does not reach is dropped on the way
-     out: the reader cannot follow it, and leaving it in made the id of an
-     animal that lives in a sibling project look, to the leak check, exactly
-     like the id of a private one — which refused the whole write. */
-  const present=new Set();
-  ["experiments","schedule","notes","readings","protocols","other","animals"].forEach(c=>
-    (file[c]||[]).forEach(x=>x&&x.id&&present.add(x.id)));
-  (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>e&&e.id&&present.add(e.id)));
-  const prune=o=>{ if(o&&Array.isArray(o.links)) o.links=o.links.filter(l=>l&&present.has(l.id)); };
-  prune(file.project); (file.experiments||[]).forEach(prune);
-  ["schedule","notes","readings","protocols","other"].forEach(c=>(file[c]||[]).forEach(prune));
+  /* Links travel whole, including ones pointing at a record that lives in a
+     sibling project's file. They were briefly pruned here, to stop the leak
+     check reading such an id as a private record's — but the pruned project
+     record comes straight back through attachProjectFile and overwrites the
+     one in this workspace, so putting a paper in a second shared project
+     deleted the link you had just made. The leak check knows the difference
+     now (see `elsewhere` in leakCheck), and a link whose target is not here
+     renders as "deleted" rather than breaking anything. */
   file.defs=buildDefs(file);
   file.libraries=buildSharedLibraries(pr,file);
   /* Who everyone is travels with the file, not only in space.json. Otherwise a
@@ -11396,7 +11392,13 @@ function libModal(kind,id){
     <div class="fld"><label>Link</label><input id="r_link" value="${escAttr(rec.link||"")}"></div>
     ${(cfg.fields||[]).map(f=>`<div class="fld"><label>${esc(f.label)}</label>
       <input id="r_f_${f.key}" type="${f.type==="number"?"number":f.type==="date"?"date":"text"}" value="${escAttr(rec[f.key]??"")}"></div>`).join("")}
-    <div class="fld"><label>File on this computer</label><div id="r_file"></div></div>
+    <div class="fld"><label>Notes</label>
+      <textarea id="r_notes" rows="5" placeholder="${kind==="protocol"
+        ?"The protocol itself — steps, volumes, timings. Written here it travels to whoever you share the project with; a file on this computer does not."
+        :"Anything worth keeping with this record."}">${esc(rec.notes||"")}</textarea></div>
+    <div class="fld"><label>File on this computer</label><div id="r_file"></div>
+      <div class="lf-note">Stays on this computer. A collaborator sees the name and cannot open it —
+        use <b>Link</b> for something with a URL, or <b>Notes</b> above for something without one.</div></div>
     <div class="fld"><label>Experiments &amp; projects</label><div id="r_attach"></div></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="r_save">Save</button></div>`);
@@ -11408,6 +11410,7 @@ function libModal(kind,id){
     if(!title){ toast("Title can't be empty"); return; }
     rec.title=title;
     rec.link=document.getElementById("r_link").value.trim();
+    rec.notes=document.getElementById("r_notes").value;
     (cfg.fields||[]).forEach(f=>{
       const v=document.getElementById("r_f_"+f.key).value.trim();
       rec[f.key]=v?(f.type==="number"?+v:v):null;
