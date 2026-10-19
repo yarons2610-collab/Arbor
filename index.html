@@ -10885,6 +10885,57 @@ function animalSections(){ return Array.isArray(DB.config.animalSections)?DB.con
    with it from a shared project. A collaborator's section is read alongside
    yours and never merged into your library — the same rule shared entry types
    already follow, so neither of you ends up with the other's vocabulary. */
+/* Reading somebody's section and using it yourself are different things, and
+   the second has to be asked for. A shared definition is borrowed: it makes
+   their animal legible and nothing more. Taking a copy into your own library
+   is what lets you use the same shape on animals of your own — and it keeps
+   the ids and keys, so the two of you are recording the same thing rather than
+   two things that happen to share a name. */
+function sharedSectionsOffered(){
+  const have=new Set(animalSections().map(x=>x.id));
+  const out=[], seen=new Set();
+  Object.keys(DB.sharedDefs||{}).forEach(sp=>
+    ((DB.sharedDefs[sp]||{}).animalSections||[]).forEach(sec=>{
+      if(!sec||!sec.id||have.has(sec.id)||seen.has(sec.id))return;
+      if(!(sec.fields||[]).length)return;
+      seen.add(sec.id); out.push({sec,by:sec.by});
+    }));
+  return out;
+}
+function sharedTypesOffered(){
+  const have=new Set((DB.config.diaryTypes||[]).map(t=>t.key));
+  const out=[], seen=new Set();
+  Object.keys(DB.sharedDefs||{}).forEach(sp=>
+    ((DB.sharedDefs[sp]||{}).diaryTypes||[]).forEach(t=>{
+      if(!t||!t.key||have.has(t.key)||seen.has(t.key))return;
+      seen.add(t.key); out.push({type:t,by:t.by});
+    }));
+  return out;
+}
+function adoptShared(kind,obj){
+  const copy=JSON.parse(JSON.stringify(obj));
+  delete copy.by; delete copy.fromShared;
+  if(kind==="section"){ DB.config.animalSections=animalSections().concat([copy]); }
+  else { delete copy.core; (DB.config.diaryTypes=DB.config.diaryTypes||[]).push(copy); }
+  persist();
+  return copy;
+}
+function whoMade(by){ const m=by?memberOf(by):null; return (m&&m.name)||"a collaborator"; }
+function offerHTML(rows,kind){
+  if(!rows.length) return "";
+  return `<div class="af-offer">
+    <div class="af-offer-h">From a shared project</div>
+    ${rows.map(r=>{
+      const o=kind==="section"?r.sec:r.type;
+      const n=(o.fields||[]).length;
+      return `<div class="af-offer-row">
+        <span><b>${esc(o.label||"(unnamed)")}</b>
+          <span class="af-sub">${whoMade(r.by)}'s — ${n} field${n===1?"":"s"}.
+            You can already read it on their animals; take a copy to use it on your own.</span></span>
+        <button type="button" class="af-take" data-kind="${kind}" data-id="${escAttr(kind==="section"?o.id:o.key)}">Use this in my Arbor</button>
+      </div>`;}).join("")}
+  </div>`;
+}
 function sectionsForAnimal(a){
   const own=animalSections();
   const sp=a&&spOf(a); if(!sp) return own;
@@ -10931,6 +10982,7 @@ function renderAnimalFieldsLib(host){
             behavioural and practice animals is actually told apart. Nothing recorded is ever lost
             by hiding a section.</span></span></label>
     </div>
+    ${offerHTML(sharedSectionsOffered(),"section")}
     <div id="afl_secs">${secs.map((sec,i)=>`
       <div class="af-sec">
         <div class="af-sec-top">
@@ -10968,6 +11020,14 @@ function renderAnimalFieldsLib(host){
   const cAt=ds=>{ const f=fAt(ds); return f&&(f.fields||[])[+ds.ci]; };
   const redraw=()=>{ persist(); renderAnimalFieldsLib(host); };
 
+  /* Bound once. This function redraws itself after every change, and only the
+     host's innerHTML is replaced — the host itself survives, so re-binding on
+     each pass left one listener per redraw. The second "add column" added two
+     columns, the third added three, which looks exactly like a field editor
+     spawning columns without end. */
+  if(host.__fieldsWired) return;
+  host.__fieldsWired=true;
+
   host.addEventListener("input",e=>{
     const t=e.target, ds=t.dataset;
     if(t.classList.contains("afl_label")){ const sec=secAt(ds); if(sec){ sec.label=t.value; persist(); } }
@@ -10985,6 +11045,12 @@ function renderAnimalFieldsLib(host){
   });
   host.addEventListener("click",e=>{
     const t=e.target, ds=t.dataset;
+    if(t.classList.contains("af-take")){
+      const row=sharedSectionsOffered().find(r=>r.sec.id===ds.id); if(!row)return;
+      adoptShared("section",row.sec);
+      toast(`"${row.sec.label||"Section"}" is yours to use now`);
+      redraw(); return;
+    }
     if(t.id==="afl_addsec"){
       DB.config.animalSections=animalSections().concat([{id:uid("as_"),label:"",fields:[]}]); redraw(); return; }
     if(t.classList.contains("afl_del")){
