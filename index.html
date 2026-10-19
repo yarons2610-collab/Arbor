@@ -2494,13 +2494,34 @@ function buildDefs(file){
   const types=(DB.config.diaryTypes||[]).filter(t=>used.has(t.key)).map(t=>({
     key:t.key,label:t.label,icon:t.icon,color:t.color,timeline:!!t.timeline,
     defaultDuration:t.defaultDuration||null,by:meId(),
-    fields:(t.fields||[]).map(f=>({key:f.key,label:f.label,type:f.type,options:f.options}))}));
+    /* A table's columns are not decoration — without them the field has no
+       shape at all and a shared entry arrives unreadable. Same reasoning as
+       defaultDuration: whatever an entry cannot be read without travels. */
+    fields:(t.fields||[]).map(f=>({key:f.key,label:f.label,type:f.type,options:f.options,
+      anchor:f.anchor||undefined,
+      fields:f.type==="table"?(f.fields||[]).map(x=>({key:x.key,label:x.label,type:x.type,options:x.options})):undefined,
+      per:f.type==="table"?(f.per||[]).map(x=>({key:x.key,label:x.label,type:x.type,options:x.options})):undefined}))}));
   const names=new Set(), sites=new Set();
   (file.animals||[]).forEach(a=>((a.surgeryDetail||{}).injections||[]).forEach(i=>{
     if(i.virus) names.add(i.virus); if(i.siteRegion) sites.add(i.siteRegion); if(i.partnerRegion) sites.add(i.partnerRegion); }));
+  /* The animal window's own sections, for the same reason: a shared animal
+     carries whatever those sections recorded, and without their definitions it
+     arrives as values with no labels and nothing to draw them in. Only the
+     sections something in this file actually uses. */
+  const usedSecs=[];
+  animalSections().forEach(sec=>{
+    const keys=(sec.fields||[]).map(f=>f.key);
+    const inUse=(file.animals||[]).some(a=>
+      keys.some(k=>((a.custom||{})[k]!=null)||(((a.tables||{})[k]||[]).length)));
+    if(!inUse)return;
+    usedSecs.push({id:sec.id,label:sec.label,by:meId(),
+      fields:(sec.fields||[]).map(f=>({key:f.key,label:f.label,type:f.type,options:f.options,
+        fields:f.type==="table"?(f.fields||[]).map(x=>({key:x.key,label:x.label,type:x.type,options:x.options})):undefined}))});
+  });
   return {
     by:meId(),
     diaryTypes:types,
+    animalSections:usedSecs,
     viruses:(DB.config.virusLib||[]).filter(v=>names.has(v.name))
       .map(v=>({name:v.name,type:v.type,promoter:v.promoter,titer:v.titer,by:meId()})),
     sites:(DB.config.siteLib||[]).filter(x=>sites.has(x.name))
@@ -2916,6 +2937,8 @@ function mergeDefs(remote,mine){
   const R=remote||{},M=mine||{},fb=R.by;
   return {by:R.by||meId(),
     diaryTypes:mergeOwnedList(R.diaryTypes,M.diaryTypes,t=>t.key,fb),
+    // left out here, these would survive the first write and vanish on the next
+    animalSections:mergeOwnedList(R.animalSections,M.animalSections,x=>x.id,fb),
     viruses:mergeOwnedList(R.viruses,M.viruses,v=>v.name,fb),
     sites:mergeOwnedList(R.sites,M.sites,x=>x.name,fb)};
 }
@@ -10858,6 +10881,19 @@ function tableAnchor(f){ return (f&&f.anchor)==="animal"?"animal":"entry"; }
    the usage counts are genuinely wired to it, but somebody who images rather
    than injects can put it away. */
 function animalSections(){ return Array.isArray(DB.config.animalSections)?DB.config.animalSections:[]; }
+/* Sections to draw for one animal: this workspace's own, plus any that came
+   with it from a shared project. A collaborator's section is read alongside
+   yours and never merged into your library — the same rule shared entry types
+   already follow, so neither of you ends up with the other's vocabulary. */
+function sectionsForAnimal(a){
+  const own=animalSections();
+  const sp=a&&spOf(a); if(!sp) return own;
+  const have=new Set(own.map(x=>x.id));
+  const extra=(((DB.sharedDefs||{})[sp]||{}).animalSections||[])
+    .filter(x=>x&&x.id&&!have.has(x.id)&&(x.fields||[]).length)
+    .map(x=>Object.assign({},x,{fromShared:true}));
+  return own.concat(extra);
+}
 /* Which sections an animal shows is that animal's own business. A colony holds
    injected animals, behaviour-only animals and practice animals at once, so a
    workspace-wide switch cannot say what is true — it was the wrong unit. The
@@ -10870,9 +10906,9 @@ function sectionShownFor(a,id){
   if(choice!=null) return !!choice;
   return id===PROC_SEC ? !procedureHidden() : true;
 }
-function animalSectionList(){
+function animalSectionList(a){
   return [{id:PROC_SEC,label:"Procedure"}].concat(
-    animalSections().filter(sec=>sec&&(sec.fields||[]).length)
+    sectionsForAnimal(a).filter(sec=>sec&&(sec.fields||[]).length)
       .map(sec=>({id:sec.id,label:sec.label||"(unnamed section)"})));
 }
 function animalCustom(a){ a.custom=a.custom||{}; return a.custom; }
@@ -10970,7 +11006,7 @@ function renderAnimalFieldsLib(host){
   });
 }
 function renderAnimalSections(a){
-  const secs=animalSections().filter(sec=>sec&&(sec.fields||[]).length);
+  const secs=sectionsForAnimal(a).filter(sec=>sec&&(sec.fields||[]).length);
   if(!secs.length) return "";
   if(!a) a={};
   const cv=a?animalCustom(a):{};
@@ -10990,7 +11026,7 @@ function renderAnimalSections(a){
    rows to belong to. */
 function wireAnimalSections(host,a){
   if(!host||!a) return;
-  animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
+  sectionsForAnimal(a).forEach(sec=>(sec.fields||[]).forEach(f=>{
     if(f.type!=="table")return;
     const box=host.querySelector(`.dg-table[data-key="${CSS.escape(f.key)}"]`); if(!box)return;
     wireTableFieldBox(box,asAnimalField(f),a);
@@ -10999,7 +11035,7 @@ function wireAnimalSections(host,a){
 function readAnimalSections(host,a){
   if(!host||!a) return {};
   const out=Object.assign({},animalCustom(a));
-  animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
+  sectionsForAnimal(a).forEach(sec=>(sec.fields||[]).forEach(f=>{
     if(f.type==="table"){
       const box=host.querySelector(`.dg-table[data-key="${CSS.escape(f.key)}"]`);
       if(box){ const v=readTableField(box,asAnimalField(f),a);
@@ -14555,7 +14591,7 @@ function animalModal(id,draft){
   const secRoot=document.getElementById("modal")||document;
   function paintSectionAdd(){
     const host=document.getElementById("am_sec_add"); if(!host)return;
-    const off=animalSectionList().filter(x=>!shown(x.id));
+    const off=animalSectionList(a).filter(x=>!shown(x.id));
     host.innerHTML=off.length?`<span class="am-sec-add-lbl">Not shown for this animal:</span>`+
       off.map(x=>`<button type="button" class="am-sec-chip" data-sec="${escAttr(x.id)}">＋ ${esc(x.label)}</button>`).join(""):"";
   }
