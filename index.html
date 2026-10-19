@@ -1835,7 +1835,28 @@ async function refreshSharedViruses(){
 // Every virus-list consumer in the app reads through here instead of
 // DB.config.virusLib directly, so flipping the opt-in flag is the only thing
 // that needs to change which source is "live".
-function activeViruses(){ return DB.config.useSharedVirusLib ? (DB.sharedVirusCache.viruses||[]) : (DB.config.virusLib||[]); }
+/* Your own viruses, plus any that arrived with a shared project. The reader
+   for those was written and then called from nowhere, so a collaborator opening
+   a shared surgery saw a virus named and nothing behind the name — no type, no
+   promoter, no titer — which is the one thing sending the definitions was for.
+   Theirs are marked and never merged into your library; where you both have a
+   name, yours wins, because that is the one your own records mean. */
+function activeViruses(){
+  const own=DB.config.useSharedVirusLib ? (DB.sharedVirusCache.viruses||[]) : (DB.config.virusLib||[]);
+  const have=new Set(own.map(v=>v&&v.name));
+  const borrowed=sharedLibEntries("viruses").concat(sharedDefList("viruses"))
+    .filter(v=>v&&v.name&&!have.has(v.name));
+  const seen=new Set();
+  return own.concat(borrowed.filter(v=>{ if(seen.has(v.name))return false; seen.add(v.name); return true; }));
+}
+function activeSites(){
+  const own=DB.config.siteLib||[];
+  const have=new Set(own.map(x=>x&&x.name));
+  const borrowed=sharedLibEntries("sites").concat(sharedDefList("sites"))
+    .filter(x=>x&&x.name&&!have.has(x.name));
+  const seen=new Set();
+  return own.concat(borrowed.filter(x=>{ if(seen.has(x.name))return false; seen.add(x.name); return true; }));
+}
 
 function setSaveState(s,detail){
   const el=document.getElementById("saveState"); if(!el)return;
@@ -6263,7 +6284,7 @@ function linkDetail(l){
   if(l.kind==="material"){
     if(l.cat==="inv"){ const inv=(DB.inventory||{})[l.id];
       return {text:inv?[inv.status,inv.note].filter(Boolean).join(" · ")||"in inventory":"not in inventory"}; }
-    if(l.cat==="site"){ const st=(DB.config.siteLib||[]).find(x=>x.name===l.id);
+    if(l.cat==="site"){ const st=activeSites().find(x=>x.name===l.id);
       return {text:st?`AP ${st.ap} · ML ${st.ml} · DV ${st.dv}`:"not in the site library"}; }
     const v=(activeViruses()||[]).find(x=>x.name===l.id);
     return {text:v?[v.type,v.promoter,v.titer].filter(Boolean).join(" · ")||"in the virus library":"not in the virus library"};
@@ -7234,7 +7255,7 @@ function linkOptions(kind){
   if(kind==="note") return DB.notes.map(x=>({v:x.id,t:x.title||"(untitled note)"}));
   if(kind==="material") return [
     {grp:"Viruses",     items:(activeViruses()||[]).map(v=>({v:"virus::"+v.name,t:v.name}))},
-    {grp:"Injection sites",items:(DB.config.siteLib||[]).map(x=>({v:"site::"+x.name,t:x.name}))},
+    {grp:"Injection sites",items:activeSites().map(x=>({v:"site::"+x.name,t:x.name}))},
     {grp:"Inventory",   items:Object.keys(DB.inventory||{}).map(n=>({v:"inv::"+n,t:n}))}
   ].filter(g=>g.items.length);
   return [];
@@ -11185,6 +11206,19 @@ function renderDiaryTypesLib(hostEl){
   hdr.innerHTML = `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
       Define the animal diary's entry types — each gets its own icon, color, custom fields, and whether it shows on the global Timeline.</span>
     <button id="dtlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New type</button>`;
+  /* An entry type that arrived with a shared project can be read on their
+     animals already; this is how it becomes usable on your own. Written at the
+     same time as the sections' version and then, like it, left unwired. */
+  const offerHost=document.createElement("div");
+  const paintOffer=()=>{
+    offerHost.innerHTML=offerHTML(sharedTypesOffered(),"type");
+    offerHost.querySelectorAll(".af-take").forEach(b=>b.onclick=()=>{
+      const row=sharedTypesOffered().find(r=>r.type.key===b.dataset.id); if(!row)return;
+      adoptShared("type",row.type);
+      toast(`"${row.type.label||row.type.key}" is yours to use now`);
+      paintOffer(); paintDTRows();
+    });
+  };
   host.appendChild(hdr);
 
   const wrap = document.createElement("div"); wrap.id = "dtlib_rows"; host.appendChild(wrap);
@@ -11314,6 +11348,7 @@ function renderDiaryTypesLib(hostEl){
       </div>`; }).join("")
     : `<div class="empty-box">No entry types yet — add one above.</div>`;
   }
+  host.appendChild(offerHost); paintOffer();
   paintDTRows();
 
   host.querySelector("#dtlib_add").onclick = () => {
@@ -14348,7 +14383,7 @@ function procedureSectionHTML(p){
       <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 auto">window center</span>
       <select id="${p}_winsite" style="flex:0 0 auto;max-width:160px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:12px">
         <option value="">site…</option>${(()=>{ const m=winDefaultSite();
-          return m.builtin?`<option value="__m1">M1, left (AP +${m.ap}, ML ${m.ml})</option>`:""; })()}${(DB.config.siteLib||[]).map(x=>`<option value="${escAttr(x.name)}">${esc(x.name)}</option>`).join("")}</select>
+          return m.builtin?`<option value="__m1">M1, left (AP +${m.ap}, ML ${m.ml})</option>`:""; })()}${activeSites().map(x=>`<option value="${escAttr(x.name)}"${x.fromShared?' data-shared="1"':""}>${esc(x.name)}${x.fromShared?" (shared)":""}</option>`).join("")}</select>
       <input id="${p}_winap" placeholder="AP" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
       <input id="${p}_winml" placeholder="ML" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
       <input id="${p}_windiam" placeholder="⌀ mm" style="flex:0 0 auto;width:64px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
