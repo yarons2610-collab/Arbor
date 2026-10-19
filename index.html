@@ -215,6 +215,10 @@
   .dg-rowadd{margin-top:6px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);
     border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer}
   .dg-tbl-empty{font-size:11px;color:var(--ink-faint);padding:2px}
+  .dg-perhead{color:var(--gcamp)!important}
+  .dg-tbl td .dg-per{width:100%;background:var(--bg2);border:1px solid var(--gcamp);color:var(--ink);
+    border-radius:6px;padding:4px 6px;font-size:12px}
+  .dg-anchor-note{font-size:10.5px;color:var(--ink-faint);line-height:1.5;margin-top:7px}
   .sp-ghost-row{display:flex;align-items:flex-start;gap:10px;margin:10px 0 2px;padding:10px 12px;
     border:1px solid var(--amber);border-radius:9px;background:var(--panel2);
     font-size:12px;color:var(--ink-dim);line-height:1.55}
@@ -10797,6 +10801,25 @@ const DIARY_FIELD_TYPES=["number","text","yesno","select","table"];
 const SUB_FIELD_TYPES=["number","text","yesno","select"];
 // rows are plain objects keyed by sub-field key; an empty row is dropped on save
 function tableRows(v){ return Array.isArray(v)?v:[]; }
+/* A table's rows can belong to the entry or to the animal.
+   Belonging to the animal is what makes a row a *thing* rather than a line on
+   a form: FOV 2 is the same field of view in March as in May, so asking how it
+   changed is a question with an answer. The animal holds the row identities
+   and whatever is fixed about them; each entry holds its own values against
+   them. Adding a row while filling an entry adds it to the animal, so a thing
+   is described once and recorded against for as long as it exists. */
+function tableAnchor(f){ return (f&&f.anchor)==="animal"?"animal":"entry"; }
+function animalRows(a,key){
+  if(!a) return [];
+  a.tables=a.tables||{};
+  if(!Array.isArray(a.tables[key])) a.tables[key]=[];
+  return a.tables[key];
+}
+function animalRowAdd(a,key){
+  const rows=animalRows(a,key); const r={id:uid("tr_")}; rows.push(r); return r;
+}
+// values an entry recorded against the animal's rows, keyed by row id
+function perRowValues(v){ return (v&&typeof v==="object"&&!Array.isArray(v))?v:{}; }
 // curated picker for diary-type icons — the free-text field next to it still
 // takes any character/emoji typed directly, this is just a quick-pick list
 // covering common lab/animal/medical symbols so most people never need to
@@ -10904,8 +10927,13 @@ function renderDiaryTypesLib(hostEl){
             </select>
             ${f.type==="text"?`<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)"><input type="checkbox" class="ldf_multiline" data-ti="${i}" data-fi="${fi}" style="width:auto" ${f.multiline?"checked":""}> multi-line</label>`:""}
             ${f.type==="select"?`<input class="ldf_options" data-ti="${i}" data-fi="${fi}" value="${escAttr((f.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:160px;${IST}">`:""}
-            ${f.type==="table"?`<span style="font-size:11px;color:var(--ink-faint);flex-basis:100%;margin:2px 0 0">
-              Columns — each entry can hold as many rows of these as it needs</span>
+            ${f.type==="table"?`<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-faint);flex-basis:100%;margin:3px 0 0">
+                <input type="checkbox" class="ldf_anchor" data-ti="${i}" data-fi="${fi}" style="width:auto" ${tableAnchor(f)==="animal"?"checked":""}>
+                rows belong to the animal, not to the entry
+                <span style="opacity:.75">— the same rows every time, so one can be followed across entries</span>
+              </label>
+              <span style="font-size:11px;color:var(--ink-faint);flex-basis:100%;margin:2px 0 0">
+              ${tableAnchor(f)==="animal"?"Fixed columns — what the animal records about each row, once":"Columns — each entry can hold as many rows of these as it needs"}</span>
               <div style="flex-basis:100%;padding-left:14px;border-left:2px solid var(--line2);margin:2px 0 4px">
               ${(f.fields||[]).map((sf,si)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
                 <input class="ldsf_label" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr(sf.label||"")}" placeholder="Column name" style="flex:1;min-width:100px;${IST}">
@@ -10916,7 +10944,20 @@ function renderDiaryTypesLib(hostEl){
                 <button class="ldsf_del" data-ti="${i}" data-fi="${fi}" data-si="${si}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 7px;cursor:pointer;font-size:11px">✕</button>
               </div>`).join("")||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">no columns yet</div>`}
               <button class="ldsf_add" data-ti="${i}" data-fi="${fi}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:2px 8px;font-size:11px;cursor:pointer">＋ add column</button>
-              </div>`:""}
+              </div>
+              ${tableAnchor(f)==="animal"?`<span style="font-size:11px;color:var(--ink-faint);flex-basis:100%;margin:2px 0 0">
+                Recorded each time — what this entry measures against every row</span>
+                <div style="flex-basis:100%;padding-left:14px;border-left:2px solid var(--gcamp);margin:2px 0 4px">
+                ${(f.per||[]).map((sf,si)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
+                  <input class="ldpf_label" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr(sf.label||"")}" placeholder="Column name" style="flex:1;min-width:100px;${IST}">
+                  <select class="ldpf_type" data-ti="${i}" data-fi="${fi}" data-si="${si}" style="${IST};flex:0 0 auto">
+                    ${SUB_FIELD_TYPES.map(ft=>`<option value="${ft}" ${sf.type===ft?"selected":""}>${ft}</option>`).join("")}
+                  </select>
+                  ${sf.type==="select"?`<input class="ldpf_options" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr((sf.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:140px;${IST}">`:""}
+                  <button class="ldpf_del" data-ti="${i}" data-fi="${fi}" data-si="${si}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 7px;cursor:pointer;font-size:11px">✕</button>
+                </div>`).join("")||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">nothing recorded per entry yet</div>`}
+                <button class="ldpf_add" data-ti="${i}" data-fi="${fi}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:2px 8px;font-size:11px;cursor:pointer">＋ add column</button>
+                </div>`:""}`:""}
             <button class="ldf_del" data-ti="${i}" data-fi="${fi}"
               style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
           </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">no custom fields — just the free-text Note will show</div>`}
@@ -10973,6 +11014,13 @@ function renderDiaryTypesLib(hostEl){
       const sf = subFieldAt(t,e.target.dataset);
       if(sf){ sf.options = e.target.value.split(",").map(x=>x.trim()).filter(Boolean); persist(); }
     }
+    if(e.target.classList.contains("ldpf_label")) {
+      const sf = perFieldAt(t,e.target.dataset); if(sf){ sf.label = e.target.value; persist(); }
+    }
+    if(e.target.classList.contains("ldpf_options")) {
+      const sf = perFieldAt(t,e.target.dataset);
+      if(sf){ sf.options = e.target.value.split(",").map(x=>x.trim()).filter(Boolean); persist(); }
+    }
   });
   wrap.addEventListener("change", e => {
     if(e.target.classList.contains("lp2_type")) {
@@ -10994,6 +11042,15 @@ function renderDiaryTypesLib(hostEl){
     }
     if(e.target.classList.contains("ldsf_type")) {
       const sf = subFieldAt(t,e.target.dataset); if(sf){ sf.type = e.target.value; persist(); paintDTRows(); }
+    }
+    if(e.target.classList.contains("ldpf_type")) {
+      const sf = perFieldAt(t,e.target.dataset); if(sf){ sf.type = e.target.value; persist(); paintDTRows(); }
+    }
+    if(e.target.classList.contains("ldf_anchor")) {
+      const f=(t.fields||[])[+e.target.dataset.fi];
+      if(f){ f.anchor = e.target.checked?"animal":"entry";
+        if(f.anchor==="animal"&&!(f.per||[]).length) f.per=[{key:uid("pf_"),label:"",type:"number"}];
+        persist(); paintDTRows(); }
     }
     if(e.target.classList.contains("ldr_type")) {
       const r=(t.related||[])[+e.target.dataset.ri]; if(r){ r.type=e.target.value; persist(); }
@@ -11063,6 +11120,22 @@ function renderDiaryTypesLib(hostEl){
       const t=(DB.config.diaryTypes||[])[+delSF.dataset.ti];
       const f=t&&(t.fields||[])[+delSF.dataset.fi]; if(!f)return;
       (f.fields||[]).splice(+delSF.dataset.si,1); persist(); paintDTRows();
+      return;
+    }
+    const addPF=e.target.closest(".ldpf_add"), delPF=e.target.closest(".ldpf_del");
+    if(addPF){
+      const t=(DB.config.diaryTypes||[])[+addPF.dataset.ti];
+      const f=t&&(t.fields||[])[+addPF.dataset.fi]; if(!f)return;
+      (f.per=f.per||[]).push({key:uid("pf_"),label:"",type:"number"});
+      persist(); paintDTRows();
+      const cols=wrap.querySelectorAll(`.ldpf_label[data-ti="${addPF.dataset.ti}"][data-fi="${addPF.dataset.fi}"]`);
+      if(cols.length) cols[cols.length-1].focus();
+      return;
+    }
+    if(delPF){
+      const t=(DB.config.diaryTypes||[])[+delPF.dataset.ti];
+      const f=t&&(t.fields||[])[+delPF.dataset.fi]; if(!f)return;
+      (f.per||[]).splice(+delPF.dataset.si,1); persist(); paintDTRows();
       return;
     }
     // the same drum picker every other time in the app is set with, rather
@@ -12264,29 +12337,50 @@ function subFieldAt(t,ds){
   const f=(t&&t.fields||[])[+ds.fi];
   return f&&(f.fields||[])[+ds.si];
 }
+function perFieldAt(t,ds){
+  const f=(t&&t.fields||[])[+ds.fi];
+  return f&&(f.per||[])[+ds.si];
+}
 function renderTypeSubField(sf,val,ri){
   const base=`class="dg-sub" data-sub="${escAttr(sf.key)}" data-type="${escAttr(sf.type||"text")}"`;
   if(sf.type==="yesno") return `<select ${base}><option value="">—</option><option value="1" ${val===true?"selected":""}>Yes</option><option value="0" ${val===false?"selected":""}>No</option></select>`;
   if(sf.type==="select") return `<select ${base}><option value="">—</option>${(sf.options||[]).map(o=>`<option value="${escAttr(o)}" ${val===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
   return `<input ${base} type="text" inputmode="${sf.type==="number"?"decimal":"text"}" value="${escAttr(val!=null?val:"")}">`;
 }
-function renderTableField(f,val){
+function renderTableField(f,val,animal){
   const subs=(f.fields||[]).filter(sf=>sf&&sf.key);
-  const rows=tableRows(val);
-  const head=subs.map(sf=>`<th>${esc(sf.label||"(unnamed)")}</th>`).join("")+`<th></th>`;
-  const row=(r,ri)=>`<tr class="dg-row" data-ri="${ri}">${
-    subs.map(sf=>`<td>${renderTypeSubField(sf,(r||{})[sf.key],ri)}</td>`).join("")
-  }<td><button type="button" class="dg-rowdel" title="Remove this row">✕</button></td></tr>`;
-  return `<div class="dg-table" data-key="${escAttr(f.key)}">
-    ${subs.length?`<table class="dg-tbl"><thead><tr>${head}</tr></thead>
-      <tbody>${rows.map(row).join("")}</tbody></table>`
-     :`<div class="dg-tbl-empty">This table has no columns yet — add them where the entry type is defined.</div>`}
-    ${subs.length?`<button type="button" class="dg-rowadd">＋ add row</button>`:""}
+  const pers=(f.per||[]).filter(sf=>sf&&sf.key);
+  const anchored=tableAnchor(f)==="animal"&&!!animal;
+  if(!subs.length&&!pers.length)
+    return `<div class="dg-table" data-key="${escAttr(f.key)}">
+      <div class="dg-tbl-empty">This table has no columns yet — add them where the entry type is defined.</div></div>`;
+  const head=subs.map(sf=>`<th>${esc(sf.label||"(unnamed)")}</th>`).join("")
+    +(anchored?pers.map(sf=>`<th class="dg-perhead">${esc(sf.label||"(unnamed)")}</th>`).join(""):"")
+    +`<th></th>`;
+  let body;
+  if(anchored){
+    const vals=perRowValues(val);
+    body=animalRows(animal,f.key).map(r=>`<tr class="dg-trow" data-rid="${escAttr(r.id)}">${
+        subs.map(sf=>`<td>${renderTypeSubField(sf,r[sf.key])}</td>`).join("")
+      }${pers.map(sf=>`<td>${renderTypeSubField(Object.assign({},sf),(vals[r.id]||{})[sf.key]).replace('class="dg-sub"','class="dg-per"')}</td>`).join("")
+      }<td><button type="button" class="dg-rowdel" title="Remove from this animal">✕</button></td></tr>`).join("");
+  } else {
+    body=tableRows(val).map((r,ri)=>`<tr class="dg-trow" data-ri="${ri}">${
+        subs.map(sf=>`<td>${renderTypeSubField(sf,(r||{})[sf.key],ri)}</td>`).join("")
+      }<td><button type="button" class="dg-rowdel" title="Remove this row">✕</button></td></tr>`).join("");
+  }
+  return `<div class="dg-table" data-key="${escAttr(f.key)}" data-anchor="${anchored?"animal":"entry"}">
+    <table class="dg-tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+    <button type="button" class="dg-rowadd">＋ add row</button>
+    ${anchored?`<div class="dg-anchor-note">These rows belong to ${esc(animal.name||"this animal")} —
+      the same ones every time. What you type under
+      <b>${esc(pers.map(x=>x.label||"").filter(Boolean).join(", ")||"the recorded columns")}</b>
+      is this entry's alone.</div>`:""}
   </div>`;
 }
-function renderTypeField(f,val,cls){
+function renderTypeField(f,val,cls,animal){
   cls=cls||"dg-field";
-  if(f.type==="table") return renderTableField(f,val);
+  if(f.type==="table") return renderTableField(f,val,animal);
   if(f.type==="yesno") return `<select class="${cls}" data-key="${escAttr(f.key)}" data-type="yesno"><option value="">—</option><option value="1" ${val===true?"selected":""}>Yes</option><option value="0" ${val===false?"selected":""}>No</option></select>`;
   if(f.type==="select") return `<select class="${cls}" data-key="${escAttr(f.key)}" data-type="select"><option value="">—</option>${(f.options||[]).map(o=>`<option value="${escAttr(o)}" ${val===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
   if(f.type==="text"&&f.multiline) return `<textarea class="${cls}" data-key="${escAttr(f.key)}" data-type="text">${esc(val!=null?val:"")}</textarea>`;
@@ -12295,33 +12389,82 @@ function renderTypeField(f,val,cls){
 /* Add and remove rows. Delegated from whatever host the fields were drawn
    into, so an editor only has to call this once and never again as rows come
    and go. */
-function wireTableFields(host,type){
+function wireTableFields(host,type,animal){
   if(!host) return;
   const def=diaryTypeDef(type);
   host.querySelectorAll(".dg-table").forEach(box=>{
     const f=(def.fields||[]).find(x=>x.key===box.dataset.key); if(!f)return;
     const subs=(f.fields||[]).filter(sf=>sf&&sf.key);
+    const pers=(f.per||[]).filter(sf=>sf&&sf.key);
+    const anchored=box.dataset.anchor==="animal"&&!!animal;
     const body=box.querySelector("tbody");
     const add=box.querySelector(".dg-rowadd");
     if(add) add.onclick=()=>{
-      const tr=document.createElement("tr"); tr.className="dg-row";
-      tr.innerHTML=subs.map(sf=>`<td>${renderTypeSubField(sf,null)}</td>`).join("")+
-        `<td><button type="button" class="dg-rowdel" title="Remove this row">✕</button></td>`;
+      const tr=document.createElement("tr"); tr.className="dg-trow";
+      if(anchored){
+        /* A row added while filling an entry is a row the animal now has —
+           that is the whole point of anchoring it there. Whatever is typed
+           into its fixed columns is read back into the animal on save. */
+        const r=animalRowAdd(animal,f.key); persist();
+        tr.dataset.rid=r.id;
+        tr.innerHTML=subs.map(sf=>`<td>${renderTypeSubField(sf,null)}</td>`).join("")
+          +pers.map(sf=>`<td>${renderTypeSubField(sf,null).replace('class="dg-sub"','class="dg-per"')}</td>`).join("")
+          +`<td><button type="button" class="dg-rowdel" title="Remove from this animal">✕</button></td>`;
+      } else {
+        tr.innerHTML=subs.map(sf=>`<td>${renderTypeSubField(sf,null)}</td>`).join("")+
+          `<td><button type="button" class="dg-rowdel" title="Remove this row">✕</button></td>`;
+      }
       body.appendChild(tr);
-      const first=tr.querySelector(".dg-sub"); if(first)first.focus();
+      const first=tr.querySelector(".dg-sub,.dg-per"); if(first)first.focus();
     };
     box.addEventListener("click",ev=>{
       const del=ev.target.closest(".dg-rowdel"); if(!del)return;
-      const tr=del.closest("tr"); if(tr)tr.remove();
+      const tr=del.closest("tr"); if(!tr)return;
+      if(anchored){
+        // it belongs to the animal, so removing it reaches every entry that
+        // ever recorded against it — worth asking before, not explaining after
+        const label=(tr.querySelector(".dg-sub")||{}).value||"this row";
+        if(!confirm(`Remove "${label}" from ${animal.name||"this animal"}?\n\n`+
+          `It stops being one of its rows, and what other entries recorded against it is no longer shown.`))return;
+        const rows=animalRows(animal,f.key);
+        const at=rows.findIndex(x=>x.id===tr.dataset.rid);
+        if(at>=0){ rows.splice(at,1); persist(); }
+      }
+      tr.remove();
     });
   });
 }
 /* Read a table back. A row where everything was left blank is not a row —
    pressing "add row" and changing your mind should not record anything. */
-function readTableField(box,f){
+function readTableField(box,f,animal){
   const subs=(f.fields||[]).filter(sf=>sf&&sf.key);
+  const pers=(f.per||[]).filter(sf=>sf&&sf.key);
+  const readInto=(el,sf,obj)=>{
+    if(!el)return false;
+    const raw=el.value;
+    if(sf.type==="yesno"){ if(raw===""){ delete obj[sf.key]; return false; } obj[sf.key]=raw==="1"; return true; }
+    if(sf.type==="number"){ const t=raw.trim(); if(t===""){ delete obj[sf.key]; return false; }
+      const n=parseFloat(t.replace(",",".")); if(isNaN(n))return false; obj[sf.key]=n; return true; }
+    if(raw.trim()===""){ delete obj[sf.key]; return false; }
+    obj[sf.key]=raw.trim(); return true;
+  };
+  /* Anchored to the animal: the fixed columns are written back to the animal's
+     own row, and what comes out is this entry's values keyed by row id — so an
+     entry says "what I measured on FOV 2", not "a row that happens to say FOV 2". */
+  if(box.dataset.anchor==="animal"&&animal){
+    const rows=animalRows(animal,f.key);
+    const vals={};
+    box.querySelectorAll("tr.dg-trow").forEach(tr=>{
+      const rid=tr.dataset.rid; const r=rows.find(x=>x.id===rid); if(!r)return;
+      subs.forEach(sf=>readInto(tr.querySelector(`.dg-sub[data-sub="${CSS.escape(sf.key)}"]`),sf,r));
+      const v={}; let any=false;
+      pers.forEach(sf=>{ if(readInto(tr.querySelector(`.dg-per[data-sub="${CSS.escape(sf.key)}"]`),sf,v)) any=true; });
+      if(any) vals[rid]=v;
+    });
+    return vals;
+  }
   const out=[];
-  box.querySelectorAll("tr.dg-row").forEach(tr=>{
+  box.querySelectorAll("tr.dg-trow").forEach(tr=>{
     const r={}; let any=false;
     subs.forEach(sf=>{
       const el=tr.querySelector(`.dg-sub[data-sub="${CSS.escape(sf.key)}"]`); if(!el)return;
@@ -12335,11 +12478,11 @@ function readTableField(box,f){
   });
   return out;
 }
-function renderTypeFields(type,d){
+function renderTypeFields(type,d,animal){
   const def=diaryTypeDef(type);
   if(!def.fields.length) return "";
   return `<div class="dg-metrics-grid">${def.fields.map(f=>
-    `<div${f.type==="table"?' class="dg-wide"':""}><label>${esc(f.label||"(unnamed)")}</label>${renderTypeField(f,d[f.key])}</div>`).join("")}</div>`;
+    `<div${f.type==="table"?' class="dg-wide"':""}><label>${esc(f.label||"(unnamed)")}</label>${renderTypeField(f,d[f.key],null,animal)}</div>`).join("")}</div>`;
 }
 function diaryEntrySummary(e,a){
   const d=e.data||{};
@@ -12348,7 +12491,8 @@ function diaryEntrySummary(e,a){
   const def=diaryTypeDef(e.type);
   const parts=def.fields.map(f=>{
     const v=d[f.key]; if(v==null||v==="")return null;
-    if(f.type==="table"){ const n=tableRows(v).length;
+    if(f.type==="table"){
+      const n=tableAnchor(f)==="animal"?Object.keys(perRowValues(v)).length:tableRows(v).length;
       return n?`${f.label||"rows"}: ${n}`:null; }
     return `${f.label} ${f.type==="yesno"?(v?"Yes":"No"):v}`;
   }).filter(Boolean);
@@ -12938,7 +13082,7 @@ function paintDiary(container,a,opts){
       </div>
       <div class="dg-metrics-host" style="margin-top:6px">${renderMetricsFields(d.task,d.metrics)}</div>
       <label style="margin-top:4px;display:flex;align-items:center;gap:5px"><input type="checkbox" class="dg-f-savelib" style="width:auto"> save task name to library</label>`
-      : renderTypeFields(type,d);
+      : renderTypeFields(type,d,a);
     const dtVal=(entryDate||selDate)+(entryTime?"T"+entryTime:"");
     const isDone=editingId?!!(a.diary.find(e=>e.id===editingId)||{}).done:false;
     return `<div class="dg-form">
@@ -13064,7 +13208,8 @@ function paintDiary(container,a,opts){
         def.fields.forEach(f=>{
           if(f.type==="table"){
             const box=[...host.querySelectorAll(".dg-table")].find(x=>x.dataset.key===f.key);
-            if(box){ const rows=readTableField(box,f); if(rows.length)data[f.key]=rows; }
+            if(box){ const v=readTableField(box,f,a);
+              if(Array.isArray(v)?v.length:Object.keys(v).length) data[f.key]=v; }
             return;
           }
           const el=[...host.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
@@ -13246,7 +13391,7 @@ function paintDiary(container,a,opts){
       const editing=editingId?a.diary.find(e=>e.id===editingId):null;
       host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate, editing?editing.time:"", editing?editing.endTime:"");
       wireForm(host,formType,editing);
-      wireTableFields(host,formType);     // without this, "add row" does nothing
+      wireTableFields(host,formType,a);   // without this, "add row" does nothing
     }
   }
 
@@ -14762,8 +14907,9 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
           document.getElementById("tc_metrics").innerHTML=renderMetricsFields(e.target.value.trim(),{});
         });
       } else {
-        fieldsHost.innerHTML=renderTypeFields(type,{});
-        wireTableFields(fieldsHost,type);   // without this, "add row" does nothing
+        const an=DB.animals.find(x=>x.id===animalId);
+        fieldsHost.innerHTML=renderTypeFields(type,{},an);
+        wireTableFields(fieldsHost,type,an);   // without this, "add row" does nothing
       }
     }
     typeSel.onchange=paintFields; paintFields();
@@ -14792,7 +14938,9 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
         def.fields.forEach(f=>{
           if(f.type==="table"){
             const box=[...fieldsHost.querySelectorAll(".dg-table")].find(x=>x.dataset.key===f.key);
-            if(box){ const rows=readTableField(box,f); if(rows.length)data[f.key]=rows; }
+            if(box){ const an=DB.animals.find(x=>x.id===animalId);
+              const v=readTableField(box,f,an);
+              if(Array.isArray(v)?v.length:Object.keys(v).length) data[f.key]=v; }
             return;
           }
           const el=[...fieldsHost.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
