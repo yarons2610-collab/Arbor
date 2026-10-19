@@ -202,6 +202,19 @@
   .sp-intro{font-size:12.5px;color:var(--ink-dim);line-height:1.6;margin:0 0 14px}
   .sp-msg{font-family:var(--mono);font-size:11.5px;min-height:16px;margin:8px 0 2px;line-height:1.5}
   .lf-note{font-size:10.5px;color:var(--ink-faint);line-height:1.5;margin-top:5px}
+  .dg-wide{grid-column:1/-1}
+  .dg-table{border:1px solid var(--line2);border-radius:9px;padding:8px;background:var(--panel2)}
+  .dg-tbl{width:100%;border-collapse:collapse;font-size:12px}
+  .dg-tbl th{text-align:left;font-family:var(--mono);font-size:9.5px;text-transform:uppercase;
+    letter-spacing:.05em;color:var(--ink-faint);font-weight:500;padding:0 5px 5px}
+  .dg-tbl td{padding:2px 3px;vertical-align:middle}
+  .dg-tbl td .dg-sub{width:100%;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);
+    border-radius:6px;padding:4px 6px;font-size:12px}
+  .dg-rowdel{border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:11px;padding:2px 4px}
+  .dg-rowdel:hover{color:var(--overdue)}
+  .dg-rowadd{margin-top:6px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);
+    border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer}
+  .dg-tbl-empty{font-size:11px;color:var(--ink-faint);padding:2px}
   .sp-ghost-row{display:flex;align-items:flex-start;gap:10px;margin:10px 0 2px;padding:10px 12px;
     border:1px solid var(--amber);border-radius:9px;background:var(--panel2);
     font-size:12px;color:var(--ink-dim);line-height:1.55}
@@ -10776,7 +10789,14 @@ function procedureModal(id,draft){
    of custom fields (number/text/yesno/select) and a "shows on Timeline" flag.
    A type's `key` is immutable once created (existing entries reference it) -
    only label/icon/color/timeline/fields are editable. */
-const DIARY_FIELD_TYPES=["number","text","yesno","select"];
+/* "table" is a field whose value is a list of rows rather than one value, each
+   row carrying the sub-fields the type declares. How many rows there are is
+   data, not schema: three fields of view today, five tomorrow, on the same
+   entry type. Everything else here answers with a single value. */
+const DIARY_FIELD_TYPES=["number","text","yesno","select","table"];
+const SUB_FIELD_TYPES=["number","text","yesno","select"];
+// rows are plain objects keyed by sub-field key; an empty row is dropped on save
+function tableRows(v){ return Array.isArray(v)?v:[]; }
 // curated picker for diary-type icons — the free-text field next to it still
 // takes any character/emoji typed directly, this is just a quick-pick list
 // covering common lab/animal/medical symbols so most people never need to
@@ -10884,6 +10904,19 @@ function renderDiaryTypesLib(hostEl){
             </select>
             ${f.type==="text"?`<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)"><input type="checkbox" class="ldf_multiline" data-ti="${i}" data-fi="${fi}" style="width:auto" ${f.multiline?"checked":""}> multi-line</label>`:""}
             ${f.type==="select"?`<input class="ldf_options" data-ti="${i}" data-fi="${fi}" value="${escAttr((f.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:160px;${IST}">`:""}
+            ${f.type==="table"?`<span style="font-size:11px;color:var(--ink-faint);flex-basis:100%;margin:2px 0 0">
+              Columns — each entry can hold as many rows of these as it needs</span>
+              <div style="flex-basis:100%;padding-left:14px;border-left:2px solid var(--line2);margin:2px 0 4px">
+              ${(f.fields||[]).map((sf,si)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
+                <input class="ldsf_label" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr(sf.label||"")}" placeholder="Column name" style="flex:1;min-width:100px;${IST}">
+                <select class="ldsf_type" data-ti="${i}" data-fi="${fi}" data-si="${si}" style="${IST};flex:0 0 auto">
+                  ${SUB_FIELD_TYPES.map(ft=>`<option value="${ft}" ${sf.type===ft?"selected":""}>${ft}</option>`).join("")}
+                </select>
+                ${sf.type==="select"?`<input class="ldsf_options" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr((sf.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:140px;${IST}">`:""}
+                <button class="ldsf_del" data-ti="${i}" data-fi="${fi}" data-si="${si}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 7px;cursor:pointer;font-size:11px">✕</button>
+              </div>`).join("")||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">no columns yet</div>`}
+              <button class="ldsf_add" data-ti="${i}" data-fi="${fi}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:2px 8px;font-size:11px;cursor:pointer">＋ add column</button>
+              </div>`:""}
             <button class="ldf_del" data-ti="${i}" data-fi="${fi}"
               style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
           </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">no custom fields — just the free-text Note will show</div>`}
@@ -10933,6 +10966,13 @@ function renderDiaryTypesLib(hostEl){
       const f = (t.fields||[])[+e.target.dataset.fi];
       if(f){ f.options = e.target.value.split(",").map(s=>s.trim()).filter(Boolean); persist(); }
     }
+    if(e.target.classList.contains("ldsf_label")) {
+      const sf = subFieldAt(t,e.target.dataset); if(sf){ sf.label = e.target.value; persist(); }
+    }
+    if(e.target.classList.contains("ldsf_options")) {
+      const sf = subFieldAt(t,e.target.dataset);
+      if(sf){ sf.options = e.target.value.split(",").map(x=>x.trim()).filter(Boolean); persist(); }
+    }
   });
   wrap.addEventListener("change", e => {
     if(e.target.classList.contains("lp2_type")) {
@@ -10951,6 +10991,9 @@ function renderDiaryTypesLib(hostEl){
     }
     if(e.target.classList.contains("ldf_multiline")) {
       const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.multiline = e.target.checked; persist(); }
+    }
+    if(e.target.classList.contains("ldsf_type")) {
+      const sf = subFieldAt(t,e.target.dataset); if(sf){ sf.type = e.target.value; persist(); paintDTRows(); }
     }
     if(e.target.classList.contains("ldr_type")) {
       const r=(t.related||[])[+e.target.dataset.ri]; if(r){ r.type=e.target.value; persist(); }
@@ -11005,6 +11048,22 @@ function renderDiaryTypesLib(hostEl){
     } else if(delF){
       const t = (DB.config.diaryTypes||[])[+delF.dataset.ti]; if(!t) return;
       t.fields.splice(+delF.dataset.fi,1); persist(); paintDTRows();
+    }
+    const addSF=e.target.closest(".ldsf_add"), delSF=e.target.closest(".ldsf_del");
+    if(addSF){
+      const t=(DB.config.diaryTypes||[])[+addSF.dataset.ti];
+      const f=t&&(t.fields||[])[+addSF.dataset.fi]; if(!f)return;
+      (f.fields=f.fields||[]).push({key:uid("sf_"),label:"",type:"text"});
+      persist(); paintDTRows();
+      const cols=wrap.querySelectorAll(`.ldsf_label[data-ti="${addSF.dataset.ti}"][data-fi="${addSF.dataset.fi}"]`);
+      if(cols.length) cols[cols.length-1].focus();
+      return;
+    }
+    if(delSF){
+      const t=(DB.config.diaryTypes||[])[+delSF.dataset.ti];
+      const f=t&&(t.fields||[])[+delSF.dataset.fi]; if(!f)return;
+      (f.fields||[]).splice(+delSF.dataset.si,1); persist(); paintDTRows();
+      return;
     }
     // the same drum picker every other time in the app is set with, rather
     // than a field that could only be typed into
@@ -12201,17 +12260,86 @@ function diaryNoteOf(d){
   if(d.label!=null) return [d.label,d.text].filter(Boolean).join(": ");
   return d.text||"";
 }
+function subFieldAt(t,ds){
+  const f=(t&&t.fields||[])[+ds.fi];
+  return f&&(f.fields||[])[+ds.si];
+}
+function renderTypeSubField(sf,val,ri){
+  const base=`class="dg-sub" data-sub="${escAttr(sf.key)}" data-type="${escAttr(sf.type||"text")}"`;
+  if(sf.type==="yesno") return `<select ${base}><option value="">—</option><option value="1" ${val===true?"selected":""}>Yes</option><option value="0" ${val===false?"selected":""}>No</option></select>`;
+  if(sf.type==="select") return `<select ${base}><option value="">—</option>${(sf.options||[]).map(o=>`<option value="${escAttr(o)}" ${val===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+  return `<input ${base} type="text" inputmode="${sf.type==="number"?"decimal":"text"}" value="${escAttr(val!=null?val:"")}">`;
+}
+function renderTableField(f,val){
+  const subs=(f.fields||[]).filter(sf=>sf&&sf.key);
+  const rows=tableRows(val);
+  const head=subs.map(sf=>`<th>${esc(sf.label||"(unnamed)")}</th>`).join("")+`<th></th>`;
+  const row=(r,ri)=>`<tr class="dg-row" data-ri="${ri}">${
+    subs.map(sf=>`<td>${renderTypeSubField(sf,(r||{})[sf.key],ri)}</td>`).join("")
+  }<td><button type="button" class="dg-rowdel" title="Remove this row">✕</button></td></tr>`;
+  return `<div class="dg-table" data-key="${escAttr(f.key)}">
+    ${subs.length?`<table class="dg-tbl"><thead><tr>${head}</tr></thead>
+      <tbody>${rows.map(row).join("")}</tbody></table>`
+     :`<div class="dg-tbl-empty">This table has no columns yet — add them where the entry type is defined.</div>`}
+    ${subs.length?`<button type="button" class="dg-rowadd">＋ add row</button>`:""}
+  </div>`;
+}
 function renderTypeField(f,val,cls){
   cls=cls||"dg-field";
+  if(f.type==="table") return renderTableField(f,val);
   if(f.type==="yesno") return `<select class="${cls}" data-key="${escAttr(f.key)}" data-type="yesno"><option value="">—</option><option value="1" ${val===true?"selected":""}>Yes</option><option value="0" ${val===false?"selected":""}>No</option></select>`;
   if(f.type==="select") return `<select class="${cls}" data-key="${escAttr(f.key)}" data-type="select"><option value="">—</option>${(f.options||[]).map(o=>`<option value="${escAttr(o)}" ${val===o?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
   if(f.type==="text"&&f.multiline) return `<textarea class="${cls}" data-key="${escAttr(f.key)}" data-type="text">${esc(val!=null?val:"")}</textarea>`;
   return `<input class="${cls}" data-key="${escAttr(f.key)}" data-type="${f.type==="number"?"number":"text"}" type="text" inputmode="${f.type==="number"?"decimal":"text"}" value="${escAttr(val!=null?val:"")}">`;
 }
+/* Add and remove rows. Delegated from whatever host the fields were drawn
+   into, so an editor only has to call this once and never again as rows come
+   and go. */
+function wireTableFields(host,type){
+  if(!host) return;
+  const def=diaryTypeDef(type);
+  host.querySelectorAll(".dg-table").forEach(box=>{
+    const f=(def.fields||[]).find(x=>x.key===box.dataset.key); if(!f)return;
+    const subs=(f.fields||[]).filter(sf=>sf&&sf.key);
+    const body=box.querySelector("tbody");
+    const add=box.querySelector(".dg-rowadd");
+    if(add) add.onclick=()=>{
+      const tr=document.createElement("tr"); tr.className="dg-row";
+      tr.innerHTML=subs.map(sf=>`<td>${renderTypeSubField(sf,null)}</td>`).join("")+
+        `<td><button type="button" class="dg-rowdel" title="Remove this row">✕</button></td>`;
+      body.appendChild(tr);
+      const first=tr.querySelector(".dg-sub"); if(first)first.focus();
+    };
+    box.addEventListener("click",ev=>{
+      const del=ev.target.closest(".dg-rowdel"); if(!del)return;
+      const tr=del.closest("tr"); if(tr)tr.remove();
+    });
+  });
+}
+/* Read a table back. A row where everything was left blank is not a row —
+   pressing "add row" and changing your mind should not record anything. */
+function readTableField(box,f){
+  const subs=(f.fields||[]).filter(sf=>sf&&sf.key);
+  const out=[];
+  box.querySelectorAll("tr.dg-row").forEach(tr=>{
+    const r={}; let any=false;
+    subs.forEach(sf=>{
+      const el=tr.querySelector(`.dg-sub[data-sub="${CSS.escape(sf.key)}"]`); if(!el)return;
+      const raw=el.value;
+      if(sf.type==="yesno"){ if(raw!==""){ r[sf.key]=raw==="1"; any=true; } return; }
+      if(sf.type==="number"){ const t=raw.trim(); if(t===""){return;}
+        const n=parseFloat(t.replace(",",".")); if(!isNaN(n)){ r[sf.key]=n; any=true; } return; }
+      if(raw.trim()!==""){ r[sf.key]=raw.trim(); any=true; }
+    });
+    if(any) out.push(r);
+  });
+  return out;
+}
 function renderTypeFields(type,d){
   const def=diaryTypeDef(type);
   if(!def.fields.length) return "";
-  return `<div class="dg-metrics-grid">${def.fields.map(f=>`<div><label>${esc(f.label||"(unnamed)")}</label>${renderTypeField(f,d[f.key])}</div>`).join("")}</div>`;
+  return `<div class="dg-metrics-grid">${def.fields.map(f=>
+    `<div${f.type==="table"?' class="dg-wide"':""}><label>${esc(f.label||"(unnamed)")}</label>${renderTypeField(f,d[f.key])}</div>`).join("")}</div>`;
 }
 function diaryEntrySummary(e,a){
   const d=e.data||{};
@@ -12220,6 +12348,8 @@ function diaryEntrySummary(e,a){
   const def=diaryTypeDef(e.type);
   const parts=def.fields.map(f=>{
     const v=d[f.key]; if(v==null||v==="")return null;
+    if(f.type==="table"){ const n=tableRows(v).length;
+      return n?`${f.label||"rows"}: ${n}`:null; }
     return `${f.label} ${f.type==="yesno"?(v?"Yes":"No"):v}`;
   }).filter(Boolean);
   if(e.type==="weight"&&a){
@@ -12932,6 +13062,11 @@ function paintDiary(container,a,opts){
         // fields by its stable key, typed per the field's declared type
         const def=diaryTypeDef(type);
         def.fields.forEach(f=>{
+          if(f.type==="table"){
+            const box=[...host.querySelectorAll(".dg-table")].find(x=>x.dataset.key===f.key);
+            if(box){ const rows=readTableField(box,f); if(rows.length)data[f.key]=rows; }
+            return;
+          }
           const el=[...host.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
           if(!el)return;
           const raw=el.value;
@@ -13111,6 +13246,7 @@ function paintDiary(container,a,opts){
       const editing=editingId?a.diary.find(e=>e.id===editingId):null;
       host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate, editing?editing.time:"", editing?editing.endTime:"");
       wireForm(host,formType,editing);
+      wireTableFields(host,formType);     // without this, "add row" does nothing
     }
   }
 
@@ -14627,6 +14763,7 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
         });
       } else {
         fieldsHost.innerHTML=renderTypeFields(type,{});
+        wireTableFields(fieldsHost,type);   // without this, "add row" does nothing
       }
     }
     typeSel.onchange=paintFields; paintFields();
@@ -14653,6 +14790,11 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
       } else {
         const def=diaryTypeDef(type);
         def.fields.forEach(f=>{
+          if(f.type==="table"){
+            const box=[...fieldsHost.querySelectorAll(".dg-table")].find(x=>x.dataset.key===f.key);
+            if(box){ const rows=readTableField(box,f); if(rows.length)data[f.key]=rows; }
+            return;
+          }
           const el=[...fieldsHost.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
           if(!el)return;
           const raw=el.value;
