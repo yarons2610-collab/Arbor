@@ -2117,10 +2117,45 @@ function mergeIntoWorkspace(remote,base){
 /* Every record this workspace holds and nobody has claimed yet is this
    person's. Stamped on save rather than at each of the dozens of places a
    record is created, so no creation path can be missed. */
+/* Sign only what this workspace can show is its own. Every id minted here
+   carries the id of whoever minted it (see uid), and anything not shared is
+   mine by virtue of being here at all. Signing everything unsigned — which is
+   what this did — meant that of two people holding the same unsigned record,
+   whichever saved first put their name on the other's work. It came out right
+   so far only because the account that made them happened to save first. */
+const ID_MINTED=/_[a-z0-9]{4}_/;
+function mintedHere(x){
+  const id=String((x&&x.id)||"");
+  return myIds().some(k=>k&&id.indexOf("_"+k+"_")>=0);
+}
+// an id that names somebody — anybody — tells us whose it is without a signature
+function mintedByAnyone(x){ return ID_MINTED.test(String((x&&x.id)||"")); }
 function stampAuthorship(){
   const me=meId();
-  SHAREABLE.forEach(k=>(Array.isArray(DB[k])?DB[k]:[]).forEach(x=>{ if(x&&!x.by) x.by=me; }));
-  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&!e.by) e.by=me; }));
+  const claimable=x=>!spOf(x)||mintedHere(x);
+  SHAREABLE.forEach(k=>(Array.isArray(DB[k])?DB[k]:[]).forEach(x=>{ if(x&&!x.by&&claimable(x)) x.by=me; }));
+  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&!e.by&&claimable(e)) e.by=me; }));
+}
+/* What is left: shared records too old to carry anyone's id, in a project this
+   workspace created. Probably ours, not provably, so they are offered rather
+   than taken — in the same place, and with the same wording, as a former
+   identity's work. */
+function unsignedClaimable(){
+  const out=[];
+  const ours=x=>{ const sp=spOf(x); return sp&&myIds().some(k=>k&&sp.indexOf("_"+k+"_")>=0); };
+  /* Only ids that name nobody. One carrying somebody else's mark is theirs
+     however unsigned it is, and offering it would invite putting your name on
+     your collaborator's work — the exact mistake this pass exists to stop. */
+  const open=x=>!x.by&&ours(x)&&!mintedHere(x)&&!mintedByAnyone(x);
+  SHAREABLE.forEach(k=>(Array.isArray(DB[k])?DB[k]:[]).forEach(x=>{ if(x&&open(x)) out.push([k,x]); }));
+  (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&open(e)) out.push(["diary",e]); }));
+  return out;
+}
+function claimUnsigned(){
+  const me=meId(); const rows=unsignedClaimable();
+  rows.forEach(([,x])=>{ x.by=me; });
+  if(rows.length) persist();
+  return rows.length;
 }
 /* ── SHARING, PHASE 2: the shared space ─────────────────────────────────────
    Shared data lives in a private GitHub repository you both have access to, not
@@ -2275,9 +2310,15 @@ function openSpaceSetup(){
      claiming authorship is not something to do on a guess. */
   function paintGhosts(){
     const host=document.getElementById("sp_ghost"); if(!host)return;
-    const gs=ghostAuthors();
-    if(!gs.length){ host.innerHTML=""; return; }
-    host.innerHTML=gs.map(g=>`<div class="sp-ghost-row">
+    const gs=ghostAuthors(), un=unsignedClaimable().length;
+    if(!gs.length&&!un){ host.innerHTML=""; return; }
+    host.innerHTML=(un?`<div class="sp-ghost-row">
+      <span><b>${un}</b> shared record${un===1?"":"s"} in your own projects
+        ${un===1?"carries":"carry"} no author at all — made before Arbor signed anything. Until
+        ${un===1?"it is":"they are"} signed, ${un===1?"it shows":"they show"} no initial and no
+        colour, for either of you.</span>
+      <button type="button" data-unsigned="1">Sign as mine</button>
+    </div>`:"")+gs.map(g=>`<div class="sp-ghost-row">
       <span><b>${g.count}</b> of your records are signed <span class="mono">${esc(g.id)}</span>,
         which nobody in this space answers to. This is what an earlier identity of your own
         Arbor looks like — from before this workspace had settled on one. Until it is claimed
@@ -2286,6 +2327,17 @@ function openSpaceSetup(){
       <button type="button" class="btn ghost" data-id="${escAttr(g.id)}">These are mine</button>
     </div>`).join("");
     host.querySelectorAll("button").forEach(b=>{
+      if(b.dataset.unsigned){
+        b.onclick=()=>{
+          const n=unsignedClaimable().length;
+          if(!confirm(`Sign ${n} unsigned record${n===1?"":"s"} as you?\n\n`+
+                      `These are in projects you created, from before Arbor recorded who made what.`))return;
+          const did=claimUnsigned();
+          toast(`${did} record${did===1?"":"s"} signed`);
+          paintGhosts();
+        };
+        return;
+      }
       b.onclick=()=>{
         const id=b.dataset.id;
         if(!confirm(`Sign ${ghostAuthors().find(g=>g.id===id).count} records as you instead of "${id}"?\n\n`+
