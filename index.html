@@ -2937,6 +2937,13 @@ async function pullProject(id){
    private one does not. */
 function noteSharedChanges(){
   if(!spaceConnected())return;
+  /* Sign anything new before deciding what to send. stampAuthorship ran only
+     inside migrate(), at boot and after a merge, so a record created and
+     shared in the same sitting went out with no author at all — and an
+     unsigned record reads as everyone's own, so it carried no badge and no
+     colour for anybody. Costs nothing extra: the same collections are walked
+     immediately below. */
+  stampAuthorship();
   const seen=new Set();
   SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{
     const sp=spOf(x); if(!sp||seen.has(sp))return;
