@@ -2373,8 +2373,14 @@ function spaceCacheKey(id){ return "arbor_space_file_"+id; }
 function buildDefs(file){
   const used=new Set();
   (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>used.add(e.type)));
+  /* defaultDuration belongs here: an entry with no end time of its own is
+     drawn at its type's default, so without it every shared surgery arrived
+     as the fallback half-hour. `related` deliberately stays behind — a rule
+     about which follow-up to raise next is the author's workflow, not part of
+     reading what they wrote. */
   const types=(DB.config.diaryTypes||[]).filter(t=>used.has(t.key)).map(t=>({
     key:t.key,label:t.label,icon:t.icon,color:t.color,timeline:!!t.timeline,
+    defaultDuration:t.defaultDuration||null,
     fields:(t.fields||[]).map(f=>({key:f.key,label:f.label,type:f.type,options:f.options}))}));
   const names=new Set(), sites=new Set();
   (file.animals||[]).forEach(a=>((a.surgeryDetail||{}).injections||[]).forEach(i=>{
@@ -9174,7 +9180,7 @@ function renderTimeline(){
     const diaryEvents=diaryTimedEvents.filter(x=>x.dayIdx===d).map(x=>{
       const [hh,mm]=x.e.time.split(":").map(Number);
       const startMin=hh*60+(mm||0);
-      let endMin=startMin+diaryDefaultDuration(x.e.type);
+      let endMin=startMin+diaryDefaultDuration(x.e.type,x.e);
       if(x.e.endTime){ const [eh,em]=x.e.endTime.split(":").map(Number); endMin=Math.max(eh*60+em,startMin+15); }
       return {key:x.e.id,startMin,endMin};
     });
@@ -9264,7 +9270,7 @@ function renderTimeline(){
       // duration: end time minus start time if one's set, else this type's own
       // default (see diaryDefaultDuration). Height can exceed 100% to
       // visually span into the following hour cell(s), same as tasks do.
-      let durationMins=diaryDefaultDuration(e.type);
+      let durationMins=diaryDefaultDuration(e.type,e);
       if(e.endTime){
         const [eh,em]=e.endTime.split(":").map(Number);
         durationMins=Math.max((eh*60+em)-(hh*60+mm),15);
@@ -11775,7 +11781,19 @@ function sharedDefList(kind){
 // each type can set its own (e.g. a procedure that always takes about an
 // hour); a type that hasn't set one falls back to half an hour, not
 // whatever the previous entry happened to use.
-function diaryDefaultDuration(type){ return diaryTypeDef(type).defaultDuration||30; }
+function diaryDefaultDuration(type,entry){
+  /* How long something ran is a fact about that entry, not about the library
+     of whoever is looking at it. diaryTypeDef prefers your own definition on
+     purpose — that is how you read a label and a colour — but applying the
+     same rule to length redraws someone else's three-hour surgery as your own
+     half-hour default. So a shared entry keeps the length its author gave it. */
+  const sp=entry&&spOf(entry);
+  if(sp){
+    const t=(((DB.sharedDefs||{})[sp]||{}).diaryTypes||[]).find(x=>x.key===type);
+    if(t&&t.defaultDuration) return t.defaultDuration;
+  }
+  return diaryTypeDef(type).defaultDuration||30;
+}
 function diaryWeightEntries(a){ return (a.diary||[]).filter(e=>e.type==="weight").sort((x,y)=>x.date.localeCompare(y.date)||x.created-y.created); }
 // The newest entry that actually carries a value. Reading the last one blindly
 // meant a single weight entry saved without grams — which is what happened
@@ -14518,7 +14536,7 @@ document.getElementById("expCal").addEventListener("click",()=>{
     let se;
     if(e.time){
       const s=whenDate(e.date+"T"+e.time);
-      const en=e.endTime?whenDate(e.date+"T"+e.endTime):new Date(s.getTime()+diaryDefaultDuration(e.type)*60000);
+      const en=e.endTime?whenDate(e.date+"T"+e.endTime):new Date(s.getTime()+diaryDefaultDuration(e.type,e)*60000);
       se=`DTSTART:${local(s)}\r\nDTEND:${local(en)}`;
     } else {
       const d=e.date.replace(/-/g,"");
