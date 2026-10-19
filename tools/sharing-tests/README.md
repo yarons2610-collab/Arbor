@@ -60,6 +60,17 @@ and `T.ok/eq` record results for `T.report()`.
 - **After weakening a safety check, re-prove it still fails.** Narrowing
   `leakCheck`'s id scan needed four negative tests before it could be trusted.
 
+## Also covered (second pass)
+
+repeating tasks shared between people, and two or three of them ticking
+different occurrences — including an un-tick not being resurrected by the
+other side's tick · animal weights, surgery details, and the virus and site a
+surgery names (and a virus it does not name staying behind) · an animal taken
+out of a shared project leaving the collaborator while staying, private and
+whole, with the person who took it back · an experiment and its tasks moved to
+a private project · going offline with work queued on both sides and
+reconnecting · three people editing different fields of one record at once.
+
 ## What is covered
 
 definitions and libraries travelling and staying their author's · a shared
