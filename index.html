@@ -223,7 +223,20 @@
      the window reads as one thing rather than a core plus some additions. */
   .am-sec{border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:14px}
   .am-sec-head{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;
-    color:var(--ink-dim);margin-bottom:12px}
+    color:var(--ink-dim);margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  /* quiet until wanted: the control to put a section away shows on hover, so a
+     window that is simply being read has nothing extra in it */
+  .am-sec-x{margin-left:auto;border:0;background:transparent;color:var(--ink-faint);cursor:pointer;
+    font-size:11px;padding:0 2px;opacity:0;transition:opacity .12s}
+  .am-sec:hover .am-sec-x{opacity:.65}
+  .am-sec-x:hover{opacity:1!important;color:var(--overdue)}
+  .am-proc{border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:14px}
+  .am-sec-add{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:-4px 0 14px}
+  .am-sec-add:empty{display:none}
+  .am-sec-add-lbl{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint)}
+  .am-sec-chip{border:1px dashed var(--line2);background:transparent;color:var(--ink-dim);
+    border-radius:20px;padding:3px 10px;font-size:11.5px;cursor:pointer}
+  .am-sec-chip:hover{border-style:solid;border-color:var(--gcamp);color:var(--ink)}
   .am-sec-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px}
   .am-sec-grid>.fld{margin-bottom:0;min-width:0}
   .am-wide{grid-column:1/-1}
@@ -10845,7 +10858,23 @@ function tableAnchor(f){ return (f&&f.anchor)==="animal"?"animal":"entry"; }
    the usage counts are genuinely wired to it, but somebody who images rather
    than injects can put it away. */
 function animalSections(){ return Array.isArray(DB.config.animalSections)?DB.config.animalSections:[]; }
+/* Which sections an animal shows is that animal's own business. A colony holds
+   injected animals, behaviour-only animals and practice animals at once, so a
+   workspace-wide switch cannot say what is true — it was the wrong unit. The
+   workspace setting survives as the *default* for an animal that has not been
+   told otherwise, which is what lets a lab that never injects say so once. */
 function procedureHidden(){ return !!DB.config.hideProcedure; }
+const PROC_SEC="procedure";
+function sectionShownFor(a,id){
+  const choice=(a&&a.secs||{})[id];
+  if(choice!=null) return !!choice;
+  return id===PROC_SEC ? !procedureHidden() : true;
+}
+function animalSectionList(){
+  return [{id:PROC_SEC,label:"Procedure"}].concat(
+    animalSections().filter(sec=>sec&&(sec.fields||[]).length)
+      .map(sec=>({id:sec.id,label:sec.label||"(unnamed section)"})));
+}
 function animalCustom(a){ a.custom=a.custom||{}; return a.custom; }
 // in a section there is no entry for rows to belong to, so a table here is
 // always the animal's own — said once rather than stored on every definition
@@ -10860,9 +10889,11 @@ function renderAnimalFieldsLib(host){
   host.innerHTML=`
     <div class="af-built">
       <label class="af-switch"><input type="checkbox" id="afl_proc" ${procedureHidden()?"":"checked"}>
-        <span><b>Procedure</b> — injections, headpost, window
-          <span class="af-sub">Keeps the virus and site libraries, the brain viewer and the usage counts.
-            Turn it off if this lab does not inject; nothing already recorded is lost.</span></span></label>
+        <span><b>Show Procedure on animals by default</b> — injections, headpost, window
+          <span class="af-sub">Only the starting point. Each animal's own window has a ✕ on every
+            section to put it away for that animal alone, which is where a colony of injected,
+            behavioural and practice animals is actually told apart. Nothing recorded is ever lost
+            by hiding a section.</span></span></label>
     </div>
     <div id="afl_secs">${secs.map((sec,i)=>`
       <div class="af-sec">
@@ -10941,13 +10972,14 @@ function renderAnimalFieldsLib(host){
 function renderAnimalSections(a){
   const secs=animalSections().filter(sec=>sec&&(sec.fields||[]).length);
   if(!secs.length) return "";
+  if(!a) a={};
   const cv=a?animalCustom(a):{};
   /* Written with the editor's own .fld markup rather than the diary form's,
      so a section the lab added is indistinguishable from the ones that shipped
      — same label, same input, same spacing. A window that reads as a core plus
      some bolted-on extras is the thing to avoid. */
-  return secs.map(sec=>`<div class="am-sec" data-sec="${escAttr(sec.id)}">
-    <div class="am-sec-head">${esc(sec.label||"(unnamed section)")}</div>
+  return secs.map(sec=>`<div class="am-sec" data-sec="${escAttr(sec.id)}" ${sectionShownFor(a,sec.id)?"":"hidden"}>
+    <div class="am-sec-head">${esc(sec.label||"(unnamed section)")}<button type="button" class="am-sec-x" data-sec="${escAttr(sec.id)}" title="Hide for this animal">✕</button></div>
     <div class="am-sec-grid">${(sec.fields||[]).map(f=>
       `<div class="fld${f.type==="table"?" am-wide":""}"><label>${esc(f.label||"(unnamed)")}</label>${
         renderTypeField(asAnimalField(f),cv[f.key],null,a)}</div>`).join("")}</div>
@@ -14489,7 +14521,8 @@ function animalModal(id,draft){
         <input type="text" id="am_exreason" value="${escAttr(view.excludedReason||"")}" placeholder="bad surgery, no expression…"></div>
     </div>
 
-    ${procedureHidden()?"":`<div style="border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:14px">
+    <div class="am-sec am-proc" data-sec="${PROC_SEC}" ${sectionShownFor(a,PROC_SEC)?"":"hidden"}><div style="border:0;padding:0">
+      <div class="am-sec-head">Procedure<button type="button" class="am-sec-x" data-sec="${PROC_SEC}" title="Hide for this animal">✕</button></div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
         <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint)">Procedure</div>
         <select id="am_proctpl" style="margin-left:auto;flex:0 0 auto;background:var(--bg2);border:1px solid var(--line2);color:var(--ink-dim);border-radius:6px;padding:4px 7px;font-size:11px">
@@ -14499,9 +14532,10 @@ function animalModal(id,draft){
         <button type="button" id="am_procsave" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer">💾 Save as template</button>
       </div>
       ${procedureSectionHTML("am")}
-    </div>`}
+    </div></div>
     ${renderAnimalSections(a)}
-    <div class="fld"><label>${procedureHidden()?"Notes":"Surgical comments / notes"}</label><div id="am_comwrap"></div></div>
+    <div id="am_sec_add" class="am-sec-add"></div>
+    <div class="fld"><label>Notes</label><div id="am_comwrap"></div></div>
     <div class="actions">${id?`<button class="btn danger" id="am_del">Delete</button><button class="btn ghost" id="am_dup" style="margin-right:auto">⧉ Duplicate</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
 
   // Which experiments this animal is in and which group of each. For an existing
@@ -14514,8 +14548,37 @@ function animalModal(id,draft){
     else   mountPendingExperiments(document.getElementById("am_attach"),pendingExp);
   }
   wireAnimalSections(document.getElementById("modal")||document,a);
+  /* The choice of which sections this animal shows, made here rather than in
+     a settings page, because it is a fact about the animal. Toggled by showing
+     and hiding what is already drawn, so nothing is lost mid-edit. */
+  const secChoice=Object.assign({},(a&&a.secs)||{});
+  const secRoot=document.getElementById("modal")||document;
+  function paintSectionAdd(){
+    const host=document.getElementById("am_sec_add"); if(!host)return;
+    const off=animalSectionList().filter(x=>!shown(x.id));
+    host.innerHTML=off.length?`<span class="am-sec-add-lbl">Not shown for this animal:</span>`+
+      off.map(x=>`<button type="button" class="am-sec-chip" data-sec="${escAttr(x.id)}">＋ ${esc(x.label)}</button>`).join(""):"";
+  }
+  function shown(id){
+    const c=secChoice[id];
+    if(c!=null) return !!c;
+    return id===PROC_SEC ? !procedureHidden() : true;
+  }
+  function setShown(id,on){
+    secChoice[id]=on;
+    const el=secRoot.querySelector(`.am-sec[data-sec="${CSS.escape(id)}"]`);
+    if(el) el.hidden=!on;
+    paintSectionAdd();
+  }
+  secRoot.addEventListener("click",ev=>{
+    const x=ev.target.closest(".am-sec-x");
+    if(x){ ev.preventDefault(); setShown(x.dataset.sec,false); return; }
+    const chip=ev.target.closest(".am-sec-chip");
+    if(chip){ ev.preventDefault(); setShown(chip.dataset.sec,true); return; }
+  });
+  paintSectionAdd();
   const comBody=mountRichTextEditor(document.getElementById("am_comwrap"),
-    richBodyHTML(view.comments,view.commentsRich),{placeholder:procedureHidden()?"Anything worth recording about this animal…":"Anything worth recording about this animal's surgery…"});
+    richBodyHTML(view.comments,view.commentsRich),{placeholder:"Anything worth recording about this animal…"});
 
   // dates — custom wiring instead of bindDateButton so the Born button can
   // also show age in weeks (which depends on both dates, so either one
@@ -14564,10 +14627,10 @@ function animalModal(id,draft){
     closeModal();
     renderLibraryModal(focus,()=>animalModal(id,d));
   }
-  // nothing to mount when the section is put away; formRecord then keeps
-  // whatever surgery detail the animal already had rather than clearing it
-  const procEditor=procedureHidden()?null
-    :mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary, {offerTubeUse:true});
+  /* Mounted whether or not the section is on screen, so turning it back on is
+     instant and nothing has to be rebuilt mid-edit. What it reads is only
+     written back when the section is actually shown — see formRecord. */
+  const procEditor=mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary, {offerTubeUse:true});
 
   // these live inside the Procedure section, so they are simply not there
   // when it has been put away
@@ -14608,9 +14671,13 @@ function animalModal(id,draft){
 
   // the record as it stands on screen — what Save stores and Duplicate copies
   function formRecord(){
-    const snap=procEditor?procEditor.getSnapshot():null;
+    // a section that is not on screen was not edited, so whatever the animal
+    // already held stays exactly as it was rather than being read off a form
+    // nobody saw
+    const procOn=shown(PROC_SEC);
+    const snap=procOn?procEditor.getSnapshot():null;
     const cleanInjs=snap?snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion):[];
-    const surgery=!snap?(a?a.surgeryDetail||null:null)
+    const surgery=!procOn?(a?a.surgeryDetail||null:null)
       :(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
     return {name:document.getElementById("am_name").value.trim(),
       cage:document.getElementById("am_cage").value.trim(),
@@ -14621,6 +14688,7 @@ function animalModal(id,draft){
       excluded:exCb.checked,
       excludedReason:exCb.checked?document.getElementById("am_exreason").value.trim():"",
       comments:comBody.textContent.trim()?comBody.innerHTML:"", commentsRich:true,
+      secs:secChoice,
       custom:readAnimalSections(document.getElementById("modal")||document,a||{id:"",tables:{}})};
   }
   document.getElementById("am_save").onclick=()=>{
