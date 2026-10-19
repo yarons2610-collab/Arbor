@@ -2240,8 +2240,18 @@ function openSpaceSetup(){
       const warn=[chk.note,
         chk.scopeNarrow===false?"This token can reach more than this one repository — a token limited to it alone is safer.":""]
         .filter(Boolean).join(" ");
-      msg(`Connected as @${chk.login}.`+(warn?" "+warn:""),warn?"var(--amber)":"var(--gcamp)");
-      setTimeout(()=>{ closeModal(); render(); },warn?2600:1200);
+      /* Boot is the only other place these two run, and a device connecting
+         for the first time had nothing to connect to when boot ran — so
+         without this it sits connected and inert, having never started a poll,
+         until somebody thinks to reload. Which looks exactly like being shared
+         nothing at all. */
+      msg("Connected — looking for shared projects…","var(--gcamp)");
+      let got=0;
+      try{ got=await loadSharedProjects(); }catch(e){}
+      startSharedSync();
+      const found=got?` ${got} shared project${got===1?"":"s"} loaded.`:" Nothing is shared with you yet.";
+      msg(`Connected as @${chk.login}.`+found+(warn?" "+warn:""),warn?"var(--amber)":"var(--gcamp)");
+      setTimeout(()=>{ closeModal(); render(); },warn?2600:1600);
     }catch(e){
       // a failed check must not leave a half-connected device behind
       if(prevRepo) localStorage.setItem(SPACE_REPO_KEY,prevRepo); else localStorage.removeItem(SPACE_REPO_KEY);
@@ -2261,6 +2271,7 @@ function openSpaceSetup(){
     if(!confirm("Disconnect this device from the shared repository? Shared projects stop updating here. Nothing is deleted."))return;
     localStorage.removeItem(SPACE_TOKEN_KEY); localStorage.removeItem(SPACE_REPO_KEY);
     localStorage.removeItem(SPACE_SAME_KEY);
+    startSharedSync();                 // stops the timer, now that there is nothing to poll
     closeModal(); render(); toast("Disconnected from the shared repository");
   };
 }
