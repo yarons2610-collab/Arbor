@@ -219,6 +219,35 @@
   .dg-tbl td .dg-per{width:100%;background:var(--bg2);border:1px solid var(--gcamp);color:var(--ink);
     border-radius:6px;padding:4px 6px;font-size:12px}
   .dg-anchor-note{font-size:10.5px;color:var(--ink-faint);line-height:1.5;margin-top:7px}
+  /* A section the workspace defined for itself, drawn like the built-in one so
+     the window reads as one thing rather than a core plus some additions. */
+  .am-sec{border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:14px}
+  .am-sec-head{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--ink-dim);margin-bottom:12px}
+  .am-sec-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px}
+  .am-sec-grid>.fld{margin-bottom:0;min-width:0}
+  .am-wide{grid-column:1/-1}
+  /* a table inside the animal window wears the window's own input styling,
+     not the diary form's */
+  .am-sec .dg-tbl td .dg-sub,.am-sec .dg-tbl td .dg-per{padding:7px 9px;font-size:13px;border-radius:7px}
+  .am-sec .dg-table{padding:10px}
+  /* The fields editor. Quiet by default: one switch, then whatever the lab
+     chose to add. Nothing is framed or boxed that does not need separating. */
+  .af-built{padding:4px 0 12px;border-bottom:1px solid var(--line2);margin-bottom:12px}
+  .af-switch{display:flex;align-items:flex-start;gap:9px;font-size:12.5px;color:var(--ink);cursor:pointer;line-height:1.5}
+  .af-switch input{width:auto;margin:2px 0 0;flex:0 0 auto}
+  .af-sub{display:block;font-size:11px;color:var(--ink-faint);line-height:1.5;margin-top:2px}
+  .af-sec{border:1px solid var(--line2);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--panel2)}
+  .af-sec-top{display:flex;align-items:center;gap:7px;margin-bottom:8px}
+  .af-fields{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+  .af-f{display:flex;gap:6px;align-items:center;flex-wrap:wrap;width:100%}
+  .af-cols{flex-basis:100%;padding-left:14px;border-left:2px solid var(--line2);margin:2px 0 2px;
+    display:flex;flex-direction:column;gap:5px;align-items:flex-start}
+  .af-sec button,.af-cols button{border:1px solid var(--line2);background:var(--panel);color:var(--ink-dim);
+    border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer}
+  .afl_del,.aflf_del,.aflc_del{border:0!important;background:transparent!important;color:var(--ink-faint)!important;
+    padding:2px 5px!important;font-size:11px!important}
+  .afl_del:hover,.aflf_del:hover,.aflc_del:hover{color:var(--overdue)!important}
   .sp-ghost-row{display:flex;align-items:flex-start;gap:10px;margin:10px 0 2px;padding:10px 12px;
     border:1px solid var(--amber);border-radius:9px;background:var(--panel2);
     font-size:12px;color:var(--ink-dim);line-height:1.55}
@@ -10809,6 +10838,151 @@ function tableRows(v){ return Array.isArray(v)?v:[]; }
    them. Adding a row while filling an entry adds it to the animal, so a thing
    is described once and recorded against for as long as it exists. */
 function tableAnchor(f){ return (f&&f.anchor)==="animal"?"animal":"entry"; }
+/* Sections of the animal editor that this workspace defines for itself, using
+   the same field shapes an entry type uses — including tables. The built-in
+   Procedure block is one section among these rather than the centre of the
+   window: it stays, because the virus and site libraries, the brain viewer and
+   the usage counts are genuinely wired to it, but somebody who images rather
+   than injects can put it away. */
+function animalSections(){ return Array.isArray(DB.config.animalSections)?DB.config.animalSections:[]; }
+function procedureHidden(){ return !!DB.config.hideProcedure; }
+function animalCustom(a){ a.custom=a.custom||{}; return a.custom; }
+// in a section there is no entry for rows to belong to, so a table here is
+// always the animal's own — said once rather than stored on every definition
+function asAnimalField(f){ return f&&f.type==="table"?Object.assign({},f,{anchor:"animal"}):f; }
+/* The editor for the animal window: which built-in sections are on, and the
+   sections this workspace defines for itself. Deliberately the same shapes and
+   the same words as the entry-type editor next door — one idea, learned once. */
+function renderAnimalFieldsLib(host){
+  if(!host) return;
+  const secs=animalSections();
+  const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 7px;font-size:12px";
+  host.innerHTML=`
+    <div class="af-built">
+      <label class="af-switch"><input type="checkbox" id="afl_proc" ${procedureHidden()?"":"checked"}>
+        <span><b>Procedure</b> — injections, headpost, window
+          <span class="af-sub">Keeps the virus and site libraries, the brain viewer and the usage counts.
+            Turn it off if this lab does not inject; nothing already recorded is lost.</span></span></label>
+    </div>
+    <div id="afl_secs">${secs.map((sec,i)=>`
+      <div class="af-sec">
+        <div class="af-sec-top">
+          <input class="afl_label" data-si="${i}" value="${escAttr(sec.label||"")}" placeholder="Section name (e.g. Imaging)" style="flex:1;min-width:140px;${IST}">
+          <button class="afl_del" data-si="${i}" title="Delete this section">✕</button>
+        </div>
+        <div class="af-fields">${(sec.fields||[]).map((f,fi)=>`
+          <div class="af-f">
+            <input class="aflf_label" data-si="${i}" data-fi="${fi}" value="${escAttr(f.label||"")}" placeholder="Field name" style="flex:1;min-width:120px;${IST}">
+            <select class="aflf_type" data-si="${i}" data-fi="${fi}" style="${IST};flex:0 0 auto">
+              ${DIARY_FIELD_TYPES.map(ft=>`<option value="${ft}" ${f.type===ft?"selected":""}>${ft}</option>`).join("")}
+            </select>
+            ${f.type==="select"?`<input class="aflf_options" data-si="${i}" data-fi="${fi}" value="${escAttr((f.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:140px;${IST}">`:""}
+            <button class="aflf_del" data-si="${i}" data-fi="${fi}">✕</button>
+            ${f.type==="table"?`<div class="af-cols">
+              <span class="af-sub">Columns — as many rows of these as the animal needs</span>
+              ${(f.fields||[]).map((sf,ci)=>`<div class="af-f">
+                <input class="aflc_label" data-si="${i}" data-fi="${fi}" data-ci="${ci}" value="${escAttr(sf.label||"")}" placeholder="Column name" style="flex:1;min-width:110px;${IST}">
+                <select class="aflc_type" data-si="${i}" data-fi="${fi}" data-ci="${ci}" style="${IST};flex:0 0 auto">
+                  ${SUB_FIELD_TYPES.map(ft=>`<option value="${ft}" ${sf.type===ft?"selected":""}>${ft}</option>`).join("")}
+                </select>
+                <button class="aflc_del" data-si="${i}" data-fi="${fi}" data-ci="${ci}">✕</button>
+              </div>`).join("")||`<span class="af-sub">no columns yet</span>`}
+              <button class="aflc_add" data-si="${i}" data-fi="${fi}">＋ add column</button>
+            </div>`:""}
+          </div>`).join("")||`<span class="af-sub">nothing in this section yet</span>`}
+          <button class="aflf_add" data-si="${i}">＋ add field</button>
+        </div>
+      </div>`).join("")||`<div class="af-sub" style="margin:10px 0">No sections of your own yet. Add one for whatever this lab actually records — imaging, behaviour, histology.</div>`}
+    </div>
+    <button class="btn ghost" id="afl_addsec" style="font-size:12px">＋ add section</button>`;
+
+  const secAt=ds=>animalSections()[+ds.si];
+  const fAt=ds=>{ const sec=secAt(ds); return sec&&(sec.fields||[])[+ds.fi]; };
+  const cAt=ds=>{ const f=fAt(ds); return f&&(f.fields||[])[+ds.ci]; };
+  const redraw=()=>{ persist(); renderAnimalFieldsLib(host); };
+
+  host.addEventListener("input",e=>{
+    const t=e.target, ds=t.dataset;
+    if(t.classList.contains("afl_label")){ const sec=secAt(ds); if(sec){ sec.label=t.value; persist(); } }
+    if(t.classList.contains("aflf_label")){ const f=fAt(ds); if(f){ f.label=t.value; persist(); } }
+    if(t.classList.contains("aflc_label")){ const c=cAt(ds); if(c){ c.label=t.value; persist(); } }
+    if(t.classList.contains("aflf_options")){ const f=fAt(ds);
+      if(f){ f.options=t.value.split(",").map(x=>x.trim()).filter(Boolean); persist(); } }
+  });
+  host.addEventListener("change",e=>{
+    const t=e.target, ds=t.dataset;
+    if(t.id==="afl_proc"){ DB.config.hideProcedure=!t.checked; persist(); return; }
+    if(t.classList.contains("aflf_type")){ const f=fAt(ds);
+      if(f){ f.type=t.value; if(f.type==="table"&&!(f.fields||[]).length) f.fields=[{key:uid("sf_"),label:"",type:"text"}]; redraw(); } }
+    if(t.classList.contains("aflc_type")){ const c=cAt(ds); if(c){ c.type=t.value; redraw(); } }
+  });
+  host.addEventListener("click",e=>{
+    const t=e.target, ds=t.dataset;
+    if(t.id==="afl_addsec"){
+      DB.config.animalSections=animalSections().concat([{id:uid("as_"),label:"",fields:[]}]); redraw(); return; }
+    if(t.classList.contains("afl_del")){
+      const sec=secAt(ds); if(!sec)return;
+      if(!confirm(`Delete the "${sec.label||"unnamed"}" section?\n\nWhat animals already recorded in it is kept, just not shown.`))return;
+      DB.config.animalSections=animalSections().filter((_,i)=>i!==+ds.si); redraw(); return; }
+    if(t.classList.contains("aflf_add")){
+      const sec=secAt(ds); if(!sec)return;
+      (sec.fields=sec.fields||[]).push({key:uid("af_"),label:"",type:"text"}); redraw(); return; }
+    if(t.classList.contains("aflf_del")){
+      const sec=secAt(ds); if(!sec)return;
+      (sec.fields||[]).splice(+ds.fi,1); redraw(); return; }
+    if(t.classList.contains("aflc_add")){
+      const f=fAt(ds); if(!f)return;
+      (f.fields=f.fields||[]).push({key:uid("sf_"),label:"",type:"text"}); redraw(); return; }
+    if(t.classList.contains("aflc_del")){
+      const f=fAt(ds); if(!f)return;
+      (f.fields||[]).splice(+ds.ci,1); redraw(); return; }
+  });
+}
+function renderAnimalSections(a){
+  const secs=animalSections().filter(sec=>sec&&(sec.fields||[]).length);
+  if(!secs.length) return "";
+  const cv=a?animalCustom(a):{};
+  /* Written with the editor's own .fld markup rather than the diary form's,
+     so a section the lab added is indistinguishable from the ones that shipped
+     — same label, same input, same spacing. A window that reads as a core plus
+     some bolted-on extras is the thing to avoid. */
+  return secs.map(sec=>`<div class="am-sec" data-sec="${escAttr(sec.id)}">
+    <div class="am-sec-head">${esc(sec.label||"(unnamed section)")}</div>
+    <div class="am-sec-grid">${(sec.fields||[]).map(f=>
+      `<div class="fld${f.type==="table"?" am-wide":""}"><label>${esc(f.label||"(unnamed)")}</label>${
+        renderTypeField(asAnimalField(f),cv[f.key],null,a)}</div>`).join("")}</div>
+  </div>`).join("");
+}
+/* The same add/remove wiring the diary form uses, pointed at the animal's own
+   sections. A table here is always the animal's — there is no entry for its
+   rows to belong to. */
+function wireAnimalSections(host,a){
+  if(!host||!a) return;
+  animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
+    if(f.type!=="table")return;
+    const box=host.querySelector(`.dg-table[data-key="${CSS.escape(f.key)}"]`); if(!box)return;
+    wireTableFieldBox(box,asAnimalField(f),a);
+  }));
+}
+function readAnimalSections(host,a){
+  if(!host||!a) return {};
+  const out=Object.assign({},animalCustom(a));
+  animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
+    if(f.type==="table"){
+      const box=host.querySelector(`.dg-table[data-key="${CSS.escape(f.key)}"]`);
+      if(box){ const v=readTableField(box,asAnimalField(f),a);
+        if(Array.isArray(v)?v.length:Object.keys(v).length) out[f.key]=v; else delete out[f.key]; }
+      return;
+    }
+    const el=host.querySelector(`.dg-field[data-key="${CSS.escape(f.key)}"]`); if(!el)return;
+    const raw=el.value;
+    if(f.type==="yesno"){ if(raw==="")delete out[f.key]; else out[f.key]=raw==="1"; return; }
+    if(f.type==="number"){ const t=raw.trim(); if(t===""){delete out[f.key];return;}
+      const n=parseFloat(t.replace(",",".")); if(!isNaN(n))out[f.key]=n; return; }
+    if(raw.trim()==="")delete out[f.key]; else out[f.key]=raw.trim();
+  }));
+  return out;
+}
 function animalRows(a,key){
   if(!a) return [];
   a.tables=a.tables||{};
@@ -12372,7 +12546,7 @@ function renderTableField(f,val,animal){
   return `<div class="dg-table" data-key="${escAttr(f.key)}" data-anchor="${anchored?"animal":"entry"}">
     <table class="dg-tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
     <button type="button" class="dg-rowadd">＋ add row</button>
-    ${anchored?`<div class="dg-anchor-note">These rows belong to ${esc(animal.name||"this animal")} —
+    ${anchored&&pers.length?`<div class="dg-anchor-note">These rows belong to ${esc(animal.name||"this animal")} —
       the same ones every time. What you type under
       <b>${esc(pers.map(x=>x.label||"").filter(Boolean).join(", ")||"the recorded columns")}</b>
       is this entry's alone.</div>`:""}
@@ -12394,6 +12568,12 @@ function wireTableFields(host,type,animal){
   const def=diaryTypeDef(type);
   host.querySelectorAll(".dg-table").forEach(box=>{
     const f=(def.fields||[]).find(x=>x.key===box.dataset.key); if(!f)return;
+    wireTableFieldBox(box,f,animal);
+  });
+}
+// one table, wired. Separate from the loop above so the animal's own sections
+// can use exactly the same behaviour rather than a second copy of it.
+function wireTableFieldBox(box,f,animal){
     const subs=(f.fields||[]).filter(sf=>sf&&sf.key);
     const pers=(f.per||[]).filter(sf=>sf&&sf.key);
     const anchored=box.dataset.anchor==="animal"&&!!animal;
@@ -12432,7 +12612,6 @@ function wireTableFields(host,type,animal){
       }
       tr.remove();
     });
-  });
 }
 /* Read a table back. A row where everything was left blank is not a row —
    pressing "add row" and changing your mind should not record anything. */
@@ -12570,7 +12749,7 @@ function renderAnimals(){
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         <button class="btn ghost${animalActiveFilterCount()?" filt-on":""}" id="a_filters">⚙ Filter${
           animalActiveFilterCount()?` <span class="filt-n">${animalActiveFilterCount()}</span>`:""}</button>
-        <button class="btn ghost" id="a_types">🔖 Entry types</button>
+        <button class="btn ghost" id="a_types">🔖 Fields</button>
         <button class="btn ghost" id="a_eventlog">📋 Event log</button>
         <button class="btn accent" id="a_add">＋ Animal</button>
       </div>
@@ -12628,10 +12807,27 @@ function renderAnimals(){
   });
   bar.querySelector("#a_add").onclick=()=>animalModal(null);
   bar.querySelector("#a_eventlog").onclick=()=>openEventLogModal(null);
+  /* One place for the shape of everything about an animal — what a diary entry
+     can record, and what the animal's own window shows. Two tabs rather than
+     two buttons: the toolbar has no room to grow, and these are one subject. */
   bar.querySelector("#a_types").onclick=()=>{
-    modal(`<h3>Diary entry types</h3><div id="dtypes_host"></div>
+    modal(`<h3>Fields</h3>
+      <div class="sr-tabs" id="fl_tabs">
+        <button type="button" class="on" data-b="entry">Diary entry types</button>
+        <button type="button" data-b="animal">The animal window</button></div>
+      <div id="dtypes_host"></div>
+      <div id="asec_host" hidden></div>
       <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
     renderDiaryTypesLib(document.getElementById("dtypes_host"));
+    const tabs=document.getElementById("fl_tabs");
+    tabs.addEventListener("click",ev=>{
+      const b=ev.target.closest("button"); if(!b)return;
+      tabs.querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b));
+      const animal=b.dataset.b==="animal";
+      document.getElementById("dtypes_host").hidden=animal;
+      document.getElementById("asec_host").hidden=!animal;
+      if(animal) renderAnimalFieldsLib(document.getElementById("asec_host"));
+    });
     // a renamed or recoloured type changes what the list behind shows
     document.getElementById("scrim").addEventListener("click",()=>renderAnimals(),{once:true});
   };
@@ -14293,7 +14489,7 @@ function animalModal(id,draft){
         <input type="text" id="am_exreason" value="${escAttr(view.excludedReason||"")}" placeholder="bad surgery, no expression…"></div>
     </div>
 
-    <div style="border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:14px">
+    ${procedureHidden()?"":`<div style="border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
         <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint)">Procedure</div>
         <select id="am_proctpl" style="margin-left:auto;flex:0 0 auto;background:var(--bg2);border:1px solid var(--line2);color:var(--ink-dim);border-radius:6px;padding:4px 7px;font-size:11px">
@@ -14303,9 +14499,9 @@ function animalModal(id,draft){
         <button type="button" id="am_procsave" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer">💾 Save as template</button>
       </div>
       ${procedureSectionHTML("am")}
-    </div>
-
-    <div class="fld"><label>Surgical comments / notes</label><div id="am_comwrap"></div></div>
+    </div>`}
+    ${renderAnimalSections(a)}
+    <div class="fld"><label>${procedureHidden()?"Notes":"Surgical comments / notes"}</label><div id="am_comwrap"></div></div>
     <div class="actions">${id?`<button class="btn danger" id="am_del">Delete</button><button class="btn ghost" id="am_dup" style="margin-right:auto">⧉ Duplicate</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
 
   // Which experiments this animal is in and which group of each. For an existing
@@ -14317,8 +14513,9 @@ function animalModal(id,draft){
     if(id) mountAttachments(document.getElementById("am_attach"),{kind:"animal",id},{groups:true});
     else   mountPendingExperiments(document.getElementById("am_attach"),pendingExp);
   }
+  wireAnimalSections(document.getElementById("modal")||document,a);
   const comBody=mountRichTextEditor(document.getElementById("am_comwrap"),
-    richBodyHTML(view.comments,view.commentsRich),{placeholder:"Anything worth recording about this animal's surgery…"});
+    richBodyHTML(view.comments,view.commentsRich),{placeholder:procedureHidden()?"Anything worth recording about this animal…":"Anything worth recording about this animal's surgery…"});
 
   // dates — custom wiring instead of bindDateButton so the Born button can
   // also show age in weeks (which depends on both dates, so either one
@@ -14367,9 +14564,14 @@ function animalModal(id,draft){
     closeModal();
     renderLibraryModal(focus,()=>animalModal(id,d));
   }
-  const procEditor=mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary, {offerTubeUse:true});
+  // nothing to mount when the section is put away; formRecord then keeps
+  // whatever surgery detail the animal already had rather than clearing it
+  const procEditor=procedureHidden()?null
+    :mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary, {offerTubeUse:true});
 
-  document.getElementById("am_proctpl").addEventListener("change",e=>{
+  // these live inside the Procedure section, so they are simply not there
+  // when it has been put away
+  if(procEditor) document.getElementById("am_proctpl").addEventListener("change",e=>{
     const tpl=(DB.config.procedureLib||[]).find(pr=>pr.id===e.target.value); e.target.value="";
     if(!tpl)return;
     // same live-field snapshot as goToLibrary, so applying a template mid-edit
@@ -14394,7 +14596,7 @@ function animalModal(id,draft){
     animalModal(id,d);
     toast(`Applied "${tpl.name}"`);
   });
-  document.getElementById("am_procsave").onclick=()=>{
+  if(procEditor) document.getElementById("am_procsave").onclick=()=>{
     const snap=procEditor.getSnapshot();
     if(!snap.headpost && !snap.window && !snap.injections.length){ toast("Nothing to save yet"); return; }
     const name=(prompt("Save this procedure as:")||"").trim();
@@ -14406,9 +14608,10 @@ function animalModal(id,draft){
 
   // the record as it stands on screen — what Save stores and Duplicate copies
   function formRecord(){
-    const snap=procEditor.getSnapshot();
-    const cleanInjs=snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
-    const surgery=(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
+    const snap=procEditor?procEditor.getSnapshot():null;
+    const cleanInjs=snap?snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion):[];
+    const surgery=!snap?(a?a.surgeryDetail||null:null)
+      :(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
     return {name:document.getElementById("am_name").value.trim(),
       cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
@@ -14417,7 +14620,8 @@ function animalModal(id,draft){
       practice:document.getElementById("am_practice").checked,
       excluded:exCb.checked,
       excludedReason:exCb.checked?document.getElementById("am_exreason").value.trim():"",
-      comments:comBody.textContent.trim()?comBody.innerHTML:"", commentsRich:true};
+      comments:comBody.textContent.trim()?comBody.innerHTML:"", commentsRich:true,
+      custom:readAnimalSections(document.getElementById("modal")||document,a||{id:"",tables:{}})};
   }
   document.getElementById("am_save").onclick=()=>{
     const rec=formRecord(); if(!rec.name){toast("Name needed");return;}
