@@ -2552,6 +2552,17 @@ async function publishProject(pr,opts){
 }
 /* The other side: take a project file and put its records into this workspace,
    marked as belonging to that file. Records already here keep their place. */
+/* Records arriving from a file update the objects already here rather than
+   replacing them. An editor that is open holds the record itself, so swapping
+   in a new object leaves whoever is typing writing into an orphan: the form
+   still works, the save still reports success, and the change is simply not in
+   the workspace any more. Identity is what makes an open editor and a sync
+   able to happen at the same time. */
+function adoptInto(live,next,id){
+  Object.keys(live).forEach(k=>{ if(k!=="diary"&&!(k in next)) delete live[k]; });
+  Object.keys(next).forEach(k=>{ if(k!=="diary") live[k]=next[k]; });
+  return setSp(live,id);
+}
 function attachProjectFile(file){
   const id=file.projectId;
   const put=(coll,rows)=>{
@@ -2559,7 +2570,7 @@ function attachProjectFile(file){
     (rows||[]).forEach(x=>{
       const at=DB[coll].findIndex(y=>y&&y.id===x.id);
       const rec=setSp(JSON.parse(JSON.stringify(x)),id);
-      if(at>=0) DB[coll][at]=rec; else DB[coll].push(rec);
+      if(at>=0) adoptInto(DB[coll][at],rec,id); else DB[coll].push(rec);
     });
   };
   if(file.project) put("projects",[file.project]);
@@ -2569,10 +2580,15 @@ function attachProjectFile(file){
     const copy=setSp(JSON.parse(JSON.stringify(a)),id);
     copy.diary=(a.diary||[]).map(e=>setSp(JSON.parse(JSON.stringify(e)),id));
     if(at>=0){
-      // keep any private entries this workspace holds on the same animal
-      const keep=((DB.animals[at].diary)||[]).filter(e=>!spOf(e));
-      copy.diary=copy.diary.concat(keep);
-      DB.animals[at]=copy;
+      const live=DB.animals[at];
+      // an entry already here keeps its object, for the same reason the
+      // animal does — a diary editor holds the entry, not a copy of it
+      const byId=new Map(((live.diary)||[]).map(e=>[e&&e.id,e]));
+      const next=copy.diary.map(e=>{ const ex=byId.get(e.id); return ex?adoptInto(ex,e,id):e; });
+      // private entries this workspace holds on the same animal stay
+      const keep=((live.diary)||[]).filter(e=>!spOf(e));
+      adoptInto(live,copy,id);
+      live.diary=next.concat(keep);
     } else DB.animals.push(copy);
   });
   // definitions the entries cannot be read without, kept apart from the
@@ -2586,6 +2602,25 @@ function attachProjectFile(file){
 }
 /* Take them all back out — used before re-attaching, so a record removed from
    the file disappears instead of lingering. */
+/* Bring the workspace into line with a file. Detaching first and attaching
+   afterwards did the same job but threw every record away in between, so the
+   objects an open editor is holding were destroyed whatever attach then did
+   with identity. Here nothing is removed except what the file has genuinely
+   stopped carrying. */
+function syncProjectFile(file){
+  const id=file.projectId;
+  attachProjectFile(file);
+  const keepIds=new Set();
+  if(file.project&&file.project.id) keepIds.add(file.project.id);
+  ["experiments","schedule","notes","readings","protocols","other","animals"].forEach(c=>
+    (file[c]||[]).forEach(x=>{ if(x&&x.id) keepIds.add(x.id); }));
+  const keepDiary=new Set();
+  (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) keepDiary.add(e.id); }));
+  SHAREABLE.forEach(coll=>{ if(Array.isArray(DB[coll]))
+    DB[coll]=DB[coll].filter(x=>spOf(x)!==id||keepIds.has(x.id)); });
+  (DB.animals||[]).forEach(a=>{ if(Array.isArray(a.diary))
+    a.diary=a.diary.filter(e=>spOf(e)!==id||keepDiary.has(e.id)); });
+}
 function detachProjectFile(id){
   SHAREABLE.forEach(coll=>{ if(Array.isArray(DB[coll])) DB[coll]=DB[coll].filter(x=>spOf(x)!==id); });
   (DB.animals||[]).forEach(a=>{ if(Array.isArray(a.diary)) a.diary=a.diary.filter(e=>spOf(e)!==id); });
@@ -2611,11 +2646,15 @@ async function loadSharedProjects(){
       try{ localStorage.setItem(spaceCacheKey(entry.id),JSON.stringify({file,sha})); }catch(e){}
     }
     if(!file) continue;
-    sharedFileShas[entry.id]=sha;
+    /* The agreed copy, taken from the file actually attached. It used to be
+       rebuilt afterwards from localStorage instead, which is the same thing
+       only while that write succeeds — and without a baseline the merge falls
+       back to "this device decides", which is exactly the stale-field
+       overwrite the baseline exists to prevent. */
+    sharedFileShas[entry.id]=sha; sharedBase[entry.id]=sharedFileBase(file);
     if(idx&&idx.members){ DB.sharedMembers=DB.sharedMembers||{};
       idx.members.forEach(m=>{ if(m&&m.id) DB.sharedMembers[m.id]=m; }); }
-    detachProjectFile(entry.id);
-    attachProjectFile(file);
+    syncProjectFile(file);
     n++;
   }
   if(n) resetRecordBaseline();
@@ -2794,7 +2833,7 @@ async function pushProject(id){
       const sha=await spaceWrite(path,merged,cur.sha,`Arbor: ${pr.name||id}`);
       sharedFileShas[id]=sha; sharedBase[id]=sharedFileBase(merged);
       try{ localStorage.setItem(spaceCacheKey(id),JSON.stringify({file:merged,sha})); }catch(e){}
-      detachProjectFile(id); attachProjectFile(merged); resetRecordBaseline();
+      syncProjectFile(merged); resetRecordBaseline();
       delete sharedDirty[id];
       return true;
     }catch(e){
@@ -2813,7 +2852,7 @@ async function pullProject(id){
   const merged=(pr&&sharedDirty[id])?mergeProjectFile(cur.json,buildProjectFile(pr,cur.json),sharedBase[id]):cur.json;
   sharedFileShas[id]=cur.sha; sharedBase[id]=sharedFileBase(cur.json);
   try{ localStorage.setItem(spaceCacheKey(id),JSON.stringify({file:merged,sha:cur.sha})); }catch(e){}
-  detachProjectFile(id); attachProjectFile(merged); resetRecordBaseline();
+  syncProjectFile(merged); resetRecordBaseline();
   return true;
 }
 /* Which shared projects a change touched. Compared against the agreed copy
@@ -2896,7 +2935,7 @@ async function sharedPoll(force){
             if(!r.json) continue;
             sharedFileShas[entry.id]=r.sha; sharedBase[entry.id]=sharedFileBase(r.json);
             try{ localStorage.setItem(spaceCacheKey(entry.id),JSON.stringify({file:r.json,sha:r.sha})); }catch(e){}
-            detachProjectFile(entry.id); attachProjectFile(r.json);
+            syncProjectFile(r.json);
             resetRecordBaseline(); changed=true;
             toast(`${(r.json.project&&r.json.project.name)||"A project"} was shared with you`);
           }catch(e){}
@@ -2922,10 +2961,17 @@ async function sharedPoll(force){
           delete sharedMissing[p.id];
           const name=p.name||"A project";
           let kept=0;
+          /* An explicit signature of mine, not merely the absence of one.
+             isMe() reads an unsigned record as mine, which is right when
+             asking "may I edit this" — in my own workspace it is — but wrong
+             here: an unsigned record in somebody else's project came out of
+             their file, and keeping it would leave me holding work they just
+             took back. */
+          const wroteIt=x=>!!x.by&&isMe(x.by);
           SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{
-            if(spOf(x)===p.id&&isMe(x.by)&&x.id!==p.id){ setSp(x,null); kept++; } }));
+            if(spOf(x)===p.id&&wroteIt(x)&&x.id!==p.id){ setSp(x,null); kept++; } }));
           (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
-            if(spOf(e)===p.id&&isMe(e.by)){ setSp(e,null); kept++; } }));
+            if(spOf(e)===p.id&&wroteIt(e)){ setSp(e,null); kept++; } }));
           detachProjectFile(p.id);
           delete sharedFileShas[p.id]; delete sharedBase[p.id]; delete sharedDirty[p.id];
           try{ localStorage.removeItem(spaceCacheKey(p.id)); }catch(e){}
@@ -3019,7 +3065,7 @@ async function trashSharedRecord(coll,x){
     try{
       const sha=await spaceWrite(path,file,cur.sha,`Arbor: delete`);
       sharedFileShas[id]=sha; sharedBase[id]=sharedFileBase(file);
-      detachProjectFile(id); attachProjectFile(file); resetRecordBaseline();
+      syncProjectFile(file); resetRecordBaseline();
       try{ localStorage.setItem(spaceCacheKey(id),JSON.stringify({file,sha})); }catch(e){}
       return true;
     }catch(e){ if(e.status===409) continue; throw e; }
@@ -3052,7 +3098,7 @@ async function restoreFromTrash(projectId,entryIndex){
     try{
       const sha=await spaceWrite(path,file,cur.sha,`Arbor: restore`);
       sharedFileShas[projectId]=sha; sharedBase[projectId]=sharedFileBase(file);
-      detachProjectFile(projectId); attachProjectFile(file); resetRecordBaseline();
+      syncProjectFile(file); resetRecordBaseline();
       try{ localStorage.setItem(spaceCacheKey(projectId),JSON.stringify({file,sha})); }catch(e){}
       return true;
     }catch(e){ if(e.status===409) continue; throw e; }
@@ -15279,7 +15325,9 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
     // attached to it, and attaching to a half-loaded workspace is how records
     // end up in the wrong store
     if(spaceConnected()) loadSharedProjects().then(n=>{
+      // a project read from the offline cache rather than fetched still needs one
       sharedProjects().forEach(p=>{
+        if(sharedBase[p.id])return;
         try{ const c=JSON.parse(localStorage.getItem(spaceCacheKey(p.id))||"null");
           if(c&&c.file) sharedBase[p.id]=sharedFileBase(c.file); }catch(e){}
       });
