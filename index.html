@@ -217,6 +217,7 @@
   .by-badge{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
     width:14px;height:14px;border-radius:50%;font-family:var(--mono);font-size:8.5px;
     font-weight:700;color:#0b0e14;margin-right:5px;vertical-align:1px}
+  .by-badge.mine{font-weight:600}
   .cal-evt-timed .by-badge,.cal-evt .by-badge{width:12px;height:12px;font-size:7.5px;margin-right:4px}
   .sr-bycol{display:flex;align-items:center;gap:7px;margin-right:auto;font-size:12.5px;color:var(--ink-dim);cursor:pointer}
   .sr-bycol input{width:auto;margin:0}
@@ -3330,20 +3331,31 @@ function memberInitial(id){
   // character as one invents a collaborator out of a random string — which is
   // how "H" appeared beside an animal nobody called H had ever touched.
   if(!memberKnown(id)) return "?";
-  const m=memberOf(id);
-  const n=String((m&&m.name)||id||"?").trim();
+  // ...and "You" is memberOf's stand-in for an unset name, not an initial
+  const n=String((id===meId()?((DB.me&&DB.me.name)||"") : (memberOf(id)||{}).name)||id||"?").trim();
   return (n[0]||"?").toUpperCase();
 }
-// shown only on records somebody else made, in a project you share — your own
-// work does not need a badge on every row
+/* Shown on every signed record in a project you share, your own included.
+   Leaving your own blank looked tidier and read worse: a row with no badge
+   could mean you wrote it or that nobody signed it, and a shared project
+   cannot be scanned for who did what when one of the two people is invisible.
+   Your own is drawn hollow — the same colour, as an outline — so the eye still
+   goes to somebody else's work first.
+   Nothing is shown for an unsigned record: there is no one to name. */
 function authorBadgeHTML(x){
   if(!x||!spOf(x))return "";
-  const by=x.by; if(isMe(by))return "";
+  const by=x.by; if(!by)return "";
+  const mine=isMe(by);
+  // before a name is set there is no initial to draw, and "You" is not one
+  if(mine&&!String((DB.me&&DB.me.name)||"").trim())return "";
   const m=memberOf(by);
-  const title=memberKnown(by)?(m.name||by)
+  const title=mine?((m.name||"You")+" (you)")
+    :memberKnown(by)?(m.name||by)
     :"Signed by "+by+", which nobody in this space answers to — most likely an "+
      "earlier identity of one of your own workspaces.";
-  return `<span class="by-badge" style="background:${m.colour}" title="${escAttr(title)}">${esc(memberInitial(by))}</span>`;
+  const skin=mine?`background:transparent;color:${m.colour};box-shadow:inset 0 0 0 1.5px ${m.colour}`
+                 :`background:${m.colour}`;
+  return `<span class="by-badge${mine?" mine":""}" style="${skin}" title="${escAttr(title)}">${esc(memberInitial(by))}</span>`;
 }
 function authorEdge(x){
   if(!DB.config.colourByAuthor||!x||!spOf(x))return null;
