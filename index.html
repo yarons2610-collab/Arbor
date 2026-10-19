@@ -2417,6 +2417,44 @@ function buildProjectFile(pr,prev){
     if(amb){ copy.comments=""; copy.commentsRich=false; }
     file.animals.push(copy);
   });
+  /* A record taken out of a shared project — an animal unlinked from it, a
+     task moved to another — is not missing by accident, and must not be left
+     to the rule that absence is never a deletion. That rule exists so a device
+     which simply has not seen something cannot destroy it; here the resolver
+     has looked and said "not shared any more". Without saying so in the file
+     the other person keeps the animal, its weights and its surgery for good.
+     Only records this workspace actually holds are judged: one it does not
+     have is exactly the absence the rule is protecting. */
+  if(prev){
+    const COLLS=["experiments","schedule","notes","readings","protocols","other","animals"];
+    const now=new Set(); COLLS.forEach(c=>(file[c]||[]).forEach(x=>x&&x.id&&now.add(x.id)));
+    const mark=(c,id)=>{ file.deletions[c]=file.deletions[c]||{};
+      if(!file.deletions[c][id]) file.deletions[c][id]={at:Date.now(),by:meId(),kind:"private"}; };
+    COLLS.forEach(c=>(prev[c]||[]).forEach(x=>{
+      if(!x||!x.id||now.has(x.id))return;
+      const live=(DB[c]||[]).find(y=>y&&y.id===x.id);
+      if(!live)return;
+      const r=resolveShare(c,live);
+      if(r.shared&&r.project===pr.id)return;
+      mark(c,x.id);
+    }));
+    const diaryNow=new Set();
+    (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>e&&e.id&&diaryNow.add(e.id)));
+    (prev.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
+      if(!e||!e.id||diaryNow.has(e.id))return;
+      let host=null,live=null;
+      (DB.animals||[]).forEach(x=>{ const f=(x.diary||[]).find(y=>y&&y.id===e.id); if(f){ host=x; live=f; } });
+      if(!live)return;
+      const r=resolveShare("diary",live,host);
+      if(r.shared&&r.project===pr.id)return;
+      mark("diary",e.id);
+    }));
+    // ...and putting it back takes the mark off again, or it would be dead on arrival
+    const clear=(c,id)=>{ const d=(file.deletions||{})[c];
+      if(d&&d[id]&&d[id].kind==="private"&&isMe(d[id].by)) delete d[id]; };
+    COLLS.forEach(c=>(file[c]||[]).forEach(x=>x&&x.id&&clear(c,x.id)));
+    (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>e&&e.id&&clear("diary",e.id)));
+  }
   file.defs=buildDefs(file);
   file.libraries=buildSharedLibraries(pr,file);
   /* Who everyone is travels with the file, not only in space.json. Otherwise a
@@ -2616,10 +2654,21 @@ function syncProjectFile(file){
     (file[c]||[]).forEach(x=>{ if(x&&x.id) keepIds.add(x.id); }));
   const keepDiary=new Set();
   (file.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{ if(e&&e.id) keepDiary.add(e.id); }));
+  /* Leaving the file is not the same as ceasing to exist. A record I made
+     private is mine and stays, in my own store; one somebody else withdrew, or
+     that either of us deleted, goes. The deletions already say which — "private"
+     against the id of whoever did it — so the only question is whether that was
+     me. Without this, taking an animal back out of a shared project deleted it
+     from my own workspace, weights and all. */
+  const went=(coll,x)=>{
+    const d=((file.deletions||{})[coll]||{})[x.id];
+    if(d&&d.kind==="private"&&isMe(d.by)){ setSp(x,null); return false; }
+    return true;
+  };
   SHAREABLE.forEach(coll=>{ if(Array.isArray(DB[coll]))
-    DB[coll]=DB[coll].filter(x=>spOf(x)!==id||keepIds.has(x.id)); });
+    DB[coll]=DB[coll].filter(x=>spOf(x)!==id||keepIds.has(x.id)||!went(coll,x)); });
   (DB.animals||[]).forEach(a=>{ if(Array.isArray(a.diary))
-    a.diary=a.diary.filter(e=>spOf(e)!==id||keepDiary.has(e.id)); });
+    a.diary=a.diary.filter(e=>spOf(e)!==id||keepDiary.has(e.id)||!went("diary",e)); });
 }
 function detachProjectFile(id){
   SHAREABLE.forEach(coll=>{ if(Array.isArray(DB[coll])) DB[coll]=DB[coll].filter(x=>spOf(x)!==id); });
@@ -2787,6 +2836,14 @@ function mergeProjectFile(remote,mine,base){
     });
     merged.diary=(merged.diary||[]).filter(e=>!(e&&e.id&&dead("diary",e.id)));
   });
+  /* Animals were the one list a deletion could not reach: the loop above only
+     visits animals this device still holds, and nothing filtered the animals
+     themselves at all. So an animal taken out of a shared project, or deleted
+     from it, stayed in the file for good — with its weights, its surgery and
+     its diary — however plainly both sides had agreed it was gone. */
+  out.animals=(out.animals||[]).filter(a=>!(a&&a.id&&dead("animals",a.id)));
+  out.animals.forEach(a=>{ if(Array.isArray(a.diary))
+    a.diary=a.diary.filter(e=>!(e&&e.id&&dead("diary",e.id))); });
   if(mine.project&&out.project&&changedSince(base,mine.project.id,mine.project))
     out.project=mergeFields(out.project,mine.project,base,mine.project.id);
   out.defs=mergeDefs(remote.defs,mine.defs);
@@ -2797,6 +2854,23 @@ function mergeProjectFile(remote,mine,base){
 /* Field by field: a field this device changed since the agreed copy wins; one
    it did not keeps whatever is there. That is what lets a rename and a
    reschedule of the same record both survive. */
+/* A list of plain values is a set of marks, not one indivisible answer.
+   doneOccurrences is the clear case: ticking off this week and ticking off
+   next week are not competing edits, but taking the whole field from whoever
+   wrote second threw one of the ticks away — two people sharing a weekly cage
+   change would quietly undo each other. Merged as a set against the agreed
+   copy, so un-ticking still removes and is not resurrected by the other
+   side's addition. Lists of objects keep the old rule: their order and
+   identity mean something a set cannot preserve. */
+function mergeScalarList(was,theirs,mine){
+  const plain=v=>Array.isArray(v)&&v.every(x=>x===null||["string","number","boolean"].includes(typeof x));
+  if(!plain(was)||!plain(theirs)||!plain(mine)) return undefined;
+  const W=new Set(was), M=new Set(mine);
+  const removed=new Set(was.filter(x=>!M.has(x)));
+  const out=theirs.filter(x=>!removed.has(x));
+  mine.filter(x=>!W.has(x)).forEach(x=>{ if(!out.includes(x)) out.push(x); });
+  return out;
+}
 function mergeFields(theirs,mine,base,id,isDiary){
   const was=base&&((isDiary?base.diaryFull:base.recFull)||{})[id];
   // no agreed copy to compare against: this device decides, as before
@@ -2808,7 +2882,10 @@ function mergeFields(theirs,mine,base,id,isDiary){
        instead whether mine merely *differs* from theirs makes every field I
        left alone overwrite whatever they did to it — which is how renaming a
        task on one side was undone by the other side editing its notes. */
-    if(JSON.stringify(mine[k])!==JSON.stringify(was[k])) out[k]=mine[k];
+    if(JSON.stringify(mine[k])!==JSON.stringify(was[k])){
+      const set=mergeScalarList(was[k],theirs[k],mine[k]);
+      out[k]=(set!==undefined)?set:mine[k];
+    }
   });
   return out;
 }
