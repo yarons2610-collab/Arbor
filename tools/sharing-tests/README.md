@@ -71,6 +71,18 @@ whole, with the person who took it back · an experiment and its tasks moved to
 a private project · going offline with work queued on both sides and
 reconnecting · three people editing different fields of one record at once.
 
+## Also covered (third pass)
+
+notes, papers, protocols and library records attached through a project's links
+— travelling when linked, leaving when unlinked, never travelling when not ·
+the same animal linked to two shared projects (it lives in exactly one file;
+links pointing outside a file are dropped so nothing dangles) · deleting a
+shared project outright, which must stop sharing it as well · "See as
+collaborator": it hides private work, and writing, syncing and saving are all
+refused while it is on · an audience narrowed after records exist · a diary
+entry overriding its project's default in both directions · a project renamed
+and recoloured · a record moved from one shared project to another.
+
 ## What is covered
 
 definitions and libraries travelling and staying their author's · a shared
