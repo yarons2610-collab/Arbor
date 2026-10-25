@@ -266,6 +266,17 @@ class Workspace:
         t = self.diary_types.get(key)
         return (t or {}).get("label") or (key or "").title()
 
+    def task_title(self, task_id):
+        """The task whose round an entry belongs to, if it still exists. The
+        Timeline shows that one task in place of every entry under it, so the
+        sheet is the only place the grouping can be read back."""
+        if not task_id:
+            return ""
+        for t in self.schedule:
+            if t.get("id") == task_id:
+                return t.get("title") or ""
+        return ""
+
     def diary_detail(self, e):
         """The entry's own fields, as 'Label: value' pairs — the same fields the
         app shows under an entry."""
@@ -582,11 +593,13 @@ def build_sheets(w):
                 a.get("name") or "", e.get("date") or "", e.get("time") or "",
                 e.get("endTime") or "", w.diary_label(e.get("type")),
                 w.diary_detail(e), yes(e.get("done")),
+                w.task_title(e.get("fromTask")),
                 ms_to_dt(e.get("created")),
             ])
     sheets.append(Sheet(
         "Diary entries",
-        ["Animal", "Date", "Time", "End time", "Type", "Details", "Done", "Logged"],
+        ["Animal", "Date", "Time", "End time", "Type", "Details", "Done",
+         "Part of", "Logged"],
         diary, sort=[0, 1, 2], wide=[5]))
 
     inj = []

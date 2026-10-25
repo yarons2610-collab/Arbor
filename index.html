@@ -2588,6 +2588,29 @@ function buildProjectFile(pr,prev){
     if(amb){ copy.comments=""; copy.commentsRich=false; }
     file.animals.push(copy);
   });
+  /* A round names animals, and a shared task's round may well include one
+     that is not in this project — a private mouse fed alongside the others.
+     Its id has no business in somebody else's file, and the leak check is
+     right to refuse the write, which jams every later push until the round is
+     emptied. So the file carries only the animals it actually holds.
+     Pruning here is safe only because the roster merges as a three-way list
+     per round (see mergeRosterMaps): the ids pruned out are "mine, unchanged",
+     so they come back when the merged file is read into this workspace,
+     instead of being read as a removal. This is the trap that pruning a
+     project's links fell into, avoided rather than repeated. */
+  {
+    const here=new Set(file.animals.map(a=>a.id));
+    file.schedule.forEach(t=>{
+      if(!t||!t.roster)return;
+      const out={};
+      Object.keys(t.roster).forEach(k=>{
+        const slot=t.roster[k]; if(!slot)return;
+        const ids=(Array.isArray(slot)?slot:(slot.ids||[])).filter(id=>here.has(id));
+        out[k]=Array.isArray(slot)?ids:Object.assign({},slot,{ids});
+      });
+      t.roster=out;
+    });
+  }
   /* A record taken out of a shared project — an animal unlinked from it, a
      task moved to another — is not missing by accident, and must not be left
      to the rule that absence is never a deletion. That rule exists so a device
@@ -3058,6 +3081,26 @@ function mergeScalarList(was,theirs,mine){
   mine.filter(x=>!W.has(x)).forEach(x=>{ if(!out.includes(x)) out.push(x); });
   return out;
 }
+/* A round is a list of animals per occurrence, so it merges per occurrence the
+   way mergeScalarList merges any list: additions from both sides survive, and
+   a removal by either side is honoured against the agreed copy. Whole-field
+   last-writer-wins lost an animal whenever two people added to the same round
+   while apart, and would undo the pruning buildProjectFile does for private
+   animals. */
+function mergeRosterMaps(was,theirs,mine){
+  const idsOf=slot=>Array.isArray(slot)?slot:((slot&&slot.ids)||[]);
+  const shape=(slot,ids)=>Array.isArray(slot)?ids:Object.assign({},slot||{},{ids});
+  if(!theirs||typeof theirs!=="object"||!mine||typeof mine!=="object") return undefined;
+  const out={};
+  new Set([...Object.keys(theirs),...Object.keys(mine)]).forEach(k=>{
+    const t=theirs[k], m=mine[k];
+    if(!t){ out[k]=m; return; }
+    if(!m){ out[k]=t; return; }
+    const merged=mergeScalarList(idsOf((was||{})[k]||[]),idsOf(t),idsOf(m));
+    out[k]=shape(m,merged!==undefined?merged:idsOf(m));
+  });
+  return out;
+}
 function mergeFields(theirs,mine,base,id,isDiary){
   const was=base&&((isDiary?base.diaryFull:base.recFull)||{})[id];
   // no agreed copy to compare against: this device decides, as before
@@ -3069,6 +3112,12 @@ function mergeFields(theirs,mine,base,id,isDiary){
        instead whether mine merely *differs* from theirs makes every field I
        left alone overwrite whatever they did to it — which is how renaming a
        task on one side was undone by the other side editing its notes. */
+    if(k==="roster"){
+      // merged whether or not this device changed it: the file's copy is
+      // pruned of private animals, so taking theirs wholesale would drop mine
+      const r=mergeRosterMaps(was[k],theirs[k],mine[k]);
+      if(r!==undefined){ out[k]=r; return; }
+    }
     if(JSON.stringify(mine[k])!==JSON.stringify(was[k])){
       const set=mergeScalarList(was[k],theirs[k],mine[k]);
       out[k]=(set!==undefined)?set:mine[k];
@@ -4576,6 +4625,10 @@ function migrate(){                       // backfill fields added in later vers
     if(!Array.isArray(t.links))t.links=[];
     if(t.repeat===undefined)t.repeat=null;
     if(!Array.isArray(t.doneOccurrences))t.doneOccurrences=[];
+    // a task that covers animals (taskCoverType); absent on every task that
+    // does not, which is almost all of them
+    if(t.coverType===undefined)t.coverType=null;
+    if(t.roster===undefined)t.roster=null;
   });
   DB.projects.forEach(pr=>{
     if(!Array.isArray(pr.links)) pr.links=[];
@@ -4997,6 +5050,7 @@ function commitCalMove(x,newWhen,newEnd,newDur){
           };
           src.doneOccurrences=(src.doneOccurrences||[]).map(shiftKey);
           src.excludedDates=(src.excludedDates||[]).map(shiftKey);
+          shiftTaskRoster(src,shiftKey);
           src.when=(d?addDaysISO(src.when,d):src.when).slice(0,10)+(t0?"T"+t0:"");
           if(src.endDate&&d)src.endDate=addDaysISO(src.endDate,d);
         }
@@ -6203,7 +6257,7 @@ function upcomingNotifications(wantEvents){
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(d=>d.timeline).map(d=>d.key));
   const diaryItems=[];
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(!timelineTypeKeys.has(e.type)||e.done)return;
+    if(!timelineTypeKeys.has(e.type)||e.done||coveredByTask(e))return;
     if(e.date>=diaryLookback&&e.date<=diaryHorizon) diaryItems.push({a,e});
   }));
   diaryItems.sort((x,y)=>x.e.date.localeCompare(y.e.date));
@@ -6887,6 +6941,7 @@ function addTask(init){
 }
 function deleteTask(id){
   const t=taskList().find(x=>x.id===id); if(t) removeShared("schedule",[t]);
+  if(t) releaseTaskCoverage(t);
   DB.schedule=taskList().filter(x=>x.id!==id); persist(); }
 // Occurrences of a repeating task all read from the one shared record — real,
 // separate events sharing a rule, not copies of each other. Any edit that
@@ -7125,7 +7180,7 @@ function scheduleRelatedEntries(a,entry){
     // diaryTypeDef() hands back a fallback for an unknown key rather than
     // nothing, so ask the real list: a rule left pointing at a type that has
     // since been deleted must schedule nothing at all
-    if(!r||!r.type||!(DB.config.diaryTypes||[]).some(x=>x.key===r.type))return;
+    if(!r||!diaryTypeExists(r.type))return;
     const count=Math.max(1,+r.count||1), every=Math.max(1,+r.every||1), after=+r.after||0;
     for(let i=0;i<count;i++){
       const date=addDaysISO(entry.date,after+i*every).slice(0,10);
@@ -7264,6 +7319,199 @@ function topUpOpenDiarySeries(){
 function diaryEntryById(id){
   for(const a of DB.animals){ const e=(a.diary||[]).find(x=>x.id===id); if(e)return {a,e}; }
   return null;
+}
+
+/* ---- a task that covers animals ----
+   Some tasks are one thing on the Timeline and many records underneath: a
+   feeding round, a weekly weigh-in, a batch of injections, a behavioural
+   session. The task says when it happens; each animal it covers gets its own
+   diary entry, of an entry type the user designed, with that type's own
+   fields. One chip above, one row per animal below.
+
+   Nothing here is specific to any kind of work. The task names an entry type
+   and the entry type carries the fields, so what gets recorded per animal is
+   whatever the user decided that type should record — including tables.
+
+   Which animals is a question per occurrence, not per task: the cohort
+   changes, and last week's record of who was actually covered must not be
+   rewritten by editing next week's list. So the roster is keyed by the
+   occurrence's own when-string, and an occurrence with no list of its own
+   inherits the most recent earlier one (failing that, the animals the task
+   links). Inheriting rather than copying means a cohort edited once carries
+   forward without having to write a row for every future date. */
+function taskCoverType(t){
+  const k=t&&t.coverType;
+  return diaryTypeExists(k)?k:null;
+}
+function taskRosterMap(t){ return (t&&t.roster&&typeof t.roster==="object")?t.roster:{}; }
+/* A round, stored. The map is keyed by the occurrence's own when-string, like
+   doneOccurrences and excludedDates are — but a when-string is not a stable
+   name for an occurrence: moving a repeating task shifts every one of them,
+   which is why the drag path re-keys those lists. So the round carries an id of
+   its own (`rid`) that the keys move around, and the animals' rows hang off
+   that rid rather than off a date. A series dragged to another day keeps its
+   rounds, with everything already recorded in them.
+   The rid is derived from the when-string it is first stored under, not minted
+   at random: two devices materialising the same round at the same moment then
+   agree on it, instead of each creating its own set of rows. */
+function rosterRidFor(when){ return "r_"+String(when).replace(/[^0-9]/g,"").slice(0,12); }
+function rosterSlot(t,when){
+  const raw=taskRosterMap(t)[when];
+  if(Array.isArray(raw)) return {rid:rosterRidFor(when),ids:raw};  // an older shape
+  return (raw&&typeof raw==="object")?raw:null;
+}
+// The animals this occurrence covers: its own list once it has been given one,
+// otherwise the last list set before it, otherwise the task's own animal links.
+function taskRosterFor(t,when){
+  const live=id=>DB.animals.some(a=>a.id===id);
+  const own=rosterSlot(t,when);
+  /* The stored list is one field on one record, so two people who each add an
+     animal to the same round while apart come back with one of the two lists —
+     the other person's addition is dropped by the last write, even though the
+     row they filled in survives as its own record and merges cleanly.
+     So the list is not the only evidence of who was in a round: a row that
+     exists and names this round is proof that somebody put that animal in it.
+     Membership is the union of the two, which makes the round converge without
+     the sync layer having to merge inside a field. Taking an animal out
+     deletes its row as well, so there is no evidence left to revive it. */
+  if(own) return [...new Set([...(own.ids||[]),...animalsHoldingRound(t,own.rid)])].filter(live);
+  const map=taskRosterMap(t);
+  const earlier=Object.keys(map).filter(k=>k<when).sort();
+  const seed=earlier.length ? (rosterSlot(t,earlier[earlier.length-1])||{}).ids
+    : (t.links||[]).filter(l=>l.kind==="animal").map(l=>l.id);
+  return (seed||[]).filter(live);
+}
+/* Writes the round down. Until this runs, an occurrence has no round of its
+   own — it shows the one it inherits, and nothing is stored for it. Working on
+   a round is what makes it a record: once there are rows, there has to be
+   something stable for them to belong to. */
+function setTaskRoster(t,when,ids){
+  if(!t||!when)return null;
+  t.roster=taskRosterMap(t);
+  const slot=rosterSlot(t,when)||{rid:rosterRidFor(when),ids:[]};
+  slot.ids=[...new Set(ids)];
+  t.roster[when]=slot;
+  return slot;
+}
+// Who actually holds a row for this round — see taskRosterFor.
+function animalsHoldingRound(t,rid){
+  if(!rid)return [];
+  const id=a=>taskOccDiaryId(t.id,rid,a.id);
+  return DB.animals.filter(a=>(a.diary||[]).some(e=>e.id===id(a))).map(a=>a.id);
+}
+function taskRosterRid(t,when){
+  const slot=rosterSlot(t,when);
+  return slot?slot.rid:null;
+}
+/* Derived, never minted: two devices opening the same round must end up with
+   one row per animal, not two. Keyed by the round's own id rather than its
+   date, so moving the task moves the rows' dates without changing which rows
+   they are — see rosterSlot. */
+function taskOccDiaryId(taskId,rid,animalId){
+  return "d_tk_"+String(taskId).replace(/^t_/,"")
+    +"_"+String(rid).replace(/^r_/,"")
+    +"_"+String(animalId).replace(/^a_/,"");
+}
+// An entry that exists because a task covers its animal. It is an ordinary
+// entry in the animal's own diary — the Timeline just shows the task instead
+// of showing every entry under it, which is the whole point of the grouping.
+// A row whose task has since been deleted is nobody's child and shows normally.
+function coveredByTask(e){ return !!(e&&e.fromTask&&taskOf(e.fromTask)); }
+function taskOccEntry(t,when,a){
+  const rid=taskRosterRid(t,when); if(!rid)return null;
+  const id=taskOccDiaryId(t.id,rid,a.id);
+  return (a.diary||[]).find(e=>e.id===id)||null;
+}
+// "has anything actually been written here" — an untouched row is one the app
+// created and nobody filled in, and it is the only kind allowed to vanish on
+// its own (see syncTaskOccEntries).
+function diaryRowHasContent(e){
+  if(!e)return false;
+  if(e.done)return true;
+  const d=e.data||{};
+  return Object.keys(d).some(k=>{
+    const v=d[k];
+    if(v==null||v==="")return false;
+    if(Array.isArray(v))return v.length>0;
+    if(typeof v==="object")return Object.keys(v).length>0;
+    return true;
+  });
+}
+/* Makes the animals' rows match the round for one occurrence, materialising it
+   first (see setTaskRoster). Adding is unconditional; removing only ever takes
+   away a row nothing has been written into, so dropping an animal from a list
+   can never silently delete what was recorded about it — that row stays in its
+   diary, and becomes an ordinary entry once the task stops claiming it.
+   Idempotent by construction: every row it could add has the one id derived
+   above, so running it twice adds nothing, and two devices running it produce
+   the same rows rather than two sets. Safe to call on every open. */
+function syncTaskOccEntries(t,when){
+  const type=taskCoverType(t); if(!type||!when)return 0;
+  const ids=new Set(taskRosterFor(t,when));
+  const rid=(setTaskRoster(t,when,[...ids])||{}).rid; if(!rid)return 0;
+  const date=String(when).slice(0,10), time=hasTime(when)?String(when).slice(11,16):null;
+  let n=0;
+  DB.animals.forEach(a=>{
+    const have=taskOccEntry(t,when,a);
+    if(ids.has(a.id)){
+      if(have){
+        // the round itself was moved or retyped: its rows go with it
+        if(have.date!==date){ have.date=date; n++; }
+        if((have.time||null)!==time){ have.time=time; n++; }
+        if(have.type!==type){ have.type=type; n++; }
+        return;
+      }
+      a.diary=a.diary||[];
+      a.diary.push({id:taskOccDiaryId(t.id,rid,a.id),type,date,time,endTime:null,
+        data:{},created:Date.now(),edited:null,fromTask:t.id,fromOcc:rid});
+      n++;
+    } else if(have&&!diaryRowHasContent(have)){
+      // a shared row has to be deleted through the recorded path, or the next
+      // merge restores it — and a restored row would put the animal back in
+      // the round, because a row is what proves membership (taskRosterFor)
+      removeShared("diary",[have],a);
+      a.diary=(a.diary||[]).filter(e=>e!==have);
+      n++;
+    }
+  });
+  return n;
+}
+/* A dragged series shifts every occurrence's when-string, so the rounds have to
+   move with it — the keys change, the rids (and so the rows) do not. The rows'
+   own dates follow, because a row is dated to the round it belongs to. */
+function shiftTaskRoster(t,shiftKey){
+  if(!t||!t.roster)return;
+  const next={}, dateOf={};
+  Object.keys(t.roster).forEach(k=>{
+    const slot=rosterSlot(t,k); if(!slot)return;
+    const k2=shiftKey(k);
+    next[k2]=slot;
+    dateOf[slot.rid]=k2;
+  });
+  t.roster=next;
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
+    if(e.fromTask!==t.id||!e.fromOcc)return;
+    const w=dateOf[e.fromOcc]; if(!w)return;
+    e.date=String(w).slice(0,10);
+    e.time=hasTime(w)?String(w).slice(11,16):null;
+  }));
+}
+/* A task that covered animals and is being deleted, or has just stopped
+   covering them, must not leave its rows orphaned: an empty one had no reason
+   to exist, and a filled one is the animal's own record and stays — released
+   from the task, so the Timeline shows it again like any other entry. */
+function releaseTaskCoverage(t){
+  if(!t)return;
+  DB.animals.forEach(a=>{
+    if(!Array.isArray(a.diary))return;
+    const dropped=a.diary.filter(e=>e.fromTask===t.id&&!diaryRowHasContent(e));
+    if(dropped.length) removeShared("diary",dropped,a);
+    a.diary=a.diary.filter(e=>{
+      if(e.fromTask!==t.id)return true;
+      if(diaryRowHasContent(e)){ delete e.fromTask; delete e.fromOcc; return true; }
+      return false;
+    });
+  });
 }
 function diaryTasksForStep(st){
   const animals=animalsForStep(st);
@@ -7413,6 +7661,11 @@ function taskEditor(t,after,occWhen,occEndDate){
   // one-off task's own time. A repeating task opened without an occurrence (from
   // a project's list) has no single one to tick, so it gets no button.
   const doneKey=((!wasRecurring||occWhen!=null)&&t.when)?t.when:null;
+  // The roster belongs to one occurrence, so it needs the same single
+  // occurrence the tick does: a repeating task opened from a project's list,
+  // with no occurrence in hand, can set which type it records but not fill a
+  // round in — there is no round on screen to fill.
+  const occKey=doneKey;
   const doneLabel=on=>on?"✓ Done — tap to undo":(wasRecurring?"○ Mark this occurrence done":"○ Mark as done");
   modal(`<h3>${t.isEvent?"Event":"Task"}</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
@@ -7439,7 +7692,16 @@ function taskEditor(t,after,occWhen,occEndDate){
         ${colorBtnHTML(t.color||GCAL_COLORS[0][0],{attrs:'id="tk_color_pick"',size:30})}
       </div></div>
     <div class="fld"><label>Notes</label><textarea id="tk_notes" rows="3">${esc(t.notes||"")}</textarea></div>
-    ${t.isEvent?"":`<div class="fld"><label>Part of</label>
+    ${t.isEvent?"":`<div class="fld"><label>Records per animal</label>
+      <select id="tk_cover">
+        <option value="">— nothing; this is just a task</option>
+        ${allDiaryTypeDefs().map(d=>`<option value="${escAttr(d.key)}" ${t.coverType===d.key?"selected":""}>${esc(d.icon||"🔖")} ${esc(d.label)}${d.fromShared?" (shared)":""}</option>`).join("")}
+      </select>
+      <div style="font-size:11px;color:var(--ink-faint);margin-top:5px;line-height:1.5">
+        Each animal in the round gets its own entry of that type, on this task's date,
+        with that type's own fields. The Timeline shows this one task, not an entry per animal.</div>
+      <div id="tk_roster"></div></div>
+    <div class="fld"><label>Part of</label>
       <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>`}
     ${shareRowHTML("schedule",t)}
     <div class="drow" style="margin-top:16px;gap:8px">
@@ -7448,6 +7710,128 @@ function taskEditor(t,after,occWhen,occEndDate){
     </div>
     <div class="actions"><button class="btn accent" id="tk_save">Done</button></div>`,{wide:true});
   wireShareRow(document.getElementById("modal"),t,null,"schedule");
+  /* ---- the round: which animals this occurrence covers, and what each one
+     records. Painted from the roster every time rather than held in a variable,
+     so adding or dropping an animal is one source of truth re-read, and the
+     rows that are on screen are exactly the entries that exist. Values typed
+     into the rows are read back before any repaint (and on save), because a
+     repaint rebuilds the inputs. ---- */
+  function rosterRowHTML(a,e,type){
+    const def=diaryTypeDef(type), on=!!(e&&e.done);
+    return `<div class="tkr-row" data-aid="${escAttr(a.id)}"
+      style="border:1px solid var(--line2);border-radius:9px;padding:9px 11px;margin-bottom:7px;background:var(--bg2)">
+      <div style="display:flex;align-items:center;gap:8px">
+        <button type="button" class="tkr-done" data-aid="${escAttr(a.id)}" title="Mark this animal's entry done"
+          style="flex:0 0 auto;border:1px solid var(--line2);background:${on?"var(--ok,#3c8a52)":"var(--panel2)"};color:${on?"#fff":"var(--ink-faint)"};border-radius:6px;padding:2px 9px;cursor:pointer;font-size:11px">${on?"✓":"○"}</button>
+        <span style="flex:1;min-width:0;font-weight:600;font-size:12.5px">${esc(a.name)}</span>
+        <button type="button" class="tkr-del" data-aid="${escAttr(a.id)}" title="Take this animal out of this round"
+          style="flex:0 0 auto;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
+      </div>
+      ${(def.fields||[]).length?`<div style="margin-top:7px">${renderTypeFields(type,(e&&e.data)||{},a)}</div>`:""}
+      <div class="fld" style="margin:6px 0 0">
+        <input class="tkr-note" value="${escAttr(diaryNoteOf((e&&e.data)||{}))}" placeholder="note…" style="font-size:12px">
+      </div></div>`;
+  }
+  // Read what is typed into the rows back onto the entries. Only writes an
+  // entry whose data actually differs, so repainting or saving an untouched
+  // round marks nothing as edited and gives sync nothing to carry.
+  function readRosterInto(){
+    const host=document.getElementById("tk_roster"); if(!host||!occKey)return;
+    const type=taskCoverType(t); if(!type)return;
+    let changed=false;
+    host.querySelectorAll(".tkr-row").forEach(row=>{
+      const a=DB.animals.find(x=>x.id===row.dataset.aid); if(!a)return;
+      const e=taskOccEntry(t,occKey,a); if(!e)return;
+      const data=readTypeData(row,type,a);
+      const note=row.querySelector(".tkr-note");
+      const noteVal=note?note.value.trim():"";
+      if(noteVal)data.note=noteVal;
+      if(JSON.stringify(data)!==JSON.stringify(e.data||{})){
+        e.data=data; e.edited=Date.now(); changed=true;
+      }
+    });
+    if(changed)persist();
+  }
+  /* A round is a record of what was done, not a scoped property of the series,
+     so it must survive revert() — the same reason the tick above writes itself
+     back into `before`. Without this, answering "only this occurrence" to the
+     save dialog silently undid every animal added or dropped in this sitting,
+     while their rows stayed on the animals.
+     The rows themselves live on the animals and were never at risk. */
+  const keepRoster=()=>{ before.roster=t.roster?JSON.parse(JSON.stringify(t.roster)):t.roster; };
+  function paintRoster(){
+    const host=document.getElementById("tk_roster"); if(!host)return;
+    const type=taskCoverType(t);
+    if(!type){ host.innerHTML=""; return; }
+    if(!occKey){
+      host.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint);margin-top:9px;line-height:1.5">
+        Open one occurrence of this task — from the Timeline or the calendar — to fill a round in.
+        Which animals it covers is set per occurrence, because the group changes, and editing
+        next week's list must not rewrite the record of who was covered last week.</div>`;
+      return;
+    }
+    syncTaskOccEntries(t,occKey); keepRoster(); persist();
+    const ids=taskRosterFor(t,occKey);
+    const rows=ids.map(id=>DB.animals.find(a=>a.id===id)).filter(Boolean)
+      .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true}))
+      .map(a=>rosterRowHTML(a,taskOccEntry(t,occKey,a),type)).join("");
+    // a dead animal is not offered for a new round, but one already in this
+    // round stays listed — a past round's record of it is not to be hidden
+    const rest=DB.animals.filter(a=>!ids.includes(a.id)&&a.alive!==false)
+      .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true}));
+    host.innerHTML=`<div style="margin-top:10px">
+      ${rows||`<div style="font-size:11.5px;color:var(--ink-faint);margin-bottom:8px">No animals in this round yet.</div>`}
+      ${rest.length?`<select id="tk_addanimal" style="width:100%">
+        <option value="">＋ add an animal to this round…</option>
+        ${rest.map(a=>`<option value="${escAttr(a.id)}">${esc(a.name)}</option>`).join("")}
+      </select>`:`<div style="font-size:11px;color:var(--ink-faint)">Every living animal is already in this round.</div>`}
+      ${ids.length?`<div style="font-size:10.5px;color:var(--ink-faint);margin-top:6px">
+        ${ids.length} animal${ids.length===1?"":"s"} · later occurrences inherit this list until one of them is changed</div>`:""}
+    </div>`;
+    const add=document.getElementById("tk_addanimal");
+    if(add) add.addEventListener("change",ev=>{
+      const id=ev.target.value; if(!id)return;
+      readRosterInto();
+      setTaskRoster(t,occKey,[...taskRosterFor(t,occKey),id]);
+      keepRoster(); persist(); paintRoster();
+    });
+    host.querySelectorAll(".tkr-done").forEach(b=>b.addEventListener("click",()=>{
+      const a=DB.animals.find(x=>x.id===b.dataset.aid); if(!a)return;
+      const e=taskOccEntry(t,occKey,a); if(!e)return;
+      readRosterInto();
+      e.done=!e.done; e.edited=Date.now(); persist(); paintRoster();
+    }));
+    host.querySelectorAll(".tkr-del").forEach(b=>b.addEventListener("click",()=>{
+      const a=DB.animals.find(x=>x.id===b.dataset.aid); if(!a)return;
+      readRosterInto();
+      const e=taskOccEntry(t,occKey,a);
+      // dropping an animal whose row has something in it would throw that
+      // away, so it asks; an untouched row goes quietly
+      if(e&&diaryRowHasContent(e)&&
+         !confirm(`${a.name} has something recorded for this round. Take it out and delete that entry?`))return;
+      if(e){ removeShared("diary",[e],a); a.diary=(a.diary||[]).filter(x=>x!==e); }
+      setTaskRoster(t,occKey,taskRosterFor(t,occKey).filter(id=>id!==a.id));
+      keepRoster(); persist(); paintRoster();
+    }));
+    // an animal-anchored table's rows live on the animal, so each row is wired
+    // to its own — wiring the whole host at once would hand every table the
+    // same animal
+    host.querySelectorAll(".tkr-row").forEach(row=>{
+      const a=DB.animals.find(x=>x.id===row.dataset.aid); if(!a)return;
+      wireTableFields(row,type,a);
+    });
+  }
+  const tkCover=document.getElementById("tk_cover");
+  if(tkCover) tkCover.addEventListener("change",ev=>{
+    readRosterInto();
+    const next=ev.target.value||null;
+    // turning it off hands the rows back: the filled ones become ordinary
+    // entries in the animals' diaries, the untouched ones never meant anything
+    if(!next) releaseTaskCoverage(t);
+    t.coverType=next; before.coverType=next;
+    persist(); paintRoster();
+  });
+  paintRoster();
   // The end follows the start the way it does in a calendar: an end already set
   // keeps its length, and an empty one is suggested half an hour on. Repainting
   // by hand because the end's own button only relabels itself when picked.
@@ -7609,6 +7993,7 @@ function taskEditor(t,after,occWhen,occEndDate){
     }
     t.title=document.getElementById("tk_name").value;
     t.notes=document.getElementById("tk_notes").value.trim();
+    readRosterInto();
     persist();
     const finish=()=>{ closeModal(); if(after)after(); };
     const fieldsOf=x=>JSON.stringify({title:x.title,when:x.when,endDate:x.endDate,color:x.color,projectId:x.projectId,experimentId:x.experimentId,repeat:x.repeat,notes:x.notes});
@@ -7621,6 +8006,8 @@ function taskEditor(t,after,occWhen,occEndDate){
         // so the whole pattern moves together rather than collapsing onto
         // one occurrence's date
         const deltaMin=(whenDate(t.when)-whenDate(occWhen))/60000;
+        // the rounds are keyed by when-string too, so they shift with the rest
+        if(deltaMin) shiftTaskRoster(t,w=>isoAddMinutes(w,deltaMin));
         t.when=deltaMin?isoAddMinutes(before.when,deltaMin):before.when;
         t.endDate=before.endDate?(deltaMin?isoAddMinutes(before.endDate,deltaMin):before.endDate):before.endDate;
         persist(); finish(); return;
@@ -9355,7 +9742,7 @@ function renderMonthView(host){
     weeks[weekIdx].push({...item,colStart,span:Math.min(span,7-colStart)});
   };
   if(calFilterOn("diary")) DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(!keys.has(e.type))return;
+    if(!keys.has(e.type)||coveredByTask(e))return;
     const d=whenDate(e.date); d.setHours(0,0,0,0);
     place(Math.round((d-gridStart)/864e5),1,{kind:"diary",a,e});
   }));
@@ -9648,7 +10035,7 @@ function renderTimeline(){
   const diaryTimedEvents=[]; // {an,e,def,isFuture} - rendered into the hourly grid further down
   if(calFilterOn("diary")) DB.animals.forEach(an=>{
     (an.diary||[]).forEach(e=>{
-      if(!timelineTypeKeys.has(e.type))return;
+      if(!timelineTypeKeys.has(e.type)||coveredByTask(e))return;
       const day=new Date(e.date+"T00:00:00");
       const d=Math.round((day-ws)/864e5);
       if(d<0||d>=NCOL)return;
@@ -12696,6 +13083,25 @@ function sharedDefType(key){
   }
   return null;
 }
+/* "Is this a real entry type?" — asked before acting on a key stored somewhere
+   else (a task that records per animal, a follow-up rule). DB.config.diaryTypes
+   alone is the wrong list: a collaborator reads a type out of the shared space
+   and never copies it into their own library, so checking only their config
+   says no to every type they were shared. Asking this instead is what lets a
+   round defined by one person be filled in by another. */
+function diaryTypeExists(key){
+  return !!key && (diaryTypeDefs().some(t=>t.key===key) || !!sharedDefType(key));
+}
+// every type that can be chosen here: your own, plus the ones you are being
+// shown from a shared project
+function allDiaryTypeDefs(){
+  const mine=diaryTypeDefs(), have=new Set(mine.map(t=>t.key)), out=[...mine];
+  Object.keys(DB.sharedDefs||{}).forEach(id=>
+    ((DB.sharedDefs[id]||{}).diaryTypes||[]).forEach(t=>{
+      if(t&&t.key&&!have.has(t.key)){ have.add(t.key); out.push(Object.assign({},t,{fromShared:true})); }
+    }));
+  return out.sort((a,b)=>(a.label||"").localeCompare(b.label||""));
+}
 function diaryTypeDef(key){
   return diaryTypeDefs().find(t=>t.key===key) || sharedDefType(key)
     || {key,label:key||"—",icon:"❔",color:"var(--ink-faint)",timeline:false,fields:[]};
@@ -12928,6 +13334,32 @@ function wireTableFieldBox(box,f,animal){
 }
 /* Read a table back. A row where everything was left blank is not a row —
    pressing "add row" and changing your mind should not record anything. */
+/* Reads one entry type's fields back out of whatever element is holding them.
+   Three places already did this inline — the animal's diary form, the
+   Timeline's own entry form, and the animal editor — and a task that covers
+   animals needs it once per animal in the round, scoped to that animal's own
+   row. One reader, so a new field type has one place to be understood. */
+function readTypeData(host,type,animal){
+  const out={}, def=diaryTypeDef(type);
+  (def.fields||[]).forEach(f=>{
+    if(f.type==="table"){
+      const box=[...host.querySelectorAll(".dg-table")].find(x=>x.dataset.key===f.key);
+      if(box){ const v=readTableField(box,f,animal);
+        if(Array.isArray(v)?v.length:Object.keys(v).length) out[f.key]=v; }
+      return;
+    }
+    const el=[...host.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
+    if(!el)return;
+    const raw=el.value;
+    if(f.type==="yesno"){ if(raw!=="")out[f.key]=raw==="1"; return; }
+    if(f.type==="number"){
+      if(raw.trim()==="")return;
+      const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))out[f.key]=n; return;
+    }
+    if(raw.trim()!=="")out[f.key]=raw.trim();
+  });
+  return out;
+}
 function readTableField(box,f,animal){
   const subs=(f.fields||[]).filter(sf=>sf&&sf.key);
   const pers=(f.per||[]).filter(sf=>sf&&sf.key);
@@ -13713,21 +14145,7 @@ function paintDiary(container,a,opts){
       } else {
         // generic field-driven types: read each of this type's defined
         // fields by its stable key, typed per the field's declared type
-        const def=diaryTypeDef(type);
-        def.fields.forEach(f=>{
-          if(f.type==="table"){
-            const box=[...host.querySelectorAll(".dg-table")].find(x=>x.dataset.key===f.key);
-            if(box){ const v=readTableField(box,f,a);
-              if(Array.isArray(v)?v.length:Object.keys(v).length) data[f.key]=v; }
-            return;
-          }
-          const el=[...host.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
-          if(!el)return;
-          const raw=el.value;
-          if(f.type==="yesno"){ if(raw!=="")data[f.key]=raw==="1"; return; }
-          if(f.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))data[f.key]=n; return; }
-          if(raw.trim()!=="")data[f.key]=raw.trim();
-        });
+        data=readTypeData(host,type,a);
       }
       data.note=host.querySelector(".dg-f-note").value.trim();
       const doneVal=!!host.querySelector(".dg-f-done")?.classList.contains("on");
@@ -13869,6 +14287,7 @@ function paintDiary(container,a,opts){
               <span>${diaryTypeDef(e.type).icon}</span>
               <span class="dg-esum" title="${escAttr(diaryEntrySummary(e,a))}">${esc(diaryEntrySummary(e,a))}</span>
               ${e.seriesId?`<span class="dg-rep" title="One of ${diarySeriesCount(a,e.seriesId)} repeating entries">↻</span>`:""}
+              ${coveredByTask(e)?`<button class="dg-round" data-id="${e.id}" title="Part of the task ${escAttr((taskOf(e.fromTask)||{}).title||"")} — open it">◉</button>`:""}
               <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
               <button class="dg-edit" data-id="${e.id}">✎</button>
               <button class="dg-del" data-id="${e.id}">✕</button>
@@ -13940,6 +14359,16 @@ function paintDiary(container,a,opts){
       askDeleteWithFollowUps(a,[entry],finish,"Delete this diary entry?");
       return;
     }
+    const roundBtn=e.target.closest(".dg-round");
+    if(roundBtn){
+      const entry=a.diary.find(x=>x.id===roundBtn.dataset.id); if(!entry)return;
+      const t=taskOf(entry.fromTask); if(!t){ toast("That task is gone"); return; }
+      // the occurrence this row belongs to, found by the round id its key holds
+      const when=Object.keys(taskRosterMap(t)).find(k=>(rosterSlot(t,k)||{}).rid===entry.fromOcc);
+      closeModal();
+      taskEditor(t,()=>render(),when||t.when,t.endDate);
+      return;
+    }
     const viewBtn=e.target.closest(".dg-view"), editBtn=e.target.closest(".dg-edit"), delBtn=e.target.closest(".dg-del");
     if(viewBtn){
       const id=viewBtn.dataset.id;
@@ -13956,6 +14385,15 @@ function paintDiary(container,a,opts){
       // something, which is the opposite of what a confirm dialog promises.
       const wipe=rows=>{
         const ids=new Set(rows.map(x=>x.id));
+        // A row that belongs to a task's round would be put straight back the
+        // next time that round is opened — the roster, not the row, is what
+        // says the animal is in it. So deleting the row leaves the round too.
+        rows.forEach(x=>{
+          if(!coveredByTask(x))return;
+          const t=taskOf(x.fromTask); if(!t)return;
+          const when=Object.keys(taskRosterMap(t)).find(k=>(rosterSlot(t,k)||{}).rid===x.fromOcc);
+          if(when) setTaskRoster(t,when,taskRosterFor(t,when).filter(id=>id!==a.id));
+        });
         a.diary=a.diary.filter(x=>!ids.has(x.id));
         if(entry.seriesId) closeOpenSeriesIfTailRemoved(a,entry.seriesId,rows.map(x=>x.date));
         persist(); notifyChange();
@@ -15665,7 +16103,8 @@ document.getElementById("expCal").addEventListener("click",()=>{
   ];
   const timelineTypeKeys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
   const diaryEvents=[];
-  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{ if(timelineTypeKeys.has(e.type)) diaryEvents.push({a,e}); }));
+  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
+    if(timelineTypeKeys.has(e.type)&&!coveredByTask(e)) diaryEvents.push({a,e}); }));
   if(!due.length && !diaryEvents.length){ toast("No scheduled tasks or timeline entries"); return; }
   const pad=n=>String(n).padStart(2,"0"), stamp=new Date().toISOString().replace(/[-:]/g,"").split(".")[0]+"Z";
   const esc2=s=>(s||"").replace(/[\\;,]/g,m=>"\\"+m).replace(/\n/g,"\\n");
@@ -16251,8 +16690,12 @@ function exportFullDatabaseExcel(){
   });
 
   const diary=[];
+  // "Part of" names the task whose round this entry belongs to, when it has
+  // one — on the Timeline that task stands in for all of them, so the sheet
+  // is where the grouping is otherwise invisible
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>diary.push([a.name||"",e.date||"",e.time||"",e.endTime||"",
-    diaryTypeDef(e.type).label,noTime(e,a),yes(e.done),e.seriesRule?repeatLabel(e.seriesRule,e.date)||"Yes":"",stamp(e.created)])));
+    diaryTypeDef(e.type).label,noTime(e,a),yes(e.done),e.seriesRule?repeatLabel(e.seriesRule,e.date)||"Yes":"",
+    coveredByTask(e)?((taskOf(e.fromTask)||{}).title||""):"",stamp(e.created)])));
 
   const inj=[];
   DB.animals.forEach(a=>(a.surgeryDetail&&a.surgeryDetail.injections||[]).forEach((x,i)=>{
@@ -16362,7 +16805,7 @@ function exportFullDatabaseExcel(){
   const sheets=[
     sheet("Animals",["Name","Cage","Sex","Strain","Status","Practice","Excluded","Born","Age (weeks)","Sacrificed","Surgeries",
       "Days since last surgery","Latest weight (g)","Head-post","Cranial window","Experiments (group)","Comments"],animals,0),
-    sheet("Diary entries",["Animal","Date","Time","End time","Type","Details","Done","Repeats","Logged"],diary,0,1,2),
+    sheet("Diary entries",["Animal","Date","Time","End time","Type","Details","Done","Repeats","Part of","Logged"],diary,0,1,2),
     ...(customCols.length?[sheet("Animal fields",
       ["Animal",...customCols.map(([sec,f])=>`${sec.label||"Section"} · ${f.label||f.key}`)],
       DB.animals.map(a=>[a.name||"",...customCols.map(([,f])=>cellOf((a.custom||{})[f.key],f))])
