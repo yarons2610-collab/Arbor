@@ -8082,7 +8082,10 @@ function animalColor(a){
   // than stored on the record, so reading .color returned null for every
   // experiment that never had one explicitly set — an invalid CSS colour, which
   // is why these dots and chips came out blank. Fall back to the shade.
-  return ex?(ex.color||expShade(ex)||"#5b6678"):"#5b6678";
+  if(ex) return ex.color||expShade(ex)||"#5b6678";
+  // ...and an animal that belongs to a project directly takes its colour
+  const ps=animalProjects(a.id);
+  return ps.length?(ps[0].color||"#5b6678"):"#5b6678";
 }
 // Two channels, two variables: what kind of entry this is (the fill, backed up
 // by the icon the chip already carries) and which experiment the animal belongs to
@@ -8095,8 +8098,15 @@ function diaryColors(an,def){
   // switchable to colour by experiment or project instead, collapsing it to
   // one variable — the switch cost a row of the calendar and nobody wanted
   // the other two readings, so this is simply what it always defaulted to.
+  /* An animal can belong straight to a project, with no experiment in
+     between, and then there was no experiment to borrow an edge from — so the
+     one arrangement added specifically so sharing would work was the one with
+     no stripe at all. It falls back to the project's own colour, which is the
+     rule taskColorOf already follows a few hundred lines up. */
   const ex=animalHomeExperiment(an.id);
-  return {fill:def.color, edge:ex?ex.color:null};
+  if(ex) return {fill:def.color, edge:ex.color||expShade(ex)||null};
+  const ps=animalProjects(an.id);
+  return {fill:def.color, edge:ps.length?(ps[0].color||null):null};
 }
 const edgeCSS=c=>c?`border-right:3px solid ${c};`:"";
 
