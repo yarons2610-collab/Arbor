@@ -153,6 +153,13 @@
   .color-cell.on::after{content:"✓";position:absolute;inset:0;left:0;top:0;width:auto;height:auto;margin:0;
     display:flex;align-items:center;justify-content:center;border-radius:0;background:none;
     font-size:11px;font-weight:700;color:#fff;text-shadow:0 1px 2px #000,0 0 3px #000;box-shadow:none}
+  /* Outside the band this scope reads at. Still pickable — the ladder is a
+     default worth seeing, not a rule worth enforcing — but it has to be
+     obvious which squares keep the scopes apart and which break the pattern. */
+  .color-cell.off-band{opacity:.26;filter:saturate(.55)}
+  .color-cell.off-band:hover{opacity:.9;filter:none}
+  .color-band-note{margin-top:9px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);line-height:1.5}
+  .color-band-note b{color:var(--ink-dim);font-weight:600}
   .color-key{display:flex;gap:12px;margin-top:12px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
   .color-key span{display:flex;align-items:center;gap:5px}
   .color-key i{width:14px;height:14px;border-radius:3px;display:inline-block;position:relative;background:var(--panel)}
@@ -5813,10 +5820,16 @@ function scopeBase(hex){
 }
 // what a project's own work is drawn in: its colour, unless that colour leaves
 // no room for the two rungs that have to sit above it
+/* A project wears the colour it was given. This used to clamp anything lighter
+   than the project rung down to it — which kept the ladder tidy but made the
+   picker a liar: you chose a pale green and the project drew dark, with nothing
+   saying why. The picker now shows which band a project reads at and dims the
+   rest, so going lighter is a choice made in the open rather than one quietly
+   overruled.
+   The rungs below are unaffected: scopeBase() clamps before deriving, so an
+   experiment and a diary entry still ladder correctly under a pale project. */
 function projectShade(pr){
-  if(!pr||!pr.color) return "#7db4ff";
-  const {h,s,l}=hexToHsl(pr.color);
-  return l<=34?pr.color:hslHex(h,s,34);
+  return (pr&&pr.color)?pr.color:"#7db4ff";
 }
 /* The lightest rung: every diary entry under a project, whichever experiment
    its animal belongs to. Which experiment is a question the animal's own
@@ -5871,6 +5884,24 @@ function chipSkinBar(isEvent,col,overdue,authorCol){
 }
 // whether a calendar item is one of life's rather than the lab's
 function calIsEvent(x){ return !!(x&&x.kind==="task"&&x.src&&x.src.isEvent); }
+/* Which rung of the scope ladder a colour belongs to (see scopeBase and
+   friends). Derived from the ladder's own constants rather than written out as
+   row numbers, so moving a rung moves the band with it instead of leaving the
+   picker quietly describing the old one.
+   A project anchors at or below 34; an experiment sits a step above that; a
+   diary entry two steps, capped at SCOPE_TOP so white text stays readable.
+   Anything lighter still belongs to nothing — it is above the readability
+   ceiling for every rung. */
+const SCOPE_BANDS={
+  project:    l=>l<=34,
+  experiment: l=>l>34 && l<=34+SCOPE_STEP+SCOPE_SPREAD+7,
+  diary:      l=>l>34+SCOPE_STEP+SCOPE_SPREAD+7 && l<=SCOPE_TOP+6
+};
+const SCOPE_BAND_WORDS={
+  project:    ["Projects","read darkest, being the widest thing on the Timeline"],
+  experiment: ["Experiments","sit a step lighter than the project they belong to"],
+  diary:      ["Diary entries","are the lightest rung that still reads with white text on it"]
+};
 function colorGrid(){
   const rows=COLOR_SHADES.map(sh=>COLOR_HUES.map(h=>hslHex(h,sh.s,sh.l)));
   rows.push([...COLOR_NEUTRALS]);
@@ -5884,7 +5915,7 @@ function colorBtnHTML(value,opts){
   const v=(value&&String(value).startsWith("#"))?value:(opts.fallback||"#54e08a");
   const size=opts.size||28;
   return `<button type="button" class="colorbtn${opts.cls?" "+opts.cls:""}" ${opts.attrs||""} value="${escAttr(v)}" data-color="${escAttr(v)}"
-    title="${escAttr(opts.title||"Pick a colour")}" style="--c:${escAttr(v)};width:${size}px;height:${size}px${opts.round?";border-radius:50%":""}${opts.style?";"+opts.style:""}"></button>`;
+    title="${escAttr(opts.title||"Pick a colour")}"${opts.scope?` data-scope="${escAttr(opts.scope)}"`:""} style="--c:${escAttr(v)};width:${size}px;height:${size}px${opts.round?";border-radius:50%":""}${opts.style?";"+opts.style:""}"></button>`;
 }
 function setColorBtn(btn,c){
   if(!btn||!c)return;
@@ -5892,7 +5923,7 @@ function setColorBtn(btn,c){
 }
 let _colorEls=null;
 function closeColorPicker(){ if(_colorEls){ _colorEls.pop.remove(); document.removeEventListener("mousedown",_colorEls.out,true); _colorEls=null; } }
-function openColorPicker(anchor,value,onPick){
+function openColorPicker(anchor,value,onPick,scope){
   closeColorPicker(); closeEmojiPicker(); closeCalendar();
   const cur=(value||"").toLowerCase().slice(0,7);
   const usage=colorUsage();
@@ -5910,15 +5941,21 @@ function openColorPicker(anchor,value,onPick){
     usedAt.get(k).push(...list);
   });
   const curCell=cur?(flat.includes(cur)?cur:nearestGridColor(cur,flat)):null;
+  const inBand=SCOPE_BANDS[scope]||null;
+  const onLadder=c=>{ try{ return inBand(hexToHsl(c).l); }catch(e){ return true; } };
   const cell=c=>{
     const held=usedAt.get(c);
     const names=held?held.map(x=>`${x.what}: ${x.name}`).join(" · "):"";
-    return `<button type="button" class="color-cell${c===curCell?" on":""}${held?" used":""}" data-c="${escAttr(c)}"
-      style="--c:${escAttr(c)}" title="${escAttr(c+(names?" — "+names:" — not used yet"))}"></button>`;
+    const off=inBand&&!onLadder(c);
+    const why=off?" — lighter or darker than this scope usually reads at":"";
+    return `<button type="button" class="color-cell${c===curCell?" on":""}${held?" used":""}${off?" off-band":""}" data-c="${escAttr(c)}"
+      style="--c:${escAttr(c)}" title="${escAttr(c+(names?" — "+names:" — not used yet")+why)}"></button>`;
   };
+  const band=SCOPE_BAND_WORDS[scope];
   const pop=document.createElement("div"); pop.className="color-pop";
   pop.innerHTML=`
     <div class="color-grid">${rows.map(r=>`<div class="color-rowline">${r.map(cell).join("")}</div>`).join("")}</div>
+    ${band?`<div class="color-band-note"><b>${esc(band[0])}</b> ${esc(band[1])}. The dimmed shades still work — they just stop this scope being told apart at a glance.</div>`:""}
     <div class="color-key"><span><i class="color-key-used"></i> used elsewhere</span><span><i class="color-key-on"></i> this one</span></div>
     <div class="color-foot"><label>custom<input type="color" class="color-custom" value="${escAttr(cur||"#54e08a")}"></label></div>`;
   const take=c=>{ onPick(c); closeColorPicker(); };
@@ -5948,7 +5985,7 @@ document.addEventListener("click",e=>{
     setColorBtn(btn,c);
     btn.dispatchEvent(new Event("input",{bubbles:true}));
     btn.dispatchEvent(new Event("change",{bubbles:true}));
-  });
+  },btn.dataset.scope);
 },true);
 // Grid popover for picking an emoji — a native <select> only ever shows one
 // per row (tall, narrow, wastes most of the popup on whitespace); a grid
@@ -8143,7 +8180,7 @@ function experimentModal(st,after){
   modal(`<h3>Experiment</h3>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Name</label><input id="sm_name" value="${escAttr(st.title)}" autofocus></div>
-      ${colorBtnHTML(st.color||expShade(st),{attrs:'id="sm_color"',size:34,fallback:"#7db4ff",style:"align-self:flex-end;margin-bottom:2px"})}
+      ${colorBtnHTML(st.color||expShade(st),{attrs:'id="sm_color"',size:34,fallback:"#7db4ff",scope:"experiment",style:"align-self:flex-end;margin-bottom:2px"})}
       <label style="display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);flex:0 0 auto;align-self:flex-end;margin-bottom:8px;cursor:pointer"
         title="Take a shade of the project's own colour, so experiments in one project read as a family">
         <input type="checkbox" id="sm_color_auto" style="width:auto" ${st.color?"":"checked"}>shade of project</label>
@@ -8260,7 +8297,7 @@ function projectModal(pr,after){
   modal(`<h3>Project</h3>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Name</label><input id="pm_name" value="${escAttr(pr.name)}" autofocus></div>
-      ${colorBtnHTML(pr.color,{attrs:'id="pm_color"',size:34,fallback:"#7db4ff",style:"align-self:flex-end;margin-bottom:2px"})}
+      ${colorBtnHTML(pr.color,{attrs:'id="pm_color"',size:34,fallback:"#7db4ff",scope:"project",style:"align-self:flex-end;margin-bottom:2px"})}
       <button type="button" class="btn ghost" id="pm_recolour" style="font-size:11.5px;flex:0 0 auto;align-self:flex-end;margin-bottom:2px"
         title="Give every experiment in this project a shade of this colour">🎨 Shade its experiments</button>
     </div>
@@ -11785,7 +11822,7 @@ function renderDiaryTypesLib(hostEl){
     wrap.innerHTML = dt.length ? dt.map(t => { const i=DB.config.diaryTypes.indexOf(t); return `
       <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:9px;flex-wrap:wrap">
-          ${colorBtnHTML(t.color,{cls:"ldt_color",attrs:`data-ti="${i}"`,size:30,title:"Colour for this entry type"})}
+          ${colorBtnHTML(t.color,{cls:"ldt_color",attrs:`data-ti="${i}"`,size:30,scope:"diary",title:"Colour for this entry type"})}
           <button type="button" class="emoji-btn ldt_iconbtn" data-ti="${i}" title="pick an icon">${esc(t.icon||"🔖")}</button>
           <input class="ldt_label" data-ti="${i}" value="${escAttr(t.label)}" placeholder="Type name (e.g. Cage change)" style="flex:1;min-width:140px;${IST}">
           <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto" title="How long an entry of this type runs on the Timeline when it has no explicit end time">
