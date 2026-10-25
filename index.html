@@ -8109,6 +8109,24 @@ function diaryColors(an,def){
   return {fill:def.color, edge:ps.length?(ps[0].color||null):null};
 }
 const edgeCSS=c=>c?`border-right:3px solid ${c};`:"";
+/* A diary chip answers two questions at once: whose project this animal is in,
+   and what kind of entry this is. The project used to be three pixels on the
+   far edge, against three pixels of entry colour on the near edge — the same
+   weight, so neither led, and the project was easy to miss entirely. It now
+   takes the leading edge and the first part of the wash, fading into the entry
+   type's colour, which is what the shading scheme was built for: the project
+   readable across the room, the entry readable once you look. The icon and the
+   text still carry the type, so nothing is lost by giving it the quieter half.
+   With no project or experiment behind it, the chip stays exactly as it was. */
+function diaryChipSkin(dc,timed){
+  const fill=dc.fill, edge=dc.edge;
+  if(!edge) return timed
+    ? `background:${fill}dd;color:#fff;border-left:3px solid ${fill};`
+    : `background:${fill}22;border-left:3px solid ${fill};color:${fill};`;
+  return timed
+    ? `background:linear-gradient(100deg,${edge}ee 0%,${edge}cc 28%,${fill}dd 68%);color:#fff;border-left:4px solid ${edge};`
+    : `background:linear-gradient(100deg,${edge}3a 0%,${edge}24 30%,${fill}1f 70%);border-left:4px solid ${edge};color:${fill};`;
+}
 
 // Every experiment this animal is in, the group it sits in there, and a way to
 // put it into another one.
@@ -9373,7 +9391,7 @@ function renderMonthView(host){
       } else {
         const {a,e}=it, def=diaryTypeDef(e.type), dc=diaryColors(a,def);
         chip=document.createElement("div"); chip.className="cal-evt";
-        chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
+        chip.style.cssText=diaryChipSkin(dc,false);
         const ckHTML=`<button type="button" class="cal-evt-ck${e.done?" on":""}" title="${e.done?"Done — click to undo":"Mark done"}"></button>`;
         chip.innerHTML=`<div class="et">${ckHTML}${authorBadgeHTML(e)}${def.icon} ${esc(a.name)}${e.date>today0?" (planned)":""}</div>`;
         chip.title=`${def.label} — ${a.name} — ${e.date}`;
@@ -9607,7 +9625,7 @@ function renderTimeline(){
       alldayItems.push({colStart:d,span:1,build:()=>{
         const chip=document.createElement("div"); chip.className="cal-evt";
         const dc=diaryColors(an,def);
-        chip.style.cssText=`background:${dc.fill}22;border-left:3px solid ${dc.fill};color:${dc.fill};${edgeCSS(dc.edge)}`;
+        chip.style.cssText=diaryChipSkin(dc,false);
         const ckHTML=`<button type="button" class="cal-evt-ck${e.done?" on":""}" title="${e.done?"Done — click to undo":"Mark done"}"></button>`;
         chip.innerHTML=`<div class="et">${ckHTML}${authorBadgeHTML(e)}${def.icon} ${esc(an.name)} — ${esc(def.label)}${isFuture?" (planned)":""}</div>`;
         chip.title=`${def.label} — ${an.name} — ${e.date}${isFuture?" (scheduled)":""}`;
@@ -9787,7 +9805,7 @@ function renderTimeline(){
       if(calDragKey===e.id) evt.classList.add("cal-evt-ghost");
       if(calFlashKey&&calFlashKey===e.id) evt.classList.add("cal-evt-found");
       const dc=diaryColors(an,def);
-      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);background:${dc.fill}dd;color:#fff;border-left:3px solid ${dc.fill};${edgeCSS(dc.edge)}z-index:2`;
+      evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);${diaryChipSkin(dc,true)}z-index:2`;
       const timeLabel=e.endTime?`${e.time}–${e.endTime}`:e.time;
       // same fillable circle a task chip already has, and the exact e.done flag
       // an animal's own diary list already reads/writes (dg-done) — it was
