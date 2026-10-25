@@ -3132,13 +3132,24 @@ function noteSharedChanges(){
      immediately below. */
   stampAuthorship();
   const seen=new Set();
+  /* A record that came from a shared file but has no entry in the agreed copy
+     is not "unchanged" — it is unaccounted for, and the safe reading of that is
+     that it may need sending. changedSince answers no when there is nothing to
+     compare against, which is right for the private sync (a record this device
+     has never agreed on must not be forced on anyone) and wrong here: if the
+     baseline has lost a shared record, saying "no change" means the edit is
+     never pushed, is overwritten by the next poll, and vanishes without a word.
+     That is what "I saved it and it keeps coming back" looks like from inside. */
+  const changedOrUnaccounted=(sp,id,obj,isDiary)=>
+    baseHash(sharedBase[sp],isDiary?"diary":"rec",id)===undefined
+      ? true : changedSince(sharedBase[sp],id,obj,isDiary);
   SHAREABLE.forEach(coll=>(DB[coll]||[]).forEach(x=>{
     const sp=spOf(x); if(!sp||seen.has(sp))return;
-    if(changedSince(sharedBase[sp],x.id,coll==="animals"?animalFields(x):x)) seen.add(sp);
+    if(changedOrUnaccounted(sp,x.id,coll==="animals"?animalFields(x):x)) seen.add(sp);
   }));
   (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
     const sp=spOf(e); if(!sp||seen.has(sp))return;
-    if(changedSince(sharedBase[sp],e.id,e,true)) seen.add(sp);
+    if(changedOrUnaccounted(sp,e.id,e,true)) seen.add(sp);
   }));
   // a record newly shared, or one that has gone, also needs a push
   sharedProjects().forEach(p=>{
