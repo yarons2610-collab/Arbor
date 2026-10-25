@@ -11418,7 +11418,8 @@ function renderDiaryTypesLib(hostEl){
                 <span style="opacity:.75">— the same rows every time, so one can be followed across entries</span>
               </label>
               <span style="font-size:11px;color:var(--ink-faint);flex-basis:100%;margin:2px 0 0">
-              ${tableAnchor(f)==="animal"?"Fixed columns — what the animal records about each row, once":"Columns — each entry can hold as many rows of these as it needs"}</span>
+              ${tableAnchor(f)==="animal"?"Describes the row — typed once, then shown already filled in every entry (e.g. FOV, Depth)":"Columns — each entry holds as many rows of these as it needs"}</span>
+              ${tableAnchor(f)==="animal"&&!(f.fields||[]).length?`<span style="font-size:11px;color:var(--warn,#d08a3a);flex-basis:100%;margin:1px 0 0">add at least one column here — usually a name — or the rows will have nothing to tell them apart</span>`:""}
               <div style="flex-basis:100%;padding-left:14px;border-left:2px solid var(--line2);margin:2px 0 4px">
               ${(f.fields||[]).map((sf,si)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
                 <input class="ldsf_label" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr(sf.label||"")}" placeholder="Column name" style="flex:1;min-width:100px;${IST}">
@@ -11431,7 +11432,7 @@ function renderDiaryTypesLib(hostEl){
               <button class="ldsf_add" data-ti="${i}" data-fi="${fi}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:2px 8px;font-size:11px;cursor:pointer">＋ add column</button>
               </div>
               ${tableAnchor(f)==="animal"?`<span style="font-size:11px;color:var(--ink-faint);flex-basis:100%;margin:2px 0 0">
-                Recorded each time — what this entry measures against every row</span>
+                Recorded each time — blank in every new entry, filled in against each row (e.g. Cells)</span>
                 <div style="flex-basis:100%;padding-left:14px;border-left:2px solid var(--gcamp);margin:2px 0 4px">
                 ${(f.per||[]).map((sf,si)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
                   <input class="ldpf_label" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr(sf.label||"")}" placeholder="Column name" style="flex:1;min-width:100px;${IST}">
