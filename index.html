@@ -5742,10 +5742,40 @@ function hexMix(a,b,amt){
   const v=i=>Math.round(p(a,i)+(p(b,i)-p(a,i))*amt).toString(16).padStart(2,"0");
   return "#"+v(1)+v(3)+v(5);
 }
-/* An experiment with no colour of its own wears a shade of its project's, so a
-   chip says which project from across the room and which experiment once you
-   look at it. Spread across a band of lightness around the project's own
-   colour; an explicit pick on the experiment always wins over this. */
+/* Scope reads as lightness, identity reads as hue.
+   A project is the widest thing and sits darkest; an experiment inside it one
+   step lighter; an animal's diary entry, the smallest thing, lighter again. A
+   glance at a chip then says what kind of thing it is before it says which
+   one, and a project's own work can never be mistaken for an entry on one of
+   its mice. The colour picked for a project supplies hue and saturation —
+   which family this belongs to — and the ladder supplies lightness.
+   Anchored at min(L,34): a project dark enough to have room above it keeps
+   exactly the colour chosen for it, and only one light enough to push its
+   diary rung past readable text is darkened so the ladder still fits. */
+const SCOPE_STEP=15, SCOPE_SPREAD=4, SCOPE_TOP=63;
+function scopeBase(hex){
+  const {h,s,l}=hexToHsl(hex||"#7db4ff");
+  return {h,s,l:Math.min(l,34)};
+}
+// what a project's own work is drawn in: its colour, unless that colour leaves
+// no room for the two rungs that have to sit above it
+function projectShade(pr){
+  if(!pr||!pr.color) return "#7db4ff";
+  const {h,s,l}=hexToHsl(pr.color);
+  return l<=34?pr.color:hslHex(h,s,34);
+}
+/* The lightest rung: every diary entry under a project, whichever experiment
+   its animal belongs to. Which experiment is a question the animal's own
+   records answer; on the calendar the distinction worth having is project and
+   scope, and splitting this rung again would blur the one it is here to make. */
+function diaryShade(pr){
+  if(!pr||!pr.color) return null;
+  const b=scopeBase(pr.color);
+  return hslHex(b.h,b.s,Math.min(SCOPE_TOP,b.l+SCOPE_STEP*2));
+}
+/* An experiment with no colour of its own wears the middle rung, siblings
+   spread across a narrow band around it so two can be told apart without
+   either drifting into the rung above or below. An explicit pick wins. */
 function expShade(ex){
   if(!ex) return "#7db4ff";
   if(ex.color) return ex.color;
@@ -5754,30 +5784,17 @@ function expShade(ex){
   const sibs=DB.experiments.filter(x=>x.projectId===pr.id)
     .sort((a,b)=>(a.created||0)-(b.created||0)||String(a.id).localeCompare(String(b.id)));
   const i=Math.max(0,sibs.findIndex(x=>x.id===ex.id)), n=Math.max(sibs.length,1);
-  const {h,s,l}=hexToHsl(pr.color);
-  /* Rungs of lightness to hand out, four apart, none within 7 of the project's
-     own — so no experiment ever comes back wearing the project's colour, which
-     is what "shade its experiments" looked like it had done for a project
-     holding one or two. Stopping at 64 keeps white chip text readable, and
-     spreading across whatever rungs remain means a pale or a dark project
-     can't push several experiments onto the same clamped value, which is how
-     three of them used to come out identical. */
-  /* Twelve points of clearance, not seven. Seven is the least that is
-     technically a different colour and not enough to be a different colour at
-     a glance: against a dark project the first sibling landed exactly on the
-     minimum and read as the project itself, which is the one thing the band
-     exists to prevent. Widened until the nearest shade is told apart across a
-     week of chips rather than side by side in a swatch. */
-  const stops=[];
-  // the ceiling stays at 64: above it white chip text stops being readable,
-  // which is a harder constraint than spreading the shades a little wider
-  for(let L=26;L<=64;L+=4) if(Math.abs(L-l)>=12) stops.push(L);
-  // a colour so pale or so dark that nothing clears it: take the far end
-  if(!stops.length) stops.push(l>50?Math.max(20,l-16):Math.min(74,l+16));
-  const at=n===1?Math.floor(stops.length*0.35):Math.round(i*(stops.length-1)/(n-1));
-  // neighbours step in saturation too, so two rungs never read as one colour
-  const S=Math.max(22,Math.min(92,s+(i%2?7:-7)));
-  return hslHex(h,S,stops[Math.max(0,Math.min(stops.length-1,at))]);
+  const b=scopeBase(pr.color);
+  const centre=b.l+SCOPE_STEP;
+  const off=n===1?0:(-SCOPE_SPREAD+(i*(SCOPE_SPREAD*2)/(n-1)));
+  /* Siblings separate mainly by saturation, because lightness is spoken for:
+     it says which scope this is, and a band wide enough to tell three
+     experiments apart by lightness alone would run into the rungs either side.
+     Washed-out to vivid across the band is a difference the eye takes in at a
+     glance without moving a chip off its rung. */
+  const sOff=n===1?0:(-20+(i*40/(n-1)));
+  const S=Math.max(18,Math.min(95,b.s+sOff));
+  return hslHex(b.h,S,Math.max(20,Math.min(SCOPE_TOP-6,centre+off)));
 }
 /* Lab work is solid; the rest of life is hollow. A personal event keeps its
    category's colour but gives up its fill — an outline and a rail instead — so
@@ -6473,7 +6490,7 @@ function taskColorOf(t){
   // a task attached straight to a project borrows the project's colour, the
   // same way one attached to an experiment borrows the experiment's
   const pr=t.projectId?projById(t.projectId):null;
-  if(pr) return pr.color;
+  if(pr) return projectShade(pr);
   return "#7db4ff";                  // unassigned tasks get their own colour
 }
 // The small marker that tells an event apart from a task at a glance on the
@@ -8086,6 +8103,10 @@ function animalHomeExperiment(aid){
   return [...es].sort((a,b)=>String(a.title||"").localeCompare(String(b.title||"")))[0];
 }
 function animalColor(a){
+  const exForDot=animalHomeExperiment(a.id);
+  const prForDot=exForDot?(exForDot.projectId?projById(exForDot.projectId):null)
+                         :(animalProjects(a.id)[0]||null);
+  if(prForDot) return diaryShade(prForDot)||"#5b6678";
   const ex=animalHomeExperiment(a.id);
   // An experiment's colour is derived from its project now (expShade) rather
   // than stored on the record, so reading .color returned null for every
@@ -8112,10 +8133,13 @@ function diaryColors(an,def){
      one arrangement added specifically so sharing would work was the one with
      no stripe at all. It falls back to the project's own colour, which is the
      rule taskColorOf already follows a few hundred lines up. */
+  /* The top rung, by the project the animal belongs to — through its
+     experiment or directly. An entry is the smallest thing on the calendar and
+     says so by being the lightest; which experiment the animal sits in is a
+     question its own records answer. */
   const ex=animalHomeExperiment(an.id);
-  if(ex) return {fill:def.color, edge:ex.color||expShade(ex)||null};
-  const ps=animalProjects(an.id);
-  return {fill:def.color, edge:ps.length?(ps[0].color||null):null};
+  const pr=ex?(ex.projectId?projById(ex.projectId):null):(animalProjects(an.id)[0]||null);
+  return {fill:def.color, edge:pr?diaryShade(pr):null};
 }
 const edgeCSS=c=>c?`border-right:3px solid ${c};`:"";
 /* A diary chip answers two questions at once: whose project this animal is in,
