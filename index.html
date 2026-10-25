@@ -3275,7 +3275,18 @@ async function sharedPoll(force){
    waiting: the data is already in hand, only the picture is behind. */
 let syncRenderPending=false;
 function editorIsOpen(){
-  return !!document.querySelector(".dg-form");
+  // the diary form, whose state is a closure inside the card and dies with it
+  if(document.querySelector(".dg-form")) return true;
+  /* ...and anything being typed into inside a view. Naming each inline editor
+     would protect the ones that exist and leave the next one exposed, so ask
+     the general question instead: is the caret in a field that this redraw is
+     about to rebuild? A modal is its own layer and render() never touches it,
+     so fields there are not at risk and must not hold the redraw up. */
+  const el=document.activeElement;
+  if(!el||el===document.body) return false;
+  if(!(el.tagName==="INPUT"||el.tagName==="TEXTAREA"||el.tagName==="SELECT"||el.isContentEditable)) return false;
+  if(el.closest("#modal")||el.closest("#scrim")) return false;
+  return !!el.closest(".app");
 }
 function syncRender(){
   if(editorIsOpen()){ syncRenderPending=true; return; }
@@ -3284,6 +3295,9 @@ function syncRender(){
 function flushSyncRender(){
   if(syncRenderPending&&!editorIsOpen()){ syncRenderPending=false; render(); }
 }
+// a redraw held because somebody was typing is let through the moment they
+// stop, so the view is never left stale for longer than the typing lasts
+document.addEventListener("focusout",()=>setTimeout(flushSyncRender,150));
 function startSharedSync(){
   clearInterval(sharedPollTimer);
   if(!spaceConnected())return;
