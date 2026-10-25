@@ -3182,7 +3182,7 @@ async function runSharedPush(){
   } finally{
     sharedInFlight=false;
     if(Object.keys(sharedDirty).length) scheduleSharedPush();
-    render();
+    syncRender();
   }
 }
 async function sharedPoll(force){
@@ -3264,7 +3264,25 @@ async function sharedPoll(force){
       }
     }catch(e){}
     if(head) spaceHeadSha=head;
-  } finally{ sharedInFlight=false; if(changed) render(); }
+  } finally{ sharedInFlight=false; if(changed) syncRender(); }
+}
+/* A sync arriving in the background must not redraw the page out from under
+   somebody who is typing. render() rebuilds the animal cards, and the diary
+   form lives inside one — so a poll landing mid-entry threw the half-filled
+   form away, which from the outside is the window closing by itself. At the
+   old twenty-second poll that was rare; at five seconds it is most of the
+   time. The redraw is held until the form is closed, and nothing is lost by
+   waiting: the data is already in hand, only the picture is behind. */
+let syncRenderPending=false;
+function editorIsOpen(){
+  return !!document.querySelector(".dg-form");
+}
+function syncRender(){
+  if(editorIsOpen()){ syncRenderPending=true; return; }
+  syncRenderPending=false; render();
+}
+function flushSyncRender(){
+  if(syncRenderPending&&!editorIsOpen()){ syncRenderPending=false; render(); }
 }
 function startSharedSync(){
   clearInterval(sharedPollTimer);
@@ -13528,8 +13546,8 @@ function paintDiary(container,a,opts){
     if(doneTgl) doneTgl.onclick=()=>{ const on=doneTgl.classList.toggle("on"); doneTgl.textContent=on?"✓ Done":"○ Mark as done"; };
     host.querySelector(".dg-cancel").onclick=()=>{
       formType=null; editingId=null;
-      if(opts.closeOnDone){ closeModal(); return; }
-      draw();
+      if(opts.closeOnDone){ closeModal(); flushSyncRender(); return; }
+      draw(); flushSyncRender();     // a sync held back while this was open
     };
     // shared date+time picker (same drum-scroll UI tasks use), 15-minute steps
     // A new entry starts at 08:00 — nothing in the lab happens at midnight, and
@@ -13647,8 +13665,8 @@ function paintDiary(container,a,opts){
         if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
         persist(); notifyChange();
         formType=null; editingId=null;
-        if(opts.closeOnDone){ closeModal(); return; }
-        draw();
+        if(opts.closeOnDone){ closeModal(); flushSyncRender(); return; }
+        draw(); flushSyncRender();     // a sync held back while this was open
       };
       if(editing){
         /* The time an occurrence sits at is a property of the series — "these
@@ -13828,7 +13846,7 @@ function paintDiary(container,a,opts){
         removeShared("diary",rows,a);          // shared ones leave the file too
         a.diary=a.diary.filter(x=>!ids.has(x.id));
         if(sid) closeOpenSeriesIfTailRemoved(a,sid,rows.map(x=>x.date));
-        formType=null; editingId=null; persist(); notifyChange();
+        formType=null; editingId=null; persist(); notifyChange(); flushSyncRender();
         toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
         // Same rule Cancel and Save already follow: opened from the Timeline to
         // edit one entry, this modal has nothing left to show once that entry
