@@ -5762,9 +5762,18 @@ function expShade(ex){
      spreading across whatever rungs remain means a pale or a dark project
      can't push several experiments onto the same clamped value, which is how
      three of them used to come out identical. */
+  /* Twelve points of clearance, not seven. Seven is the least that is
+     technically a different colour and not enough to be a different colour at
+     a glance: against a dark project the first sibling landed exactly on the
+     minimum and read as the project itself, which is the one thing the band
+     exists to prevent. Widened until the nearest shade is told apart across a
+     week of chips rather than side by side in a swatch. */
   const stops=[];
-  for(let L=30;L<=64;L+=4) if(Math.abs(L-l)>=7) stops.push(L);
-  if(!stops.length) stops.push(l>50?34:60);            // a project colour with nowhere to stand beside it
+  // the ceiling stays at 64: above it white chip text stops being readable,
+  // which is a harder constraint than spreading the shades a little wider
+  for(let L=26;L<=64;L+=4) if(Math.abs(L-l)>=12) stops.push(L);
+  // a colour so pale or so dark that nothing clears it: take the far end
+  if(!stops.length) stops.push(l>50?Math.max(20,l-16):Math.min(74,l+16));
   const at=n===1?Math.floor(stops.length*0.35):Math.round(i*(stops.length-1)/(n-1));
   // neighbours step in saturation too, so two rungs never read as one colour
   const S=Math.max(22,Math.min(92,s+(i%2?7:-7)));
