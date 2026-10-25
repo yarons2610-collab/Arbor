@@ -7645,6 +7645,28 @@ function taskEditor(t,after,occWhen,occEndDate){
     t.when=occWhen; t.endDate=occEndDate;
   }
   const seeded=JSON.parse(JSON.stringify(t));   // what the form actually opened showing
+  /* The When field shows *this occurrence's* date, which the lines above
+     achieve by writing it onto the shared series record. The save paths below
+     re-derive the real anchor from it — but every other way out left the
+     series anchored to whichever occurrence happened to be opened, so every
+     occurrence before it stopped existing. Opening next week's round and
+     closing it made this week's vanish.
+     It stayed invisible for as long as nothing wrote to storage mid-session;
+     once a round materialised on open, the moved anchor was saved and the
+     task was gone for good. Restored here on every exit that did not commit
+     a save, and on the page going away with the editor still open. */
+  let committed=false;
+  const restoreAnchor=()=>{
+    if(committed||occWhen==null)return;
+    const live=taskOf(t.id); if(!live)return;
+    live.when=before.when; live.endDate=before.endDate;
+    persist();
+  };
+  if(occWhen!=null){
+    const onHide=()=>restoreAnchor();
+    window.addEventListener("pagehide",onHide);
+    onModalClose(()=>{ window.removeEventListener("pagehide",onHide); restoreAnchor(); render(); });
+  }
   // A flat, sorted list — an experiment IS the top-level thing now, so
   // there's only one thing left to pick.
   // Grouped the way the work is actually organised: each project, then the
@@ -7770,7 +7792,11 @@ function taskEditor(t,after,occWhen,occEndDate){
         next week's list must not rewrite the record of who was covered last week.</div>`;
       return;
     }
-    syncTaskOccEntries(t,occKey); keepRoster(); persist();
+    /* Deliberately no persist() here: looking at a round is not a change, and
+       writing during the paint is what made the moved anchor above permanent.
+       Every row this creates has a derived id, so it is rebuilt identically
+       next time; the user's own edits below persist as they are made. */
+    syncTaskOccEntries(t,occKey); keepRoster();
     const ids=taskRosterFor(t,occKey);
     const rows=ids.map(id=>DB.animals.find(a=>a.id===id)).filter(Boolean)
       .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true}))
@@ -7995,7 +8021,7 @@ function taskEditor(t,after,occWhen,occEndDate){
     t.notes=document.getElementById("tk_notes").value.trim();
     readRosterInto();
     persist();
-    const finish=()=>{ closeModal(); if(after)after(); };
+    const finish=()=>{ committed=true; closeModal(); if(after)after(); };
     const fieldsOf=x=>JSON.stringify({title:x.title,when:x.when,endDate:x.endDate,color:x.color,projectId:x.projectId,experimentId:x.experimentId,repeat:x.repeat,notes:x.notes});
     if(fieldsOf(t)===fieldsOf(seeded)||!wasRecurring||occWhen==null){ finish(); return; }
     occurrenceScopeModal(scope=>{
@@ -8023,6 +8049,7 @@ function taskEditor(t,after,occWhen,occEndDate){
   };
   document.getElementById("tk_del").onclick=()=>{
     if(!confirm(`Delete the task "${t.title||"(unnamed)"}"?`))return;
+    committed=true;   // the record is going; there is no anchor left to restore
     // named apart from taskEditor's own `before` (the pre-edit field snapshot
     // revert() restores) — this one puts the deleted record itself back
     const snapBefore=undoTaskEdit(t), name=t.title||"(unnamed)";
@@ -8051,6 +8078,7 @@ function taskEditor(t,after,occWhen,occEndDate){
     });
   };
   document.getElementById("tk_dup").onclick=()=>{
+    // the copy is a new record; this one still needs its anchor put back
     // Copy what's on screen, not what was last saved, so a duplicate made
     // mid-edit carries the edits you can actually see. The copy starts with a
     // clean slate of occurrence history: which repeats of the original were
@@ -15634,11 +15662,21 @@ function cycleStatus(id){
 /* ---------- ADD TASK / DOMAIN ---------- */
 function modal(h,opts){ const s=document.getElementById("scrim"); const m=document.getElementById("modal");
   m.className="modal"+(opts&&opts.center?" modal-center":"")+(opts&&opts.wide?" modal-wide":""); m.innerHTML=h; s.classList.add("open"); return s; }
+/* Something for an editor to undo when it goes away by any route — ✕, Escape,
+   Cancel or Save. Runs once and disarms, and deliberately does NOT run from
+   modal(), because a modal that opens over another one (the repeating-task
+   scope question) is still the same editing session. */
+let modalCloseHook=null;
+function onModalClose(fn){ modalCloseHook=fn; }
+function disarmModalClose(){ modalCloseHook=null; }
 function closeModal(){
+  const hook=modalCloseHook; modalCloseHook=null;
   // popovers live on <body>, not inside the modal, so closing the modal from
   // code (Save) would otherwise leave one floating over the page
   closeAnimalPicker(); closeListDropdown(); closeEmojiPicker(); closeCalendar();
-  document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(document.getElementById("modal")); }
+  document.getElementById("scrim").classList.remove("open"); if(typeof teardown3D==="function")teardown3D(document.getElementById("modal"));
+  if(hook) try{ hook(); }catch(e){ console.warn("Arbor: modal close hook failed",e); }
+}
 // Modals close only via Cancel / ✕ / Save — NOT by clicking outside, so a stray click never discards an edit.
 document.getElementById("modalX").onclick=()=>closeModal();
 // Every text field in this app is generated from a template string, so there
