@@ -8481,8 +8481,12 @@ function experimentModal(st,after){
     <div class="fld"><label>Research question</label>
       <textarea id="sm_q" rows="2">${esc(st.question||"")}</textarea></div>
     <div class="fld"><label>Plan for animals in no group</label>
-      <select id="sm_plan"><option value="">— none</option>${
-        planList().map(pl=>`<option value="${escAttr(pl.id)}" ${st.planId===pl.id?"selected":""}>${esc(pl.name||"(unnamed plan)")} · ${planStages(pl).length} stage${planStages(pl).length===1?"":"s"}</option>`).join("")}</select>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="sm_plan" style="flex:1"><option value="">— none</option>${
+          planList().map(pl=>`<option value="${escAttr(pl.id)}" ${st.planId===pl.id?"selected":""}>${esc(pl.name||"(unnamed plan)")} · ${planStages(pl).length} stage${planStages(pl).length===1?"":"s"}</option>`).join("")}
+          <option value="__new__">＋ New plan…</option></select>
+        <button type="button" id="sm_planedit_btn" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:5px 10px;font-size:12px;cursor:pointer">✎</button>
+      </div>
       <div style="font-size:11px;color:var(--ink-faint);margin-top:4px;line-height:1.5">
         Each arm runs its own plan — set that beside the arm under Groups below. This one covers an
         experiment that never needed arms.</div>
@@ -8499,6 +8503,7 @@ function experimentModal(st,after){
     </div>
     <div class="fld"><label>Groups</label>
       <div id="sm_gdefs"></div>
+      <div id="sm_planedit"></div>
       <button class="btn ghost" id="sm_addgroup" style="margin-top:6px">＋ Group</button>
       <datalist id="sm_gsuggest">${GROUP_SUGGESTIONS.map(t=>`<option value="${escAttr(t)}">`).join("")}</datalist>
       <div id="sm_groups" style="margin-top:12px"></div></div>
@@ -8521,6 +8526,34 @@ function experimentModal(st,after){
      that has shows the real dates, what is done, and what is late. This is the
      summary for the whole experiment in one place — which animal is where, and
      who is behind. */
+  /* The plan opens in place, under the arm it belongs to — one at a time, so
+     the editor never becomes a wall of pipelines. Closing it is the same
+     button that opened it. */
+  let planEditingGroup=null;
+  function editPlanFor(gid){
+    planEditingGroup=gid||null;
+    const host=document.getElementById("sm_planedit"); if(!host) return;
+    // "__exp__" is the experiment's own plan, for animals in no group
+    const onExp=planEditingGroup==="__exp__";
+    const g=(planEditingGroup&&!onExp)?(st.groupDefs||[]).find(x=>x.id===planEditingGroup):null;
+    const pid=onExp?st.planId:(g&&g.planId);
+    const pl=pid?planById(pid):null;
+    if(!pl){ host.innerHTML=""; planEditingGroup=null; drawGroupDefs(); return; }
+    host.innerHTML=`<div style="background:var(--bg2);border:1px solid var(--line2);border-radius:10px;padding:11px 13px;margin-top:9px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">
+          <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)">PLAN FOR ${esc(onExp?"ANIMALS IN NO GROUP":(g.name||"this arm").toUpperCase())}</span>
+          <button type="button" id="sm_planclose" style="margin-left:auto;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 9px;font-size:11px;cursor:pointer">Close</button>
+        </div>
+        <div id="sm_planhost"></div>
+      </div>`;
+    mountPlanEditor(document.getElementById("sm_planhost"),pl,()=>{
+      // a renamed plan or a changed stage shows up in the arm's own dropdown,
+      // the experiment's own, and the summary, straight away
+      drawGroupDefs(); refreshPlanSelect(); paintPlan();
+    });
+    document.getElementById("sm_planclose").onclick=()=>editPlanFor(null);
+    drawGroupDefs();
+  }
   const planBox=()=>document.getElementById("sm_planbox");
   function paintPlan(){
     const box=planBox(); if(!box) return;
@@ -8591,8 +8624,26 @@ function experimentModal(st,after){
   }
   const planSel=document.getElementById("sm_plan");
   if(planSel) planSel.addEventListener("change",e=>{
+    if(e.target.value==="__new__"){
+      const pl=addPlan(st.title?`${st.title} — plan`:"");
+      st.planId=pl.id; persist(); refreshPlanSelect(); editPlanFor("__exp__"); paintPlan(); return;
+    }
     st.planId=e.target.value||null; persist(); paintPlan();
+    if(planEditingGroup==="__exp__") editPlanFor(st.planId?"__exp__":null);
   });
+  const planEditBtn=document.getElementById("sm_planedit_btn");
+  if(planEditBtn) planEditBtn.onclick=()=>{
+    if(!st.planId){ toast("Pick or make a plan first"); return; }
+    editPlanFor(planEditingGroup==="__exp__"?null:"__exp__");
+  };
+  // the experiment-level dropdown is built once with the modal, so a plan made
+  // or renamed from here has to be put back into it by hand
+  function refreshPlanSelect(){
+    const sel=document.getElementById("sm_plan"); if(!sel) return;
+    sel.innerHTML=`<option value="">— none</option>`+planList().map(pl=>
+      `<option value="${escAttr(pl.id)}" ${st.planId===pl.id?"selected":""}>${esc(pl.name||"(unnamed plan)")} · ${planStages(pl).length} stage${planStages(pl).length===1?"":"s"}</option>`).join("")
+      +`<option value="__new__">＋ New plan…</option>`;
+  }
   paintPlan();
 
   const save=()=>{
@@ -8636,7 +8687,9 @@ function experimentModal(st,after){
         <span class="gdef-count ${(!g.planned||groupCount(st,g.id)>=g.planned)?"ok":""}">${g.planned?`${groupCount(st,g.id)}/${g.planned}`:groupCount(st,g.id)}</span>
         <select class="gdef-plan" title="The plan this arm runs — a control arm usually runs a different one, or none">
           <option value="">no plan</option>${planList().map(pl=>
-            `<option value="${escAttr(pl.id)}" ${g.planId===pl.id?"selected":""}>${esc(pl.name||"(unnamed plan)")}</option>`).join("")}</select>
+            `<option value="${escAttr(pl.id)}" ${g.planId===pl.id?"selected":""}>${esc(pl.name||"(unnamed plan)")}</option>`).join("")}
+          <option value="__new__">＋ New plan…</option></select>
+        <button class="gdef-planedit" title="${g.planId?"Write this arm's plan":"Give this arm a plan first"}" ${g.planId?"":"disabled"}>✎</button>
         <button class="gdef-del" title="Remove this group">✕</button>
       </div>`).join(""):`<div class="pc-empty">No groups yet.</div>`;
     box.querySelectorAll(".gdef-row").forEach(r=>{
@@ -8645,10 +8698,24 @@ function experimentModal(st,after){
       r.querySelector(".gdef-n").addEventListener("change",e=>{
         g.planned=e.target.value===""?null:Math.max(0,+e.target.value); persist(); drawGroupDefs(); });
       r.querySelector(".gdef-plan").addEventListener("change",e=>{
+        if(e.target.value==="__new__"){
+          /* Made here because here is where you know what it is for: the plan
+             is named after the arm and opened straight away, rather than
+             sending you to another tab to build it in the abstract and come
+             back. */
+          const pl=addPlan(g.name?`${g.name} — ${st.title||"plan"}`:"");
+          g.planId=pl.id; persist();
+          drawGroupDefs(); editPlanFor(g.id); paintPlan();
+          return;
+        }
         g.planId=e.target.value||null; persist();
+        drawGroupDefs();
+        if(planEditingGroup===g.id&&!g.planId) editPlanFor(null);
+        else if(planEditingGroup===g.id) editPlanFor(g.id);
         // the arms can run different pipelines, so the summary is redrawn whole
-        if(typeof paintPlan==="function") paintPlan();
+        paintPlan();
       });
+      r.querySelector(".gdef-planedit").onclick=()=>editPlanFor(planEditingGroup===g.id?null:g.id);
       r.querySelector(".gdef-del").onclick=()=>{
         const n=groupCount(st,g.id);
         if(n&&!confirm(`Remove "${g.name||"this group"}"?\n\n${n} animal${n!==1?"s":""} will become unassigned.`))return;
@@ -11313,81 +11380,124 @@ function renderMatSubTab(){
    The same shape as the entry-type and animal-field editors next door: a list
    of rows, each naming a thing and what it records. Deliberately so — one
    idea, learned once. */
-function renderPlanLib(){
-  const host=document.getElementById("ms-plans"); if(!host) return;
+/* One plan's editor, mounted wherever a plan is being written — the Materials
+   library, and the experiment window, where a plan is usually born, because a
+   pipeline is part of designing the experiment rather than a separate errand.
+   One editor, so the two places cannot drift apart. */
+function mountPlanEditor(host,pl,onChange){
+  if(!host||!pl) return;
   const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
   const BTNS="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer";
   const typeOpts=st=>[`<option value="procedure" ${st.type==="procedure"?"selected":""}>🔪 Procedure (the animal's own surgery record)</option>`]
     .concat(allDiaryTypeDefs().map(d=>`<option value="${escAttr(d.key)}" ${st.type===d.key?"selected":""}>${esc(d.icon||"🔖")} ${esc(d.label)}${d.fromShared?" (shared)":""}</option>`)).join("");
+  const changed=()=>{ persist(); if(onChange) onChange(pl); };
+  const draw=()=>{
+    host.innerHTML=`
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <input class="pl_name" value="${escAttr(pl.name||"")}" placeholder="Plan name (e.g. Imaging pipeline)" style="flex:1;min-width:160px;${IST}">
+        <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim)"
+          title="With this off, a gap of 3 days means 3 working days, and no stage is ever left on a Saturday">
+          <input type="checkbox" class="pl_weekends" style="width:auto" ${pl.skipWeekends?"":"checked"}> include weekends</label>
+      </div>
+      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:7px">Stages, in order</div>
+      ${planStages(pl).map((st,si)=>`
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+          <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 18px">${si+1}</span>
+          <input class="pl_slabel" data-si="${si}" value="${escAttr(st.label||"")}" placeholder="Stage name" style="flex:1;min-width:120px;${IST}">
+          <select class="pl_stype" data-si="${si}" style="${IST};flex:0 1 auto;max-width:240px">${typeOpts(st)}</select>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)">
+            <input type="number" class="pl_safter" data-si="${si}" min="0" step="1" value="${si===0?0:stageGap(st)}"
+              ${si===0?"disabled title=\"The first stage lands on the day you start the animal\"":""} style="width:52px;${IST};padding:4px 6px">
+            ${si===0?"on day 0":"days after"}</label>
+          <button class="pl_sup" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===0?"disabled":""} title="Move up">↑</button>
+          <button class="pl_sdown" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===planStages(pl).length-1?"disabled":""} title="Move down">↓</button>
+          <button class="pl_sdel" data-si="${si}" style="${BTNS};padding:2px 7px;color:var(--overdue)">✕</button>
+        </div>`).join("")||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">No stages yet.</div>`}
+      <button class="pl_sadd" style="${BTNS}">＋ add stage</button>
+      ${planStages(pl).length?`<div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:9px">
+        Starting an animal on a Thursday would give: ${esc(planSchedule(pl,"2026-11-05").map((x,i)=>`${i+1}. ${fmtDMY(x.date)}`).join("  ·  "))}</div>`:""}`;
+  };
+  draw();
+  const stAt=ds=>planStages(pl)[+ds.si];
+  host.addEventListener("input",e=>{
+    const el=e.target;
+    if(el.classList.contains("pl_name")){ pl.name=el.value; changed(); return; }
+    if(el.classList.contains("pl_slabel")){ stAt(el.dataset).label=el.value; changed(); return; }
+    if(el.classList.contains("pl_safter")){ stAt(el.dataset).after=Math.max(0,+el.value||0); changed(); draw(); return; }
+  });
+  host.addEventListener("change",e=>{
+    const el=e.target;
+    if(el.classList.contains("pl_stype")){ stAt(el.dataset).type=el.value; changed(); return; }
+    if(el.classList.contains("pl_weekends")){ pl.skipWeekends=!el.checked; changed(); draw(); return; }
+  });
+  host.addEventListener("click",e=>{
+    const b=e.target.closest("button"); if(!b||!host.contains(b)) return;
+    const ds=b.dataset;
+    if(b.classList.contains("pl_sadd")){
+      pl.stages=planStages(pl).concat([{id:uid("s_"),label:"",type:"procedure",after:1}]); changed(); draw(); return; }
+    if(b.classList.contains("pl_sdel")){
+      pl.stages=planStages(pl).filter((_,i)=>i!==+ds.si); changed(); draw(); return; }
+    if(b.classList.contains("pl_sup")||b.classList.contains("pl_sdown")){
+      const i=+ds.si, j=b.classList.contains("pl_sup")?i-1:i+1;
+      const list=planStages(pl); if(j<0||j>=list.length)return;
+      [list[i],list[j]]=[list[j],list[i]]; changed(); draw(); return; }
+  });
+}
+// A new, empty plan. Named by whoever is about to fill it in.
+function addPlan(name){
+  const pl={id:uid("pl_"),name:name||"",skipWeekends:false,stages:[]};
+  planList().push(pl); persist(); return pl;
+}
+
+/* ── PLANS (an experiment's pipeline, written once and run per animal) ──
+   This tab is for reviewing and reusing what exists; a plan is usually made
+   from the experiment window, where it belongs. */
+function renderPlanLib(){
+  const host=document.getElementById("ms-plans"); if(!host) return;
+  const BTNS="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer";
   const draw=()=>{
     const plans=planList();
     host.innerHTML=`
       <div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-bottom:14px;line-height:1.6;max-width:70ch">
-        A plan is a pipeline an experiment runs on each of its animals — lever behaviour, two-photon,
-        behaviour, histology. Each stage says what you record when you do it and how many days after the
-        previous stage it falls. An experiment picks a plan; an animal gets its dates when you start it.</div>
+        A plan is a pipeline an experiment's arm runs on each of its animals — lever behaviour,
+        two-photon, behaviour, histology. Each stage says what you record when you do it and how many
+        days after the previous stage it falls. You can make one here, but it is usually quicker to
+        make it inside the experiment that needs it, beside the arm that will run it.</div>
       ${plans.map((pl,pi)=>`
         <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-            <input class="pl_name" data-pi="${pi}" value="${escAttr(pl.name||"")}" placeholder="Plan name (e.g. Imaging pipeline)" style="flex:1;min-width:160px;${IST}">
-            <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim)"
-              title="With this off, a gap of 3 days means 3 working days, and no stage is ever left on a Saturday">
-              <input type="checkbox" class="pl_weekends" data-pi="${pi}" style="width:auto" ${pl.skipWeekends?"":"checked"}> include weekends</label>
-            <button class="pl_del" data-pi="${pi}" style="${BTNS};color:var(--overdue)">✕ plan</button>
-          </div>
-          <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:7px">Stages, in order</div>
-          ${planStages(pl).map((st,si)=>`
-            <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
-              <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 18px">${si+1}</span>
-              <input class="pl_slabel" data-pi="${pi}" data-si="${si}" value="${escAttr(st.label||"")}" placeholder="Stage name" style="flex:1;min-width:120px;${IST}">
-              <select class="pl_stype" data-pi="${pi}" data-si="${si}" style="${IST};flex:0 1 auto;max-width:240px">${typeOpts(st)}</select>
-              <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)">
-                <input type="number" class="pl_safter" data-pi="${pi}" data-si="${si}" min="0" step="1" value="${si===0?0:stageGap(st)}"
-                  ${si===0?"disabled title=\"The first stage lands on the day you start the animal\"":""} style="width:52px;${IST};padding:4px 6px">
-                ${si===0?"on day 0":"days after"}</label>
-              <button class="pl_sup" data-pi="${pi}" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===0?"disabled":""} title="Move up">↑</button>
-              <button class="pl_sdown" data-pi="${pi}" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===planStages(pl).length-1?"disabled":""} title="Move down">↓</button>
-              <button class="pl_sdel" data-pi="${pi}" data-si="${si}" style="${BTNS};padding:2px 7px;color:var(--overdue)">✕</button>
-            </div>`).join("")||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">No stages yet.</div>`}
-          <button class="pl_sadd" data-pi="${pi}" style="${BTNS}">＋ add stage</button>
-          ${planStages(pl).length?`<div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:9px">
-            Starting an animal on a Thursday would give: ${esc(planSchedule(pl,"2026-11-05").map((x,i)=>`${i+1}. ${fmtDMY(x.date)}`).join("  ·  "))}</div>`:""}
-        </div>`).join("")||`<div class="empty-box">No plans yet — add one below.</div>`}
+          <div style="display:flex;justify-content:flex-end;margin-bottom:-6px">
+            <button class="pl_del" data-pi="${pi}" style="${BTNS};color:var(--overdue)">✕ plan</button></div>
+          <div class="pl_body" data-pi="${pi}"></div>
+          ${planUsedByHTML(pl)}
+        </div>`).join("")||`<div class="empty-box">No plans yet — make one here, or inside an experiment.</div>`}
       <button id="pl_add" class="btn ghost">＋ Plan</button>`;
+    host.querySelectorAll(".pl_body").forEach(b=>mountPlanEditor(b,planList()[+b.dataset.pi],()=>{}));
   };
   draw();
-  const at=ds=>planList()[+ds.pi];
-  const stAt=ds=>planStages(at(ds))[+ds.si];
-  host.addEventListener("input",e=>{
-    const el=e.target, ds=el.dataset;
-    if(el.classList.contains("pl_name")){ at(ds).name=el.value; persist(); return; }
-    if(el.classList.contains("pl_slabel")){ stAt(ds).label=el.value; persist(); return; }
-    if(el.classList.contains("pl_safter")){ stAt(ds).after=Math.max(0,+el.value||0); persist(); draw(); return; }
-  });
-  host.addEventListener("change",e=>{
-    const el=e.target, ds=el.dataset;
-    if(el.classList.contains("pl_stype")){ stAt(ds).type=el.value; persist(); return; }
-    if(el.classList.contains("pl_weekends")){ at(ds).skipWeekends=!el.checked; persist(); draw(); return; }
-  });
   host.addEventListener("click",e=>{
     const b=e.target.closest("button"); if(!b) return;
-    const ds=b.dataset;
-    if(b.id==="pl_add"){ planList().push({id:uid("pl_"),name:"",skipWeekends:false,stages:[]}); persist(); draw(); return; }
+    if(b.id==="pl_add"){ addPlan(""); draw(); return; }
     if(b.classList.contains("pl_del")){
-      const pl=at(ds);
-      const running=(DB.experiments||[]).filter(ex=>ex.planId===pl.id&&planRunningAnimals(ex).length);
-      if(running.length&&!confirm(`${pl.name||"This plan"} is running on animals in ${running.length} experiment${running.length===1?"":"s"}. Delete it anyway? Their scheduled entries stay where they are.`))return;
+      const pl=planList()[+b.dataset.pi];
+      const users=planUsers(pl);
+      if(users.length&&!confirm(`${pl.name||"This plan"} is used by ${users.map(u=>u.where).join(", ")}. Delete it anyway? Entries already scheduled stay where they are.`))return;
       DB.plans=planList().filter(x=>x!==pl); persist(); draw(); return; }
-    if(b.classList.contains("pl_sadd")){
-      const pl=at(ds); pl.stages=planStages(pl).concat([{id:uid("s_"),label:"",type:"procedure",after:1}]);
-      persist(); draw(); return; }
-    if(b.classList.contains("pl_sdel")){
-      const pl=at(ds); pl.stages=planStages(pl).filter((_,i)=>i!==+ds.si); persist(); draw(); return; }
-    if(b.classList.contains("pl_sup")||b.classList.contains("pl_sdown")){
-      const pl=at(ds), i=+ds.si, j=b.classList.contains("pl_sup")?i-1:i+1;
-      const list=planStages(pl); if(j<0||j>=list.length)return;
-      [list[i],list[j]]=[list[j],list[i]]; persist(); draw(); return; }
   });
+}
+// Which arms of which experiments run this plan — shown in the library so a
+// plan is never deleted without knowing what it was holding up.
+function planUsers(pl){
+  const out=[];
+  (DB.experiments||[]).forEach(ex=>{
+    if(ex.planId===pl.id) out.push({ex,where:`${ex.title||"(unnamed experiment)"} (animals in no group)`});
+    (ex.groupDefs||[]).forEach(g=>{ if(g.planId===pl.id) out.push({ex,where:`${ex.title||"(unnamed experiment)"} › ${g.name||"(unnamed arm)"}`}); });
+  });
+  return out;
+}
+function planUsedByHTML(pl){
+  const users=planUsers(pl);
+  return `<div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:9px;border-top:1px solid var(--line);padding-top:7px">
+    ${users.length?"Run by "+esc(users.map(u=>u.where).join(" · ")):"Not used by any experiment yet"}</div>`;
 }
 
 /* ── INVENTORY ─────────────────────────────────────────────────────────────── */
