@@ -181,6 +181,9 @@
   .dd-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--ink-dim);border-radius:8px;padding:7px 9px;font-size:12.5px;cursor:pointer}
   .dd-row:hover{background:var(--panel)}
   .dd-row.on{color:var(--ink);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
+  .pg-block{margin-bottom:12px}
+  .pg-head{font-family:var(--mono);font-size:10px;color:var(--ink-dim);margin-bottom:5px}
+  .pg-sub{color:var(--ink-faint);margin-left:8px}
   /* the per-animal plan grid in the experiment editor */
   .pg-wrap{overflow-x:auto;border:1px solid var(--line2);border-radius:9px}
   .pg-tbl{border-collapse:collapse;width:100%;font-size:11.5px}
@@ -2583,7 +2586,8 @@ function buildDefs(file){
      person receives a pipeline they cannot read, and a grid with no stages.
      Only the plans this file's experiments actually use. */
   const usedPlans=[];
-  const planIds=new Set((file.experiments||[]).map(x=>x&&x.planId).filter(Boolean));
+  const planIds=new Set();
+  (file.experiments||[]).forEach(x=>experimentPlanIds(x).forEach(id=>planIds.add(id)));
   planList().forEach(pl=>{
     if(!planIds.has(pl.id))return;
     usedPlans.push({id:pl.id,name:pl.name,skipWeekends:!!pl.skipWeekends,by:meId(),
@@ -7511,7 +7515,31 @@ function planSchedule(pl,startISO){
    the same dates without having to agree on anything else. */
 function planRunMap(ex){ return (ex&&ex.planRuns&&typeof ex.planRuns==="object")?ex.planRuns:{}; }
 function planRunFor(ex,aid){ const r=planRunMap(ex)[aid]; return (r&&r.start)?r:null; }
-function planOfExperiment(ex){ return ex&&ex.planId?planById(ex.planId):null; }
+/* Which plan an animal runs is a question about its GROUP, not about the
+   experiment: that is what a group is for. The experimental arm gets the
+   pipeline, the control arm gets a different one or none, and an experiment
+   whose arms ran the same thing would not be an experiment.
+   ex.planId survives as the plan for animals in no group at all, which is the
+   common single-arm case — an experiment that never needed arms should not
+   have to invent one to get a plan. */
+function experimentGroupOf(ex,aid){
+  const gid=(ex&&ex.groups||{})[aid]; if(!gid) return null;
+  return (ex.groupDefs||[]).find(g=>g.id===gid)||null;
+}
+function planForAnimal(ex,a){
+  if(!ex||!a) return null;
+  const g=experimentGroupOf(ex,a.id);
+  const id=g?g.planId:ex.planId;
+  return id?planById(id):null;
+}
+// every plan this experiment can run, group by group — what has to travel, and
+// what the summary has to draw
+function experimentPlanIds(ex){
+  const out=new Set();
+  if(ex&&ex.planId) out.add(ex.planId);
+  ((ex&&ex.groupDefs)||[]).forEach(g=>{ if(g&&g.planId) out.add(g.planId); });
+  return [...out];
+}
 // Derived, never minted, for the same reason every other generated row is:
 // two devices starting the same animal must produce one set of entries.
 function planEntryId(exId,animalId,stageId){
@@ -7531,7 +7559,7 @@ function planEntryOf(ex,a,stage){
    a second device running it produces the same rows rather than a second set.
    A stage whose type has since been deleted is skipped rather than guessed at. */
 function syncPlanEntries(ex,a){
-  const pl=planOfExperiment(ex), run=planRunFor(ex,a.id);
+  const pl=planForAnimal(ex,a), run=planRunFor(ex,a.id);
   if(!pl||!run) return 0;
   let n=0;
   const want=new Set();
@@ -7599,7 +7627,7 @@ function stopPlanFor(ex,a){
    The Procedure stage asks the animal's surgery record instead, which is what
    lets a plan take a procedure inside it. */
 function planProgress(ex,a){
-  const pl=planOfExperiment(ex), run=planRunFor(ex,a.id);
+  const pl=planForAnimal(ex,a), run=planRunFor(ex,a.id);
   if(!pl||!run) return [];
   const today=todayDateStr();
   return planSchedule(pl,run.start).map(({stage,date})=>{
@@ -8452,10 +8480,13 @@ function experimentModal(st,after){
         `<option value="${pr.id}" ${st.projectId===pr.id?"selected":""}>${esc(pr.name||"(unnamed project)")}</option>`).join("")}<option value="__new__">+ New project…</option></select></div>
     <div class="fld"><label>Research question</label>
       <textarea id="sm_q" rows="2">${esc(st.question||"")}</textarea></div>
-    <div class="fld"><label>Plan</label>
-      <select id="sm_plan"><option value="">— no plan; this experiment schedules nothing</option>${
+    <div class="fld"><label>Plan for animals in no group</label>
+      <select id="sm_plan"><option value="">— none</option>${
         planList().map(pl=>`<option value="${escAttr(pl.id)}" ${st.planId===pl.id?"selected":""}>${esc(pl.name||"(unnamed plan)")} · ${planStages(pl).length} stage${planStages(pl).length===1?"":"s"}</option>`).join("")}</select>
-      <div id="sm_planbox" style="margin-top:9px"></div></div>
+      <div style="font-size:11px;color:var(--ink-faint);margin-top:4px;line-height:1.5">
+        Each arm runs its own plan — set that beside the arm under Groups below. This one covers an
+        experiment that never needed arms.</div>
+      <div id="sm_planbox" style="margin-top:11px"></div></div>
     <div class="fld"><label>Notes on the plan</label>
       <textarea id="sm_desc" rows="3">${esc(st.description||"")}</textarea></div>
     <div class="fld"><label>Hypothesis</label>
@@ -8493,32 +8524,53 @@ function experimentModal(st,after){
   const planBox=()=>document.getElementById("sm_planbox");
   function paintPlan(){
     const box=planBox(); if(!box) return;
-    const pl=planOfExperiment(st);
-    if(!pl){ box.innerHTML=""; return; }
-    const stages=planStages(pl);
-    if(!stages.length){ box.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint)">This plan has no stages yet — add them in Materials › Plans.</div>`; return; }
     const members=animals();
-    if(!members.length){ box.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint)">No animals in this experiment yet. Add one below and you can start it on the plan.</div>`; return; }
+    /* One table per arm, because the arms run different pipelines — that is
+       what an arm is. Animals in no group are gathered under the experiment's
+       own plan, which is the single-arm case. */
+    const byGroup=new Map();
+    members.forEach(a=>{
+      const g=experimentGroupOf(st,a.id);
+      const key=g?g.id:"";
+      if(!byGroup.has(key)) byGroup.set(key,{group:g,animals:[]});
+      byGroup.get(key).animals.push(a);
+    });
+    if(!members.length){
+      box.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint)">No animals in this experiment yet. Add one below, then give its arm a plan and start it.</div>`;
+      return;
+    }
     const today=todayDateStr();
-    const head=stages.map((sg,i)=>`<th title="${escAttr(sg.label||"")}">${i+1}. ${esc(sg.label||diaryTypeDef(sg.type).label||"stage")}</th>`).join("");
-    const rows=members.map(a=>{
-      const run=planRunFor(st,a.id);
-      if(!run) return `<tr><td class="pg-an">${esc(a.name)}</td>
-        <td class="pg-cells" colspan="${stages.length}"><span style="color:var(--ink-faint)">not started</span></td>
-        <td><button class="pg-start" data-a="${escAttr(a.id)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--gcamp);border-radius:7px;padding:3px 10px;font-size:11.5px;cursor:pointer">▶ Start…</button></td></tr>`;
-      const cells=planProgress(st,a).map(p=>{
-        const cls=p.done?"pg-done":(p.late?"pg-late":(p.date===today?"pg-today":"pg-soon"));
-        const tip=`${p.stage.label||""} — ${fmtDMY(p.date)}${p.done?" · done":(p.late?" · overdue":"")}${p.kind==="procedure"?" · from the animal's surgery record":""}`;
-        return `<td class="pg-c ${cls}" title="${escAttr(tip)}">${p.done?"✓":(p.late?"!":"")} ${esc(fmtDMY(p.date).slice(0,5))}</td>`;
+    const blocks=[...byGroup.entries()].sort((a,b)=>String(a[0]).localeCompare(String(b[0]))).map(([key,{group,animals:list}])=>{
+      const pl=group?(group.planId?planById(group.planId):null):(st.planId?planById(st.planId):null);
+      const name=group?(group.name||"(unnamed arm)"):"Not in a group";
+      const stages=planStages(pl);
+      if(!pl) return `<div class="pg-block"><div class="pg-head">${esc(name)}
+        <span class="pg-sub">${list.length} animal${list.length===1?"":"s"} · no plan${group?" — pick one beside this arm above":" — animals in no group use the experiment's own plan, below"}</span></div></div>`;
+      if(!stages.length) return `<div class="pg-block"><div class="pg-head">${esc(name)}
+        <span class="pg-sub">${esc(pl.name||"plan")} has no stages yet — add them in Materials › Plans</span></div></div>`;
+      const head=stages.map((sg,i)=>`<th title="${escAttr(sg.label||"")}">${i+1}. ${esc(sg.label||diaryTypeDef(sg.type).label||"stage")}</th>`).join("");
+      const rows=list.map(a=>{
+        const run=planRunFor(st,a.id);
+        if(!run) return `<tr><td class="pg-an">${esc(a.name)}</td>
+          <td class="pg-cells" colspan="${stages.length}"><span style="color:var(--ink-faint)">not started</span></td>
+          <td><button class="pg-start" data-a="${escAttr(a.id)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--gcamp);border-radius:7px;padding:3px 10px;font-size:11.5px;cursor:pointer">▶ Start…</button></td></tr>`;
+        const cells=planProgress(st,a).map(p=>{
+          const cls=p.done?"pg-done":(p.late?"pg-late":(p.date===today?"pg-today":"pg-soon"));
+          const tip=`${p.stage.label||""} — ${fmtDMY(p.date)}${p.done?" · done":(p.late?" · overdue":"")}${p.kind==="procedure"?" · from the animal's surgery record":""}`;
+          return `<td class="pg-c ${cls}" title="${escAttr(tip)}">${p.done?"✓":(p.late?"!":"")} ${esc(fmtDMY(p.date).slice(0,5))}</td>`;
+        }).join("");
+        return `<tr><td class="pg-an">${esc(a.name)}</td>${cells}
+          <td><button class="pg-restart" data-a="${escAttr(a.id)}" title="Move this animal's start date" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:7px;padding:3px 8px;font-size:11px;cursor:pointer">↻</button>
+              <button class="pg-stop" data-a="${escAttr(a.id)}" title="Stop this animal's plan — anything already filled in stays" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:7px;padding:3px 8px;font-size:11px;cursor:pointer">■</button></td></tr>`;
       }).join("");
-      return `<tr><td class="pg-an">${esc(a.name)}</td>${cells}
-        <td><button class="pg-restart" data-a="${escAttr(a.id)}" title="Move this animal's start date" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:7px;padding:3px 8px;font-size:11px;cursor:pointer">↻</button>
-            <button class="pg-stop" data-a="${escAttr(a.id)}" title="Stop this animal's plan — anything already filled in stays" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:7px;padding:3px 8px;font-size:11px;cursor:pointer">■</button></td></tr>`;
+      const started=list.filter(a=>planRunFor(st,a.id)).length;
+      return `<div class="pg-block"><div class="pg-head">${esc(name)}
+          <span class="pg-sub">${esc(pl.name||"plan")} · ${started} of ${list.length} started${pl.skipWeekends?" · weekends skipped":""}</span></div>
+        <div class="pg-wrap"><table class="pg-tbl"><thead><tr><th>Animal</th>${head}<th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
     }).join("");
-    const started=planRunningAnimals(st).length;
-    box.innerHTML=`<div class="pg-wrap"><table class="pg-tbl"><thead><tr><th>Animal</th>${head}<th></th></tr></thead><tbody>${rows}</tbody></table></div>
-      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:6px">
-        ${started} of ${members.length} started${pl.skipWeekends?" · weekends skipped":""} — ✓ done, ! overdue. Each stage writes a real diary entry, so it draws on the Timeline and exports like any other.</div>`;
+    box.innerHTML=blocks+`<div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:6px">
+      ✓ done, ! overdue. Each arm runs its own plan — set it beside the arm under Groups.
+      Every stage writes a real diary entry, so it draws on the Timeline and exports like any other.</div>`;
     /* bindDateButton assigns onclick, so binding it up front (rather than
        inside a click handler that would then have to fire it again) keeps one
        handler per button and opens the picker on the first press. */
@@ -8582,6 +8634,9 @@ function experimentModal(st,after){
         <input class="gdef-name" list="sm_gsuggest" value="${escAttr(g.name)}">
         <input class="gdef-n" type="number" min="0" value="${g.planned!=null?g.planned:""}" title="Planned number of animals">
         <span class="gdef-count ${(!g.planned||groupCount(st,g.id)>=g.planned)?"ok":""}">${g.planned?`${groupCount(st,g.id)}/${g.planned}`:groupCount(st,g.id)}</span>
+        <select class="gdef-plan" title="The plan this arm runs — a control arm usually runs a different one, or none">
+          <option value="">no plan</option>${planList().map(pl=>
+            `<option value="${escAttr(pl.id)}" ${g.planId===pl.id?"selected":""}>${esc(pl.name||"(unnamed plan)")}</option>`).join("")}</select>
         <button class="gdef-del" title="Remove this group">✕</button>
       </div>`).join(""):`<div class="pc-empty">No groups yet.</div>`;
     box.querySelectorAll(".gdef-row").forEach(r=>{
@@ -8589,6 +8644,11 @@ function experimentModal(st,after){
       r.querySelector(".gdef-name").addEventListener("input",e=>{ g.name=e.target.value; persist(); drawGroups(); });
       r.querySelector(".gdef-n").addEventListener("change",e=>{
         g.planned=e.target.value===""?null:Math.max(0,+e.target.value); persist(); drawGroupDefs(); });
+      r.querySelector(".gdef-plan").addEventListener("change",e=>{
+        g.planId=e.target.value||null; persist();
+        // the arms can run different pipelines, so the summary is redrawn whole
+        if(typeof paintPlan==="function") paintPlan();
+      });
       r.querySelector(".gdef-del").onclick=()=>{
         const n=groupCount(st,g.id);
         if(n&&!confirm(`Remove "${g.name||"this group"}"?\n\n${n} animal${n!==1?"s":""} will become unassigned.`))return;
