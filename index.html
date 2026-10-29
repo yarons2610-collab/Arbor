@@ -181,6 +181,12 @@
   .dd-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--ink-dim);border-radius:8px;padding:7px 9px;font-size:12.5px;cursor:pointer}
   .dd-row:hover{background:var(--panel)}
   .dd-row.on{color:var(--ink);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
+  .pg-tabs{display:flex;gap:4px;margin-bottom:9px}
+  .pg-tab{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:7px;
+    padding:3px 10px;font-size:11.5px;cursor:pointer;font-family:var(--mono)}
+  .pg-tab.on{color:var(--ink);border-color:var(--gcamp);background:var(--panel)}
+  .pg-pill{display:inline-block;border:1px solid var(--line2);background:var(--panel2);border-radius:6px;
+    padding:1px 7px;margin:2px 4px 2px 0;font-family:var(--mono);font-size:10.5px}
   .pg-block{margin-bottom:12px}
   .pg-head{font-family:var(--mono);font-size:10px;color:var(--ink-dim);margin-bottom:5px}
   .pg-sub{color:var(--ink-faint);margin-left:8px}
@@ -2023,7 +2029,7 @@ function changedHere(base,coll,id,obj){
    over whatever a pull brings in. */
 const LOCAL_VIEW_KEYS=["calMode","calFilters","calAlldayCollapsed","topCollapsed",
   "animalFilters","notesFilter","notesSort","notesView","notesGroup","matSubTab","calZoom","colourByAuthor","expTaskSort","expTaskGroup","expViewBy",
-  "animalSummary"];
+  "animalSummary","planSummaryView"];
 const VIEW_STATE_KEY="arbor_view_state";
 function saveLocalView(){
   try{
@@ -7482,6 +7488,17 @@ function planStages(pl){ return (pl&&Array.isArray(pl.stages))?pl.stages:[]; }
    a day number counted from the start that has to be recomputed by hand every
    time a gap changes. The first stage lands on the start date itself. */
 function stageGap(st){ const n=+((st&&st.after)); return isFinite(n)&&n>0?Math.round(n):0; }
+/* A stage happens at a time of day. Scheduling them all-day piled a whole
+   pipeline into the all-day row, where an imaging session and a histology drop
+   look like the same kind of thing and neither can be seen against the rest of
+   the day. A stage with no time of its own gets the workspace default, so a
+   plan written without thinking about clocks still lands somewhere sensible;
+   clearing the box is how a stage says it really is an all-day affair. */
+function stageTime(st){
+  if(!st) return DEFAULT_ENTRY_TIME;
+  if(st.time==="") return null;                 // deliberately all-day
+  return /^\d{2}:\d{2}$/.test(st.time||"")?st.time:DEFAULT_ENTRY_TIME;
+}
 function isWeekend(iso){ const d=new Date(iso.slice(0,10)+"T00:00:00").getDay(); return d===0||d===6; }
 // Walk n days forward, counting only the days the lab actually runs on. With
 // weekends included this is plain addition; without, a weekend costs nothing
@@ -7572,11 +7589,12 @@ function syncPlanEntries(ex,a){
     if(have){
       // the start moved, or a gap was edited: the row goes with its stage
       if(have.date!==date){ have.date=date; have.edited=Date.now(); n++; }
+      if((have.time||null)!==stageTime(stage)){ have.time=stageTime(stage); n++; }
       if(have.type!==type){ have.type=type; n++; }
       return;
     }
     a.diary=a.diary||[];
-    a.diary.push({id:planEntryId(ex.id,a.id,stage.id),type,date,time:stage.time||null,endTime:null,
+    a.diary.push({id:planEntryId(ex.id,a.id,stage.id),type,date,time:stageTime(stage),endTime:null,
       data:{},created:Date.now(),edited:null,fromPlan:ex.id,planStage:stage.id});
     n++;
   });
@@ -8555,6 +8573,41 @@ function experimentModal(st,after){
     drawGroupDefs();
   }
   const planBox=()=>document.getElementById("sm_planbox");
+  /* The same schedule, read the other way round. By animal answers "where is
+     this mouse"; by week or month answers "what is this experiment doing on
+     Tuesday", which is the question you ask when planning your own week. Both
+     read the one schedule — neither is a second copy of it. */
+  function planCalendarHTML(members){
+    const mode=DB.config.planSummaryView==="month"?"month":"week";
+    const today=todayDateStr();
+    const rows=[];
+    members.forEach(a=>planProgress(st,a).forEach(p=>rows.push({a,p})));
+    if(!rows.length) return `<div style="font-size:11.5px;color:var(--ink-faint)">Nothing scheduled yet — start an animal and its stages appear here.</div>`;
+    const keyOf=d=>mode==="month"?d.slice(0,7):weekStartISO(d);
+    const label=k=>mode==="month"
+      ? new Date(k+"-01T00:00:00").toLocaleDateString(undefined,{month:"long",year:"numeric"})
+      : `Week of ${fmtDMY(k)}`;
+    const buckets=new Map();
+    rows.sort((x,y)=>x.p.date.localeCompare(y.p.date)||String(x.a.name||"").localeCompare(String(y.a.name||""),undefined,{numeric:true}));
+    rows.forEach(r=>{ const k=keyOf(r.p.date); if(!buckets.has(k))buckets.set(k,[]); buckets.get(k).push(r); });
+    return [...buckets.entries()].map(([k,list])=>{
+      const days=new Map();
+      list.forEach(r=>{ if(!days.has(r.p.date))days.set(r.p.date,[]); days.get(r.p.date).push(r); });
+      const done=list.filter(r=>r.p.done).length, late=list.filter(r=>r.p.late).length;
+      return `<div class="pg-block">
+        <div class="pg-head">${esc(label(k))}
+          <span class="pg-sub">${list.length} stage${list.length===1?"":"s"} · ${done} done${late?` · <span style="color:var(--overdue)">${late} overdue</span>`:""}</span></div>
+        <div class="pg-wrap"><table class="pg-tbl"><tbody>
+          ${[...days.entries()].map(([d,items])=>`<tr>
+            <td class="pg-an" style="white-space:nowrap">${esc(fmtDMY(d))}${d===today?` <span style="color:var(--amber)">today</span>`:""}</td>
+            <td>${items.map(r=>{
+              const cls=r.p.done?"pg-done":(r.p.late?"pg-late":"pg-soon");
+              const t=r.p.entry&&r.p.entry.time?r.p.entry.time+" ":"";
+              return `<span class="pg-pill ${cls}" title="${escAttr(r.a.name+" — "+(r.p.stage.label||"")+" — "+fmtDMY(r.p.date))}">${r.p.done?"✓":(r.p.late?"!":"")}${esc(t)}${esc(r.a.name)} · ${esc(r.p.stage.label||diaryTypeDef(r.p.stage.type).label||"stage")}</span>`;
+            }).join("")}</td></tr>`).join("")}
+        </tbody></table></div></div>`;
+    }).join("");
+  }
   function paintPlan(){
     const box=planBox(); if(!box) return;
     const members=animals();
@@ -8601,9 +8654,17 @@ function experimentModal(st,after){
           <span class="pg-sub">${esc(pl.name||"plan")} · ${started} of ${list.length} started${pl.skipWeekends?" · weekends skipped":""}</span></div>
         <div class="pg-wrap"><table class="pg-tbl"><thead><tr><th>Animal</th>${head}<th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
     }).join("");
-    box.innerHTML=blocks+`<div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:6px">
+    const view=DB.config.planSummaryView||"animal";
+    const tab=(k,lab)=>`<button type="button" class="pg-tab${view===k?" on":""}" data-v="${k}">${lab}</button>`;
+    const bar=`<div class="pg-tabs">${tab("animal","By animal")}${tab("week","By week")}${tab("month","By month")}</div>`;
+    box.innerHTML=bar+(view==="animal"?blocks:planCalendarHTML(members))
+      +`<div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:6px">
       ✓ done, ! overdue. Each arm runs its own plan — set it beside the arm under Groups.
       Every stage writes a real diary entry, so it draws on the Timeline and exports like any other.</div>`;
+    box.querySelectorAll(".pg-tab").forEach(b=>b.addEventListener("click",()=>{
+      DB.config.planSummaryView=b.dataset.v; persist(); paintPlan();
+    }));
+    if(view!=="animal") return;    // the calendar views have no per-row buttons
     /* bindDateButton assigns onclick, so binding it up front (rather than
        inside a click handler that would then have to fire it again) keeps one
        handler per button and opens the picker on the first press. */
@@ -9907,6 +9968,15 @@ function weekStart(offset){
   const d=new Date(); d.setHours(0,0,0,0);
   d.setDate(d.getDate()-d.getDay()+offset*7); // Sunday of target week
   return d;
+}
+/* The Sunday of the week a given date falls in — the same week boundary the
+   calendar above draws, said once so a second view cannot quietly disagree
+   with the Timeline about where a week starts. */
+function weekStartISO(iso){
+  const d=new Date(iso.slice(0,10)+"T00:00:00");
+  d.setDate(d.getDate()-d.getDay());
+  const p2=x=>String(x).padStart(2,"0");
+  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
 }
 
 let calMode="week";                       // "day" | "week" | "month" (restored from config in migrate)
@@ -11409,6 +11479,8 @@ function mountPlanEditor(host,pl,onChange){
             <input type="number" class="pl_safter" data-si="${si}" min="0" step="1" value="${si===0?0:stageGap(st)}"
               ${si===0?"disabled title=\"The first stage lands on the day you start the animal\"":""} style="width:52px;${IST};padding:4px 6px">
             ${si===0?"on day 0":"days after"}</label>
+          <input type="time" class="pl_stime" data-si="${si}" value="${escAttr(stageTime(st)||"")}"
+            title="Time of day this stage happens. Clear it to make the stage all-day." style="${IST};padding:4px 6px;width:96px">
           <button class="pl_sup" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===0?"disabled":""} title="Move up">↑</button>
           <button class="pl_sdown" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===planStages(pl).length-1?"disabled":""} title="Move down">↓</button>
           <button class="pl_sdel" data-si="${si}" style="${BTNS};padding:2px 7px;color:var(--overdue)">✕</button>
@@ -11428,6 +11500,9 @@ function mountPlanEditor(host,pl,onChange){
   host.addEventListener("change",e=>{
     const el=e.target;
     if(el.classList.contains("pl_stype")){ stAt(el.dataset).type=el.value; changed(); return; }
+    // an emptied box is a real answer ("all day"), not a missing one, so it is
+    // stored as "" rather than left undefined and re-defaulted
+    if(el.classList.contains("pl_stime")){ stAt(el.dataset).time=el.value||""; changed(); return; }
     if(el.classList.contains("pl_weekends")){ pl.skipWeekends=!el.checked; changed(); draw(); return; }
   });
   host.addEventListener("click",e=>{
