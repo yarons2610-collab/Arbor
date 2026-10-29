@@ -181,6 +181,18 @@
   .dd-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--ink-dim);border-radius:8px;padding:7px 9px;font-size:12.5px;cursor:pointer}
   .dd-row:hover{background:var(--panel)}
   .dd-row.on{color:var(--ink);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
+  /* the per-animal plan grid in the experiment editor */
+  .pg-wrap{overflow-x:auto;border:1px solid var(--line2);border-radius:9px}
+  .pg-tbl{border-collapse:collapse;width:100%;font-size:11.5px}
+  .pg-tbl th{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);font-weight:500;text-align:left;
+    padding:7px 8px;border-bottom:1px solid var(--line2);white-space:nowrap}
+  .pg-tbl td{padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  .pg-tbl tr:last-child td{border-bottom:0}
+  .pg-an{font-weight:600;color:var(--ink)}
+  .pg-c{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)}
+  .pg-done{color:var(--gcamp)}
+  .pg-late{color:var(--overdue)}
+  .pg-today{color:var(--amber)}
   .dd-head{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);padding:7px 9px 3px;letter-spacing:.04em}
   .dd-check{cursor:pointer}
   /* sharing: green means it leaves this device, magenta means it does not */
@@ -1321,12 +1333,14 @@
         <button class="mat-stab on" data-ms="sites">Injection Sites</button>
         <button class="mat-stab" data-ms="inventory">Inventory</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
+        <button class="mat-stab" data-ms="plans">Plans</button>
         <button class="mat-stab" data-ms="viruses">Viruses</button>
       </div>
       <div class="wrap mat-subview" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview hidden" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-procedures"></div>
+      <div class="wrap mat-subview hidden" id="ms-plans"></div>
 
     </div>
     <div class="view hidden wrap" id="library"></div>
@@ -2564,9 +2578,21 @@ function buildDefs(file){
       fields:(sec.fields||[]).map(f=>({key:f.key,label:f.label,type:f.type,options:f.options,
         fields:f.type==="table"?(f.fields||[]).map(x=>({key:x.key,label:x.label,type:x.type,options:x.options})):undefined}))});
   });
+  /* A shared experiment names a plan, and a plan is a library definition like
+     an entry type — so it travels for the same reason: without it the other
+     person receives a pipeline they cannot read, and a grid with no stages.
+     Only the plans this file's experiments actually use. */
+  const usedPlans=[];
+  const planIds=new Set((file.experiments||[]).map(x=>x&&x.planId).filter(Boolean));
+  planList().forEach(pl=>{
+    if(!planIds.has(pl.id))return;
+    usedPlans.push({id:pl.id,name:pl.name,skipWeekends:!!pl.skipWeekends,by:meId(),
+      stages:planStages(pl).map(st=>({id:st.id,label:st.label,type:st.type,after:stageGap(st)}))});
+  });
   return {
     by:meId(),
     diaryTypes:types,
+    plans:usedPlans,
     animalSections:usedSecs,
     viruses:(DB.config.virusLib||[]).filter(v=>names.has(v.name))
       .map(v=>({name:v.name,type:v.type,promoter:v.promoter,titer:v.titer,by:meId()})),
@@ -2607,6 +2633,22 @@ function buildProjectFile(pr,prev){
      so they come back when the merged file is read into this workspace,
      instead of being read as a removal. This is the trap that pruning a
      project's links fell into, avoided rather than repeated. */
+  /* An experiment's plan runs name animals, and a shared experiment may well
+     run its plan on one that is not in this project. Exactly the trap a task's
+     round fell into: the private id reaches somebody else's file, the leak
+     check refuses the write, and every later push is jammed until the run is
+     removed. Safe to prune here only because the runs merge per animal (see
+     mergePlanRuns), so what is pruned reads as "mine, unchanged" rather than
+     as a removal. */
+  {
+    const here=new Set(file.animals.map(a=>a.id));
+    file.experiments.forEach(ex=>{
+      if(!ex||!ex.planRuns)return;
+      const out={};
+      Object.keys(ex.planRuns).forEach(aid=>{ if(here.has(aid)) out[aid]=ex.planRuns[aid]; });
+      ex.planRuns=out;
+    });
+  }
   {
     const here=new Set(file.animals.map(a=>a.id));
     file.schedule.forEach(t=>{
@@ -2818,6 +2860,21 @@ function adoptInto(live,next,id){
   Object.keys(next).forEach(k=>{ if(k!=="diary") live[k]=next[k]; });
   return setSp(live,id);
 }
+/* buildProjectFile prunes an experiment's plan runs down to the animals the
+   file carries, so a private animal's id never reaches somebody else's copy.
+   Reading that file back verbatim would then delete this workspace's own runs
+   on its own animals — the file is not saying "stopped", it is saying "not
+   mine to talk about". So runs for animals the file does not carry are kept.
+   The same shape as a pruned roster; see mergeRosterMaps. */
+function keepLocalPlanRuns(live,rec,file){
+  const runs=live&&live.planRuns; if(!runs||typeof runs!=="object")return;
+  const carried=new Set((file.animals||[]).map(a=>a&&a.id));
+  Object.keys(runs).forEach(aid=>{
+    if(carried.has(aid))return;                 // the file had its say about this one
+    rec.planRuns=rec.planRuns||{};
+    if(!rec.planRuns[aid]) rec.planRuns[aid]=runs[aid];
+  });
+}
 function attachProjectFile(file){
   const id=file.projectId;
   const put=(coll,rows)=>{
@@ -2825,7 +2882,9 @@ function attachProjectFile(file){
     (rows||[]).forEach(x=>{
       const at=DB[coll].findIndex(y=>y&&y.id===x.id);
       const rec=setSp(JSON.parse(JSON.stringify(x)),id);
-      if(at>=0) adoptInto(DB[coll][at],rec,id); else DB[coll].push(rec);
+      if(at>=0){ if(coll==="experiments") keepLocalPlanRuns(DB[coll][at],rec,file);
+                 adoptInto(DB[coll][at],rec,id); }
+      else DB[coll].push(rec);
     });
   };
   if(file.project) put("projects",[file.project]);
@@ -3007,6 +3066,7 @@ function mergeDefs(remote,mine){
   return {by:R.by||meId(),
     diaryTypes:mergeOwnedList(R.diaryTypes,M.diaryTypes,t=>t.key,fb),
     // left out here, these would survive the first write and vanish on the next
+    plans:mergeOwnedList(R.plans,M.plans,x=>x.id,fb),
     animalSections:mergeOwnedList(R.animalSections,M.animalSections,x=>x.id,fb),
     viruses:mergeOwnedList(R.viruses,M.viruses,v=>v.name,fb),
     sites:mergeOwnedList(R.sites,M.sites,x=>x.name,fb)};
@@ -3121,6 +3181,23 @@ function mergeFields(theirs,mine,base,id,isDiary){
        instead whether mine merely *differs* from theirs makes every field I
        left alone overwrite whatever they did to it — which is how renaming a
        task on one side was undone by the other side editing its notes. */
+    if(k==="planRuns"){
+      /* One entry per animal, each owned by whoever wrote it: merged per key
+         rather than as one field, so two people starting different animals do
+         not overwrite each other, and the ids pruned above come back. */
+      const t=theirs[k], m=mine[k];
+      if(t&&m&&typeof t==="object"&&typeof m==="object"){
+        const w=was[k]||{}, merged={};
+        new Set([...Object.keys(t),...Object.keys(m)]).forEach(aid=>{
+          const mineHas=m[aid], theirsHas=t[aid], wasHas=w[aid];
+          // a run this device deliberately stopped stays stopped
+          if(!mineHas&&wasHas&&JSON.stringify(wasHas)===JSON.stringify(theirsHas))return;
+          const pick=(mineHas&&JSON.stringify(mineHas)!==JSON.stringify(wasHas))?mineHas:(theirsHas||mineHas);
+          if(pick) merged[aid]=pick;
+        });
+        out[k]=merged; return;
+      }
+    }
     if(k==="roster"){
       // merged whether or not this device changed it: the file's copy is
       // pruned of private animals, so taking theirs wholesale would drop mine
@@ -4358,6 +4435,7 @@ function migrate(){                       // backfill fields added in later vers
   if(!DB.readings)DB.readings=[];
   // Protocols are literature's twin: a titled pointer to where the method lives.
   if(!DB.protocols)DB.protocols=[];
+  if(!Array.isArray(DB.plans))DB.plans=[];
   // Same shape as reading/protocol, no bibliographic fields of its own — for
   // whatever belongs in the Library but isn't really a paper or a protocol.
   if(!DB.other)DB.other=[];
@@ -7364,6 +7442,184 @@ function diaryEntryById(id){
   return null;
 }
 
+/* ---- experiment plans ----
+   An experiment's plan used to be a textarea: prose nobody could act on. A
+   plan is really an ordered pipeline — lever behaviour, two-photon, behaviour,
+   behaviour, histology — and what matters about it is *when*, because a day
+   either way is a different experiment.
+
+   So a plan is a library definition, the way a procedure template already is:
+   written once, used by any experiment, applied to an animal when that animal
+   actually starts. Each stage names what you record when you do it — an entry
+   type you designed, with its own fields, or the built-in Procedure, which is
+   how a plan takes a surgery inside itself instead of leaving it off to one
+   side.
+
+   Starting an animal schedules the whole pipeline from the date you give. The
+   entries it writes are ordinary diary entries: they draw on the Timeline, go
+   in the Excel export and travel to collaborators like anything else. Nothing
+   here is a parallel record of the same work. */
+function planList(){ return Array.isArray(DB.plans)?DB.plans:(DB.plans=[]); }
+/* Your own plans, plus any you are being shown from a shared project. Read,
+   never copied — the same rule a borrowed entry type follows, so neither of
+   you ends up owning the other's vocabulary. */
+function sharedPlan(id){
+  const spaces=DB.sharedDefs||{};
+  for(const k of Object.keys(spaces)){
+    const pl=((spaces[k]||{}).plans||[]).find(x=>x&&x.id===id);
+    if(pl) return Object.assign({stages:[]},pl,{fromShared:true});
+  }
+  return null;
+}
+function planById(id){ return planList().find(p=>p.id===id)||sharedPlan(id)||null; }
+function planStages(pl){ return (pl&&Array.isArray(pl.stages))?pl.stages:[]; }
+/* A stage says how many days after the one before it lands — which is how a
+   protocol is actually written down ("then three days later"), rather than as
+   a day number counted from the start that has to be recomputed by hand every
+   time a gap changes. The first stage lands on the start date itself. */
+function stageGap(st){ const n=+((st&&st.after)); return isFinite(n)&&n>0?Math.round(n):0; }
+function isWeekend(iso){ const d=new Date(iso.slice(0,10)+"T00:00:00").getDay(); return d===0||d===6; }
+// Walk n days forward, counting only the days the lab actually runs on. With
+// weekends included this is plain addition; without, a weekend costs nothing
+// and no stage is ever left sitting on a Saturday.
+function addPlanDays(iso,n,skipWeekends){
+  if(!skipWeekends) return addDaysISO(iso,n);
+  let cur=iso.slice(0,10), left=Math.max(0,n);
+  while(left>0){ cur=addDaysISO(cur,1); if(!isWeekend(cur)) left--; }
+  while(isWeekend(cur)) cur=addDaysISO(cur,1);
+  return cur;
+}
+/* Every stage's date for one run, in order. Returned rather than stored, so
+   moving a start date re-reads instead of needing every row rewritten — and
+   two devices computing it from the same start agree without talking. */
+function planSchedule(pl,startISO){
+  const skip=!!(pl&&pl.skipWeekends);
+  let cur=startISO.slice(0,10);
+  if(skip&&isWeekend(cur)) cur=addPlanDays(cur,0,true);
+  const out=[];
+  planStages(pl).forEach((st,i)=>{
+    cur=i===0?cur:addPlanDays(cur,stageGap(st),skip);
+    out.push({stage:st,date:cur});
+  });
+  return out;
+}
+/* ---- running a plan on one animal ----
+   An animal does not start when it joins an experiment; it starts when you
+   start it. So a run is {start date} recorded against that animal on that
+   experiment, and everything else is derived from it — which means moving the
+   start moves the whole pipeline, and two devices reading the same start get
+   the same dates without having to agree on anything else. */
+function planRunMap(ex){ return (ex&&ex.planRuns&&typeof ex.planRuns==="object")?ex.planRuns:{}; }
+function planRunFor(ex,aid){ const r=planRunMap(ex)[aid]; return (r&&r.start)?r:null; }
+function planOfExperiment(ex){ return ex&&ex.planId?planById(ex.planId):null; }
+// Derived, never minted, for the same reason every other generated row is:
+// two devices starting the same animal must produce one set of entries.
+function planEntryId(exId,animalId,stageId){
+  return "d_pl_"+String(exId).replace(/^st_/,"")
+    +"_"+String(animalId).replace(/^a_/,"")
+    +"_"+String(stageId).replace(/^s_/,"");
+}
+// An entry written by a plan. Unlike a task's round, these are *not* hidden
+// from the Timeline — seeing the pipeline laid out in time is the point.
+function fromPlan(e){ return !!(e&&e.fromPlan); }
+function planEntryOf(ex,a,stage){
+  const id=planEntryId(ex.id,a.id,stage.id);
+  return (a.diary||[]).find(e=>e.id===id)||null;
+}
+/* Writes (or re-dates) one animal's whole pipeline. Idempotent: every row it
+   could create has the one id above, so running it twice changes nothing, and
+   a second device running it produces the same rows rather than a second set.
+   A stage whose type has since been deleted is skipped rather than guessed at. */
+function syncPlanEntries(ex,a){
+  const pl=planOfExperiment(ex), run=planRunFor(ex,a.id);
+  if(!pl||!run) return 0;
+  let n=0;
+  const want=new Set();
+  planSchedule(pl,run.start).forEach(({stage,date})=>{
+    const type=stage.type;
+    if(type!=="procedure"&&!diaryTypeExists(type)) return;
+    want.add(stage.id);
+    if(type==="procedure") return;      // the Procedure stage is the animal's own section, not an entry
+    const have=planEntryOf(ex,a,stage);
+    if(have){
+      // the start moved, or a gap was edited: the row goes with its stage
+      if(have.date!==date){ have.date=date; have.edited=Date.now(); n++; }
+      if(have.type!==type){ have.type=type; n++; }
+      return;
+    }
+    a.diary=a.diary||[];
+    a.diary.push({id:planEntryId(ex.id,a.id,stage.id),type,date,time:stage.time||null,endTime:null,
+      data:{},created:Date.now(),edited:null,fromPlan:ex.id,planStage:stage.id});
+    n++;
+  });
+  // a stage removed from the plan takes its untouched row with it; one that
+  // was filled in stays, as the animal's own record of work actually done
+  const dropped=(a.diary||[]).filter(e=>e.fromPlan===ex.id&&!want.has(e.planStage)&&!diaryRowHasContent(e));
+  if(dropped.length){
+    removeShared("diary",dropped,a);
+    a.diary=(a.diary||[]).filter(e=>!dropped.includes(e));
+    n+=dropped.length;
+  }
+  return n;
+}
+/* Starting is the one deliberate act: it says "this animal begins today" (or
+   on whatever date you pick) and lays the pipeline out from there. Starting an
+   animal that is already running simply moves it, which is what re-picking a
+   date means. */
+function startPlanFor(ex,a,startISO){
+  if(!ex||!a||!startISO) return 0;
+  ex.planRuns=planRunMap(ex);
+  const prev=ex.planRuns[a.id];
+  ex.planRuns[a.id]={start:startISO.slice(0,10),at:(prev&&prev.at)||Date.now(),by:(prev&&prev.by)||meId()};
+  /* Deliberately does NOT add the animal to the experiment — the grid only
+     offers animals that are already members, so there is nothing to add, and
+     joining as a side effect of pressing Start would quietly share a private
+     animal the moment the experiment it joined was shared. Membership stays
+     something you ask for. */
+  return syncPlanEntries(ex,a);
+}
+/* Stopping takes back what was never done and leaves what was. The same rule
+   the feeding rounds follow: a row with something in it is the animal's own
+   record and is released rather than destroyed. */
+function stopPlanFor(ex,a){
+  if(!ex||!a) return;
+  const rows=(a.diary||[]).filter(e=>e.fromPlan===ex.id);
+  const empty=rows.filter(e=>!diaryRowHasContent(e));
+  if(empty.length) removeShared("diary",empty,a);
+  a.diary=(a.diary||[]).filter(e=>{
+    if(e.fromPlan!==ex.id) return true;
+    if(diaryRowHasContent(e)){ delete e.fromPlan; delete e.planStage; return true; }
+    return false;
+  });
+  if(ex.planRuns) delete ex.planRuns[a.id];
+}
+/* What to show for one animal: every stage, its date, and whether the work has
+   actually been done. "Done" is the entry's own tick or anything written into
+   it — the plan reads the diary rather than keeping a second opinion.
+   The Procedure stage asks the animal's surgery record instead, which is what
+   lets a plan take a procedure inside it. */
+function planProgress(ex,a){
+  const pl=planOfExperiment(ex), run=planRunFor(ex,a.id);
+  if(!pl||!run) return [];
+  const today=todayDateStr();
+  return planSchedule(pl,run.start).map(({stage,date})=>{
+    if(stage.type==="procedure"){
+      const sg=(typeof surgeriesOf==="function"?surgeriesOf(a):[]).filter(x=>!x.planned);
+      return {stage,date,entry:null,done:sg.length>0,
+              late:!sg.length&&date<today,kind:"procedure"};
+    }
+    const e=planEntryOf(ex,a,stage);
+    const done=!!(e&&(e.done||diaryRowHasContent(e)));
+    return {stage,date,entry:e,done,late:!done&&date<today,kind:"entry"};
+  });
+}
+// Every animal this experiment has actually started, oldest start first.
+function planRunningAnimals(ex){
+  return (DB.animals||[])
+    .filter(a=>!!planRunFor(ex,a.id))
+    .sort((x,y)=>String(planRunFor(ex,x.id).start).localeCompare(String(planRunFor(ex,y.id).start))
+      ||String(x.name||"").localeCompare(String(y.name||""),undefined,{numeric:true}));
+}
 /* ---- a task that covers animals ----
    Some tasks are one thing on the Timeline and many records underneath: a
    feeding round, a weekly weigh-in, a batch of injections, a behavioural
@@ -8196,7 +8452,11 @@ function experimentModal(st,after){
         `<option value="${pr.id}" ${st.projectId===pr.id?"selected":""}>${esc(pr.name||"(unnamed project)")}</option>`).join("")}<option value="__new__">+ New project…</option></select></div>
     <div class="fld"><label>Research question</label>
       <textarea id="sm_q" rows="2">${esc(st.question||"")}</textarea></div>
-    <div class="fld"><label>Experiment plan</label>
+    <div class="fld"><label>Plan</label>
+      <select id="sm_plan"><option value="">— no plan; this experiment schedules nothing</option>${
+        planList().map(pl=>`<option value="${escAttr(pl.id)}" ${st.planId===pl.id?"selected":""}>${esc(pl.name||"(unnamed plan)")} · ${planStages(pl).length} stage${planStages(pl).length===1?"":"s"}</option>`).join("")}</select>
+      <div id="sm_planbox" style="margin-top:9px"></div></div>
+    <div class="fld"><label>Notes on the plan</label>
       <textarea id="sm_desc" rows="3">${esc(st.description||"")}</textarea></div>
     <div class="fld"><label>Hypothesis</label>
       <textarea id="sm_hyp" rows="2">${esc(st.hypothesis||"")}</textarea></div>
@@ -8223,6 +8483,65 @@ function experimentModal(st,after){
   // The plan is the heart of the experiment — worth seeing in full rather
   // than scrolled inside a fixed 3-row box the moment it grows past that.
   autoGrowTextarea(document.getElementById("sm_desc"));
+
+  /* ---- the plan, per animal ----
+     One row per animal, with its stages laid out across. An animal that has
+     not been started shows the stages it *would* get and a Start button; one
+     that has shows the real dates, what is done, and what is late. This is the
+     summary for the whole experiment in one place — which animal is where, and
+     who is behind. */
+  const planBox=()=>document.getElementById("sm_planbox");
+  function paintPlan(){
+    const box=planBox(); if(!box) return;
+    const pl=planOfExperiment(st);
+    if(!pl){ box.innerHTML=""; return; }
+    const stages=planStages(pl);
+    if(!stages.length){ box.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint)">This plan has no stages yet — add them in Materials › Plans.</div>`; return; }
+    const members=animals();
+    if(!members.length){ box.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint)">No animals in this experiment yet. Add one below and you can start it on the plan.</div>`; return; }
+    const today=todayDateStr();
+    const head=stages.map((sg,i)=>`<th title="${escAttr(sg.label||"")}">${i+1}. ${esc(sg.label||diaryTypeDef(sg.type).label||"stage")}</th>`).join("");
+    const rows=members.map(a=>{
+      const run=planRunFor(st,a.id);
+      if(!run) return `<tr><td class="pg-an">${esc(a.name)}</td>
+        <td class="pg-cells" colspan="${stages.length}"><span style="color:var(--ink-faint)">not started</span></td>
+        <td><button class="pg-start" data-a="${escAttr(a.id)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--gcamp);border-radius:7px;padding:3px 10px;font-size:11.5px;cursor:pointer">▶ Start…</button></td></tr>`;
+      const cells=planProgress(st,a).map(p=>{
+        const cls=p.done?"pg-done":(p.late?"pg-late":(p.date===today?"pg-today":"pg-soon"));
+        const tip=`${p.stage.label||""} — ${fmtDMY(p.date)}${p.done?" · done":(p.late?" · overdue":"")}${p.kind==="procedure"?" · from the animal's surgery record":""}`;
+        return `<td class="pg-c ${cls}" title="${escAttr(tip)}">${p.done?"✓":(p.late?"!":"")} ${esc(fmtDMY(p.date).slice(0,5))}</td>`;
+      }).join("");
+      return `<tr><td class="pg-an">${esc(a.name)}</td>${cells}
+        <td><button class="pg-restart" data-a="${escAttr(a.id)}" title="Move this animal's start date" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:7px;padding:3px 8px;font-size:11px;cursor:pointer">↻</button>
+            <button class="pg-stop" data-a="${escAttr(a.id)}" title="Stop this animal's plan — anything already filled in stays" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:7px;padding:3px 8px;font-size:11px;cursor:pointer">■</button></td></tr>`;
+    }).join("");
+    const started=planRunningAnimals(st).length;
+    box.innerHTML=`<div class="pg-wrap"><table class="pg-tbl"><thead><tr><th>Animal</th>${head}<th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:6px">
+        ${started} of ${members.length} started${pl.skipWeekends?" · weekends skipped":""} — ✓ done, ! overdue. Each stage writes a real diary entry, so it draws on the Timeline and exports like any other.</div>`;
+    /* bindDateButton assigns onclick, so binding it up front (rather than
+       inside a click handler that would then have to fire it again) keeps one
+       handler per button and opens the picker on the first press. */
+    box.querySelectorAll(".pg-start,.pg-restart").forEach(b=>{
+      const a=DB.animals.find(x=>x.id===b.dataset.a); if(!a) return;
+      bindDateButton(b,()=>{ const r=planRunFor(st,a.id); return r?r.start:todayDateStr(); },v=>{
+        if(!v) return;
+        startPlanFor(st,a,v); persist(); paintPlan(); render();
+        toast(`${a.name} starts ${fmtDMY(v)}`);
+      });
+    });
+    box.querySelectorAll(".pg-stop").forEach(b=>b.addEventListener("click",()=>{
+      const a=DB.animals.find(x=>x.id===b.dataset.a); if(!a) return;
+      const kept=(a.diary||[]).filter(e=>e.fromPlan===st.id&&diaryRowHasContent(e)).length;
+      if(!confirm(`Stop ${a.name}'s plan?`+(kept?` ${kept} entr${kept===1?"y":"ies"} already filled in will stay in its diary.`:" Nothing has been filled in, so its scheduled entries are removed.")))return;
+      stopPlanFor(st,a); persist(); paintPlan(); render();
+    }));
+  }
+  const planSel=document.getElementById("sm_plan");
+  if(planSel) planSel.addEventListener("change",e=>{
+    st.planId=e.target.value||null; persist(); paintPlan();
+  });
+  paintPlan();
 
   const save=()=>{
     st.title=document.getElementById("sm_name").value;
@@ -10927,6 +11246,88 @@ function renderMatSubTab(){
   else if(matSubTab === "viruses")  renderVirusLib();
   else if(matSubTab === "sites")    renderSiteLib();
   else if(matSubTab === "procedures") renderProcedureLib();
+  else if(matSubTab === "plans")      renderPlanLib();
+}
+
+/* ── PLANS (an experiment's pipeline, written once and run per animal) ──
+   The same shape as the entry-type and animal-field editors next door: a list
+   of rows, each naming a thing and what it records. Deliberately so — one
+   idea, learned once. */
+function renderPlanLib(){
+  const host=document.getElementById("ms-plans"); if(!host) return;
+  const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
+  const BTNS="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer";
+  const typeOpts=st=>[`<option value="procedure" ${st.type==="procedure"?"selected":""}>🔪 Procedure (the animal's own surgery record)</option>`]
+    .concat(allDiaryTypeDefs().map(d=>`<option value="${escAttr(d.key)}" ${st.type===d.key?"selected":""}>${esc(d.icon||"🔖")} ${esc(d.label)}${d.fromShared?" (shared)":""}</option>`)).join("");
+  const draw=()=>{
+    const plans=planList();
+    host.innerHTML=`
+      <div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-bottom:14px;line-height:1.6;max-width:70ch">
+        A plan is a pipeline an experiment runs on each of its animals — lever behaviour, two-photon,
+        behaviour, histology. Each stage says what you record when you do it and how many days after the
+        previous stage it falls. An experiment picks a plan; an animal gets its dates when you start it.</div>
+      ${plans.map((pl,pi)=>`
+        <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+            <input class="pl_name" data-pi="${pi}" value="${escAttr(pl.name||"")}" placeholder="Plan name (e.g. Imaging pipeline)" style="flex:1;min-width:160px;${IST}">
+            <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim)"
+              title="With this off, a gap of 3 days means 3 working days, and no stage is ever left on a Saturday">
+              <input type="checkbox" class="pl_weekends" data-pi="${pi}" style="width:auto" ${pl.skipWeekends?"":"checked"}> include weekends</label>
+            <button class="pl_del" data-pi="${pi}" style="${BTNS};color:var(--overdue)">✕ plan</button>
+          </div>
+          <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:7px">Stages, in order</div>
+          ${planStages(pl).map((st,si)=>`
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+              <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 18px">${si+1}</span>
+              <input class="pl_slabel" data-pi="${pi}" data-si="${si}" value="${escAttr(st.label||"")}" placeholder="Stage name" style="flex:1;min-width:120px;${IST}">
+              <select class="pl_stype" data-pi="${pi}" data-si="${si}" style="${IST};flex:0 1 auto;max-width:240px">${typeOpts(st)}</select>
+              <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)">
+                <input type="number" class="pl_safter" data-pi="${pi}" data-si="${si}" min="0" step="1" value="${si===0?0:stageGap(st)}"
+                  ${si===0?"disabled title=\"The first stage lands on the day you start the animal\"":""} style="width:52px;${IST};padding:4px 6px">
+                ${si===0?"on day 0":"days after"}</label>
+              <button class="pl_sup" data-pi="${pi}" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===0?"disabled":""} title="Move up">↑</button>
+              <button class="pl_sdown" data-pi="${pi}" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===planStages(pl).length-1?"disabled":""} title="Move down">↓</button>
+              <button class="pl_sdel" data-pi="${pi}" data-si="${si}" style="${BTNS};padding:2px 7px;color:var(--overdue)">✕</button>
+            </div>`).join("")||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">No stages yet.</div>`}
+          <button class="pl_sadd" data-pi="${pi}" style="${BTNS}">＋ add stage</button>
+          ${planStages(pl).length?`<div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:9px">
+            Starting an animal on a Thursday would give: ${esc(planSchedule(pl,"2026-11-05").map((x,i)=>`${i+1}. ${fmtDMY(x.date)}`).join("  ·  "))}</div>`:""}
+        </div>`).join("")||`<div class="empty-box">No plans yet — add one below.</div>`}
+      <button id="pl_add" class="btn ghost">＋ Plan</button>`;
+  };
+  draw();
+  const at=ds=>planList()[+ds.pi];
+  const stAt=ds=>planStages(at(ds))[+ds.si];
+  host.addEventListener("input",e=>{
+    const el=e.target, ds=el.dataset;
+    if(el.classList.contains("pl_name")){ at(ds).name=el.value; persist(); return; }
+    if(el.classList.contains("pl_slabel")){ stAt(ds).label=el.value; persist(); return; }
+    if(el.classList.contains("pl_safter")){ stAt(ds).after=Math.max(0,+el.value||0); persist(); draw(); return; }
+  });
+  host.addEventListener("change",e=>{
+    const el=e.target, ds=el.dataset;
+    if(el.classList.contains("pl_stype")){ stAt(ds).type=el.value; persist(); return; }
+    if(el.classList.contains("pl_weekends")){ at(ds).skipWeekends=!el.checked; persist(); draw(); return; }
+  });
+  host.addEventListener("click",e=>{
+    const b=e.target.closest("button"); if(!b) return;
+    const ds=b.dataset;
+    if(b.id==="pl_add"){ planList().push({id:uid("pl_"),name:"",skipWeekends:false,stages:[]}); persist(); draw(); return; }
+    if(b.classList.contains("pl_del")){
+      const pl=at(ds);
+      const running=(DB.experiments||[]).filter(ex=>ex.planId===pl.id&&planRunningAnimals(ex).length);
+      if(running.length&&!confirm(`${pl.name||"This plan"} is running on animals in ${running.length} experiment${running.length===1?"":"s"}. Delete it anyway? Their scheduled entries stay where they are.`))return;
+      DB.plans=planList().filter(x=>x!==pl); persist(); draw(); return; }
+    if(b.classList.contains("pl_sadd")){
+      const pl=at(ds); pl.stages=planStages(pl).concat([{id:uid("s_"),label:"",type:"procedure",after:1}]);
+      persist(); draw(); return; }
+    if(b.classList.contains("pl_sdel")){
+      const pl=at(ds); pl.stages=planStages(pl).filter((_,i)=>i!==+ds.si); persist(); draw(); return; }
+    if(b.classList.contains("pl_sup")||b.classList.contains("pl_sdown")){
+      const pl=at(ds), i=+ds.si, j=b.classList.contains("pl_sup")?i-1:i+1;
+      const list=planStages(pl); if(j<0||j>=list.length)return;
+      [list[i],list[j]]=[list[j],list[i]]; persist(); draw(); return; }
+  });
 }
 
 /* ── INVENTORY ─────────────────────────────────────────────────────────────── */
