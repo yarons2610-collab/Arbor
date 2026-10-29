@@ -156,6 +156,7 @@ class Workspace:
         self.experiments = db.get("experiments") or []
         self.projects = db.get("projects") or []
         self.schedule = db.get("schedule") or []
+        self.plans = db.get("plans") or []
         self.notes = db.get("notes") or []
         self.config = db.get("config") or {}
         self.proj_by_id = {p["id"]: p for p in self.projects if p.get("id")}
@@ -266,16 +267,31 @@ class Workspace:
         t = self.diary_types.get(key)
         return (t or {}).get("label") or (key or "").title()
 
-    def task_title(self, task_id):
-        """The task whose round an entry belongs to, if it still exists. The
-        Timeline shows that one task in place of every entry under it, so the
-        sheet is the only place the grouping can be read back."""
-        if not task_id:
+    def belongs_to(self, e):
+        """What an entry belongs to, when it was not written by hand: the task
+        whose round it is part of, or the experiment stage that scheduled it.
+        The app says the same sentence from diaryBelongsTo; a sheet that only
+        knew about rounds left every planned stage blank."""
+        tid = e.get("fromTask")
+        if tid:
+            for t in self.schedule:
+                if t.get("id") == tid:
+                    return t.get("title") or ""
             return ""
-        for t in self.schedule:
-            if t.get("id") == task_id:
-                return t.get("title") or ""
-        return ""
+        pid = e.get("fromPlan")
+        if not pid:
+            return ""
+        ex = next((x for x in self.experiments if x.get("id") == pid), None)
+        if not ex:
+            return ""
+        wanted = e.get("planStage")
+        plan_ids = [ex.get("planId")] + [g.get("planId") for g in (ex.get("groupDefs") or [])]
+        for plid in [p for p in plan_ids if p]:
+            pl = next((p for p in self.plans if p.get("id") == plid), None)
+            for st in ((pl or {}).get("stages") or []):
+                if st.get("id") == wanted:
+                    return f"{ex.get('title') or 'experiment'} > {st.get('label') or ''}".strip()
+        return ex.get("title") or ""
 
     def diary_detail(self, e):
         """The entry's own fields, as 'Label: value' pairs — the same fields the
@@ -593,7 +609,7 @@ def build_sheets(w):
                 a.get("name") or "", e.get("date") or "", e.get("time") or "",
                 e.get("endTime") or "", w.diary_label(e.get("type")),
                 w.diary_detail(e), yes(e.get("done")),
-                w.task_title(e.get("fromTask")),
+                w.belongs_to(e),
                 ms_to_dt(e.get("created")),
             ])
     sheets.append(Sheet(

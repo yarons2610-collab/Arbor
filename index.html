@@ -2778,8 +2778,15 @@ function leakCheck(file,pr){
     if(x.id&&!sharedIds.has(x.id)&&!elsewhere(coll,x)) privateIds.push([coll,x]); }));
   (DB.animals||[]).forEach(a=>(a.diary||[]).forEach(e=>{
     if(e.id&&!sharedIds.has(e.id)&&!elsewhere("diary",e,a)) privateIds.push(["diary",e]); }));
+  /* Looked for both as a value of its own and anywhere inside the text. The
+     quoted form alone caught an id placed structurally — in a link, a group
+     map, a roster — but not one sitting inside a sentence, so an id pasted or
+     built into a note travelled unchallenged. An id is a long random string
+     with a device stamp in it, so the unquoted search costs no false
+     positives, and the two together mean placement no longer decides whether
+     the guard looks. */
   privateIds.forEach(([coll,x])=>{
-    if(json.includes('"'+x.id+'"'))
+    if(json.includes('"'+x.id+'"')||json.includes(x.id))
       problems.push(`the id of a private ${SHARE_ONE[coll]||coll} (${x.name||x.title||x.id}) appears in the file`);
   });
   // and no long run of a private record's own words
@@ -3073,13 +3080,18 @@ function mergeOwnedList(rList,mList,keyOf,fallbackOwner){
 }
 function mergeDefs(remote,mine){
   const R=remote||{},M=mine||{},fb=R.by;
-  return {by:R.by||meId(),
-    diaryTypes:mergeOwnedList(R.diaryTypes,M.diaryTypes,t=>t.key,fb),
-    // left out here, these would survive the first write and vanish on the next
-    plans:mergeOwnedList(R.plans,M.plans,x=>x.id,fb),
-    animalSections:mergeOwnedList(R.animalSections,M.animalSections,x=>x.id,fb),
+  /* Driven by DEF_KINDS rather than written out: a kind left out of this list
+     survives the first write and vanishes on the next, which is exactly what
+     happened to plans. Reading the registry means a kind cannot be added to
+     the app and forgotten here. Viruses and sites are not definitions in that
+     sense — they are library records keyed by name — so they stay explicit. */
+  const out={by:R.by||meId(),
     viruses:mergeOwnedList(R.viruses,M.viruses,v=>v.name,fb),
     sites:mergeOwnedList(R.sites,M.sites,x=>x.name,fb)};
+  Object.values(DEF_KINDS).forEach(K=>{
+    out[K.defsKey]=mergeOwnedList(R[K.defsKey],M[K.defsKey],K.idOf,fb);
+  });
+  return out;
 }
 function mergeLibraries(remote,mine){
   const R=remote||{},M=mine||{},out={};
@@ -6385,10 +6397,9 @@ function upcomingNotifications(wantEvents){
   if(wantEvents) return {tasks,diaryItems:[]};
   const diaryLookback=addDays(today,-NOTIFY_DIARY_LOOKAHEAD_DAYS);
   const diaryHorizon=addDays(today,NOTIFY_DIARY_LOOKAHEAD_DAYS);
-  const timelineTypeKeys=new Set(diaryTypeDefs().filter(d=>d.timeline).map(d=>d.key));
   const diaryItems=[];
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(!timelineTypeKeys.has(e.type)||e.done||coveredByTask(e))return;
+    if(!diaryDrawsOnTimeline(e)||e.done)return;
     if(e.date>=diaryLookback&&e.date<=diaryHorizon) diaryItems.push({a,e});
   }));
   diaryItems.sort((x,y)=>x.e.date.localeCompare(y.e.date));
@@ -10014,9 +10025,8 @@ function calSearchHits(q){
     hits.push({icon:t.isEvent?"◆":"◻",title:t.title||"(unnamed)",when,
       flashKey:t.id+"@"+when});
   });
-  const timelineKeys=new Set(diaryTypeDefs().filter(d=>d.timeline).map(d=>d.key));
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(!timelineKeys.has(e.type))return;
+    if(!diaryIsSearchable(e))return;
     const def=diaryTypeDef(e.type);
     if(!hit(a.name)&&!hit(def.label)&&!hit(diaryNoteOf(e.data||{})))return;
     hits.push({icon:def.icon||"✎",title:`${a.name} — ${def.label}`,
@@ -10307,7 +10317,7 @@ function renderMonthView(host){
   const hdrRow=document.createElement("div"); hdrRow.className="month-hdr-row"; body.appendChild(hdrRow);
   DAYS.forEach(d=>hdrRow.appendChild(Object.assign(document.createElement("div"),{className:"cal-day-hdr",innerHTML:`<div class="dow">${d}</div>`})));
 
-  const keys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
+
   const pad=n=>String(n).padStart(2,"0");
   const dkey=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
   const gEnd=new Date(gridStart); gEnd.setDate(gEnd.getDate()+41);
@@ -10329,7 +10339,7 @@ function renderMonthView(host){
     weeks[weekIdx].push({...item,colStart,span:Math.min(span,7-colStart)});
   };
   if(calFilterOn("diary")) DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(!keys.has(e.type)||coveredByTask(e))return;
+    if(!diaryDrawsOnTimeline(e))return;
     const d=whenDate(e.date); d.setHours(0,0,0,0);
     place(Math.round((d-gridStart)/864e5),1,{kind:"diary",a,e});
   }));
@@ -10617,12 +10627,11 @@ function renderTimeline(){
   // chip; one with a time renders in the hourly grid at that time, same as a
   // timed task (see diaryTimedEvents below). A future-dated entry reads as a
   // planned/scheduled procedure rather than a completed one either way.
-  const timelineTypeKeys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
   const today0=todayDateStr();
   const diaryTimedEvents=[]; // {an,e,def,isFuture} - rendered into the hourly grid further down
   if(calFilterOn("diary")) DB.animals.forEach(an=>{
     (an.diary||[]).forEach(e=>{
-      if(!timelineTypeKeys.has(e.type)||coveredByTask(e))return;
+      if(!diaryDrawsOnTimeline(e))return;
       const day=new Date(e.date+"T00:00:00");
       const d=Math.round((day-ws)/864e5);
       if(d<0||d>=NCOL)return;
@@ -11545,6 +11554,7 @@ function renderPlanLib(){
           <div class="pl_body" data-pi="${pi}"></div>
           ${planUsedByHTML(pl)}
         </div>`).join("")||`<div class="empty-box">No plans yet — make one here, or inside an experiment.</div>`}
+      ${offerHTML(sharedOffered("plan"),"plan")}
       <button id="pl_add" class="btn ghost">＋ Plan</button>`;
     host.querySelectorAll(".pl_body").forEach(b=>mountPlanEditor(b,planList()[+b.dataset.pi],()=>{}));
   };
@@ -11552,6 +11562,9 @@ function renderPlanLib(){
   host.addEventListener("click",e=>{
     const b=e.target.closest("button"); if(!b) return;
     if(b.id==="pl_add"){ addPlan(""); draw(); return; }
+    if(b.classList.contains("af-take")){
+      const row=sharedOffered("plan").find(r=>DEF_KINDS.plan.idOf(r.obj)===b.dataset.id); if(!row)return;
+      adoptShared("plan",row.obj); draw(); toast("Plan copied into your library"); return; }
     if(b.classList.contains("pl_del")){
       const pl=planList()[+b.dataset.pi];
       const users=planUsers(pl);
@@ -12159,48 +12172,81 @@ function animalSections(){ return Array.isArray(DB.config.animalSections)?DB.con
    is what lets you use the same shape on animals of your own — and it keeps
    the ids and keys, so the two of you are recording the same thing rather than
    two things that happen to share a name. */
-function sharedSectionsOffered(){
-  const have=new Set(animalSections().map(x=>x.id));
+/* ---- the definition registry ----
+   A "definition" is something written once and used on many records: an entry
+   type, a section of the animal window, a plan. Each one has to be named in
+   several places that have nothing to do with each other — what travels to a
+   shared project, what survives a merge, how a borrowed one is read, and how a
+   collaborator takes a copy — and a kind left out of any single one of them
+   fails quietly and differently. Plans were added and reached three of those
+   four; nobody could take a copy of one, and nothing said so.
+   So the kinds are described once, here, and the machinery reads this table.
+   Adding a kind is one entry rather than six edits in six functions. */
+const DEF_KINDS={
+  type:{
+    noun:"entry type", defsKey:"diaryTypes",
+    list:()=>DB.config.diaryTypes||(DB.config.diaryTypes=[]),
+    idOf:x=>x.key,
+    // a borrowed type must not claim to be one of the built-ins
+    clean:c=>{ delete c.core; },
+    countOf:x=>(x.fields||[]).length, countNoun:"field"
+  },
+  section:{
+    noun:"animal section", defsKey:"animalSections",
+    list:()=>animalSections(),
+    idOf:x=>x.id,
+    // an empty section says nothing, so it is never offered
+    offerable:x=>(x.fields||[]).length>0,
+    countOf:x=>(x.fields||[]).length, countNoun:"field"
+  },
+  plan:{
+    noun:"plan", defsKey:"plans",
+    list:()=>planList(),
+    idOf:x=>x.id,
+    offerable:x=>planStages(x).length>0,
+    countOf:x=>planStages(x).length, countNoun:"stage"
+  }
+};
+// Definitions a shared project is showing that this workspace does not have.
+function sharedOffered(kind){
+  const K=DEF_KINDS[kind]; if(!K) return [];
+  const have=new Set(K.list().map(K.idOf));
   const out=[], seen=new Set();
   Object.keys(DB.sharedDefs||{}).forEach(sp=>
-    ((DB.sharedDefs[sp]||{}).animalSections||[]).forEach(sec=>{
-      if(!sec||!sec.id||have.has(sec.id)||seen.has(sec.id))return;
-      if(!(sec.fields||[]).length)return;
-      seen.add(sec.id); out.push({sec,by:sec.by});
-    }));
-  return out;
-}
-function sharedTypesOffered(){
-  const have=new Set((DB.config.diaryTypes||[]).map(t=>t.key));
-  const out=[], seen=new Set();
-  Object.keys(DB.sharedDefs||{}).forEach(sp=>
-    ((DB.sharedDefs[sp]||{}).diaryTypes||[]).forEach(t=>{
-      if(!t||!t.key||have.has(t.key)||seen.has(t.key))return;
-      seen.add(t.key); out.push({type:t,by:t.by});
+    ((DB.sharedDefs[sp]||{})[K.defsKey]||[]).forEach(x=>{
+      if(!x) return;
+      const id=K.idOf(x);
+      if(!id||have.has(id)||seen.has(id)) return;
+      if(K.offerable&&!K.offerable(x)) return;
+      seen.add(id); out.push({obj:x,by:x.by});
     }));
   return out;
 }
 function adoptShared(kind,obj){
+  const K=DEF_KINDS[kind]; if(!K) return null;
   const copy=JSON.parse(JSON.stringify(obj));
   delete copy.by; delete copy.fromShared;
-  if(kind==="section"){ DB.config.animalSections=animalSections().concat([copy]); }
-  else { delete copy.core; (DB.config.diaryTypes=DB.config.diaryTypes||[]).push(copy); }
+  if(K.clean) K.clean(copy);
+  // the id is kept deliberately: taking a copy means recording the same thing
+  // they are, not a second thing that happens to share a name
+  K.list().push(copy);
   persist();
   return copy;
 }
 function whoMade(by){ const m=by?memberOf(by):null; return (m&&m.name)||"a collaborator"; }
 function offerHTML(rows,kind){
   if(!rows.length) return "";
+  const K=DEF_KINDS[kind];
   return `<div class="af-offer">
     <div class="af-offer-h">From a shared project</div>
     ${rows.map(r=>{
-      const o=kind==="section"?r.sec:r.type;
-      const n=(o.fields||[]).length;
+      const o=r.obj;
+      const n=K.countOf(o);
       return `<div class="af-offer-row">
-        <span><b>${esc(o.label||"(unnamed)")}</b>
-          <span class="af-sub">${whoMade(r.by)}'s — ${n} field${n===1?"":"s"}.
-            You can already read it on their animals; take a copy to use it on your own.</span></span>
-        <button type="button" class="af-take" data-kind="${kind}" data-id="${escAttr(kind==="section"?o.id:o.key)}">Use this in my Arbor</button>
+        <span><b>${esc(o.label||o.name||"(unnamed)")}</b>
+          <span class="af-sub">${whoMade(r.by)}'s — ${n} ${K.countNoun}${n===1?"":"s"}.
+            You can already read it where they use it; take a copy to use it yourself.</span></span>
+        <button type="button" class="af-take" data-kind="${kind}" data-id="${escAttr(K.idOf(o))}">Use this in my Arbor</button>
       </div>`;}).join("")}
   </div>`;
 }
@@ -12250,7 +12296,7 @@ function renderAnimalFieldsLib(host){
             behavioural and practice animals is actually told apart. Nothing recorded is ever lost
             by hiding a section.</span></span></label>
     </div>
-    ${offerHTML(sharedSectionsOffered(),"section")}
+    ${offerHTML(sharedOffered("section"),"section")}
     <div id="afl_secs">${secs.map((sec,i)=>`
       <div class="af-sec">
         <div class="af-sec-top">
@@ -12314,8 +12360,8 @@ function renderAnimalFieldsLib(host){
   host.addEventListener("click",e=>{
     const t=e.target, ds=t.dataset;
     if(t.classList.contains("af-take")){
-      const row=sharedSectionsOffered().find(r=>r.sec.id===ds.id); if(!row)return;
-      adoptShared("section",row.sec);
+      const row=sharedOffered("section").find(r=>DEF_KINDS.section.idOf(r.obj)===ds.id); if(!row)return;
+      adoptShared("section",row.obj);
       toast(`"${row.sec.label||"Section"}" is yours to use now`);
       redraw(); return;
     }
@@ -12377,11 +12423,8 @@ function readAnimalSections(host,a){
       return;
     }
     const el=host.querySelector(`.dg-field[data-key="${CSS.escape(f.key)}"]`); if(!el)return;
-    const raw=el.value;
-    if(f.type==="yesno"){ if(raw==="")delete out[f.key]; else out[f.key]=raw==="1"; return; }
-    if(f.type==="number"){ const t=raw.trim(); if(t===""){delete out[f.key];return;}
-      const n=parseFloat(t.replace(",",".")); if(!isNaN(n))out[f.key]=n; return; }
-    if(raw.trim()==="")delete out[f.key]; else out[f.key]=raw.trim();
+    const v=readFieldValue(el,f,FIELD_ABSENT);
+    if(v===FIELD_ABSENT) delete out[f.key]; else out[f.key]=v;
   }));
   return out;
 }
@@ -12419,10 +12462,10 @@ function renderDiaryTypesLib(hostEl){
      same time as the sections' version and then, like it, left unwired. */
   const offerHost=document.createElement("div");
   const paintOffer=()=>{
-    offerHost.innerHTML=offerHTML(sharedTypesOffered(),"type");
+    offerHost.innerHTML=offerHTML(sharedOffered("type"),"type");
     offerHost.querySelectorAll(".af-take").forEach(b=>b.onclick=()=>{
-      const row=sharedTypesOffered().find(r=>r.type.key===b.dataset.id); if(!row)return;
-      adoptShared("type",row.type);
+      const row=sharedOffered("type").find(r=>DEF_KINDS.type.idOf(r.obj)===b.dataset.id); if(!row)return;
+      adoptShared("type",row.obj);
       toast(`"${row.type.label||row.type.key}" is yours to use now`);
       paintOffer(); paintDTRows();
     });
@@ -12441,7 +12484,7 @@ function renderDiaryTypesLib(hostEl){
     return `logged today → ${days.join(", ")}${count>4?` … (${count} in all)`:""}`;
   }
   function relatedHTML(t,i){
-    const opts=sel=>diaryTypeDefs().map(x=>`<option value="${escAttr(x.key)}" ${x.key===sel?"selected":""}>${esc(x.icon||"")} ${esc(x.label||"(unnamed)")}</option>`).join("");
+    const opts=sel=>allDiaryTypeDefs().map(x=>`<option value="${escAttr(x.key)}" ${x.key===sel?"selected":""}>${esc(x.icon||"")} ${esc(x.label||"(unnamed)")}</option>`).join("");
     // Spelled out rather than crammed into labels: the row says what it does,
     // and the line under it shows the actual dates the rule would book for an
     // entry logged today — which is the only thing that settles "every 1 day,
@@ -13692,7 +13735,7 @@ function condLabel(c){
   return `${d?d.label:c.type} · ${f?f.label:c.field} ${op}${ft==="yesno"?"":" "+c.value}`;
 }
 function openCondModal(after){
-  const types=diaryTypeDefs();
+  const types=allDiaryTypeDefs();
   if(!types.length){ toast("No entry types defined yet"); return; }
   const draw=()=>{
     const tKey=document.getElementById("cnd_type")?.value||types[0].key;
@@ -13819,6 +13862,39 @@ function allDiaryTypeDefs(){
     }));
   return out.sort((a,b)=>(a.label||"").localeCompare(b.label||""));
 }
+/* Whether an entry belongs on the Timeline, asked in one place.
+   Five render paths each rebuilt this rule from `diaryTypeDefs()`, which lists
+   only THIS workspace's types — so an entry of a type read from a shared
+   project drew nowhere, although it read correctly everywhere else. The same
+   entry appeared or vanished depending on whose library happened to hold its
+   definition. diaryTypeDef() resolves a borrowed type, so asking it once fixes
+   every caller and leaves one place for the rule to change. */
+/* What an entry belongs to, when it was not written by hand: the task whose
+   round it is part of, or the experiment stage that scheduled it. Said once,
+   because both exporters and the animal's own diary want the same sentence and
+   a second copy would have drifted the moment a third kind appeared. */
+function diaryBelongsTo(e){
+  if(!e) return "";
+  if(coveredByTask(e)) return (taskOf(e.fromTask)||{}).title||"";
+  if(e.fromPlan){
+    const ex=(DB.experiments||[]).find(x=>x.id===e.fromPlan);
+    if(!ex) return "";
+    const stage=e.planStage;
+    let label="";
+    experimentPlanIds(ex).forEach(pid=>{
+      const st=planStages(planById(pid)).find(x=>x.id===stage);
+      if(st&&!label) label=st.label||"";
+    });
+    return label?`${ex.title||"experiment"} › ${label}`:(ex.title||"");
+  }
+  return "";
+}
+function diaryDrawsOnTimeline(e){
+  return !!(e && diaryTypeDef(e.type).timeline && !coveredByTask(e));
+}
+// Searching is not drawing: a round's entries are hidden from the Timeline
+// because their task stands in for them, but they must still be findable.
+function diaryIsSearchable(e){ return !!(e && diaryTypeDef(e.type).timeline); }
 function diaryTypeDef(key){
   return diaryTypeDefs().find(t=>t.key===key) || sharedDefType(key)
     || {key,label:key||"—",icon:"❔",color:"var(--ink-faint)",timeline:false,fields:[]};
@@ -14056,6 +14132,35 @@ function wireTableFieldBox(box,f,animal){
    Timeline's own entry form, and the animal editor — and a task that covers
    animals needs it once per animal in the round, scoped to that animal's own
    row. One reader, so a new field type has one place to be understood. */
+/* How one field type turns what is on screen into a stored value. Three
+   readers each had their own copy of this ladder — the diary form, the
+   Timeline's entry form, and the animal window — so a new field type had to be
+   understood in three places and a rule fixed in one stayed wrong in the
+   others. `missing` says what an emptied box means: absent for a new value,
+   and a deletion where the reader is editing a record that already has one. */
+function readFieldValue(el,f,missing){
+  const raw=el.value;
+  if(f.type==="yesno") return raw===""?missing:(raw==="1");
+  if(f.type==="number"){
+    const t=raw.trim(); if(t==="") return missing;
+    const n=parseFloat(t.replace(",",".")); return isNaN(n)?missing:n;
+  }
+  const t=raw.trim();
+  return t===""?missing:t;
+}
+const FIELD_ABSENT=Symbol("absent");
+/* A training entry's metrics come from the behavioural task's own parameter
+   list rather than from an entry type's fields, so they carry their type on the
+   element instead of in a definition — but they are read by the very same
+   ladder, and had the very same copy of it in two places. */
+function readMetricFields(host){
+  const out={};
+  host.querySelectorAll(".dg-metric-field").forEach(el=>{
+    const v=readFieldValue(el,{type:el.dataset.type},FIELD_ABSENT);
+    if(v!==FIELD_ABSENT) out[el.dataset.key]=v;
+  });
+  return out;
+}
 function readTypeData(host,type,animal){
   const out={}, def=diaryTypeDef(type);
   (def.fields||[]).forEach(f=>{
@@ -14067,27 +14172,20 @@ function readTypeData(host,type,animal){
     }
     const el=[...host.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
     if(!el)return;
-    const raw=el.value;
-    if(f.type==="yesno"){ if(raw!=="")out[f.key]=raw==="1"; return; }
-    if(f.type==="number"){
-      if(raw.trim()==="")return;
-      const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))out[f.key]=n; return;
-    }
-    if(raw.trim()!=="")out[f.key]=raw.trim();
+    const v=readFieldValue(el,f,FIELD_ABSENT);
+    if(v!==FIELD_ABSENT) out[f.key]=v;
   });
   return out;
 }
 function readTableField(box,f,animal){
   const subs=(f.fields||[]).filter(sf=>sf&&sf.key);
   const pers=(f.per||[]).filter(sf=>sf&&sf.key);
+  // one ladder, as everywhere else — see readFieldValue
   const readInto=(el,sf,obj)=>{
     if(!el)return false;
-    const raw=el.value;
-    if(sf.type==="yesno"){ if(raw===""){ delete obj[sf.key]; return false; } obj[sf.key]=raw==="1"; return true; }
-    if(sf.type==="number"){ const t=raw.trim(); if(t===""){ delete obj[sf.key]; return false; }
-      const n=parseFloat(t.replace(",",".")); if(isNaN(n))return false; obj[sf.key]=n; return true; }
-    if(raw.trim()===""){ delete obj[sf.key]; return false; }
-    obj[sf.key]=raw.trim(); return true;
+    const v=readFieldValue(el,sf,FIELD_ABSENT);
+    if(v===FIELD_ABSENT){ delete obj[sf.key]; return false; }
+    obj[sf.key]=v; return true;
   };
   /* Anchored to the animal: the fixed columns are written back to the animal's
      own row, and what comes out is this entry's values keyed by row id — so an
@@ -14107,14 +14205,7 @@ function readTableField(box,f,animal){
   const out=[];
   box.querySelectorAll("tr.dg-trow").forEach(tr=>{
     const r={}; let any=false;
-    subs.forEach(sf=>{
-      const el=tr.querySelector(`.dg-sub[data-sub="${CSS.escape(sf.key)}"]`); if(!el)return;
-      const raw=el.value;
-      if(sf.type==="yesno"){ if(raw!==""){ r[sf.key]=raw==="1"; any=true; } return; }
-      if(sf.type==="number"){ const t=raw.trim(); if(t===""){return;}
-        const n=parseFloat(t.replace(",",".")); if(!isNaN(n)){ r[sf.key]=n; any=true; } return; }
-      if(raw.trim()!==""){ r[sf.key]=raw.trim(); any=true; }
-    });
+    subs.forEach(sf=>{ if(readInto(tr.querySelector(`.dg-sub[data-sub="${CSS.escape(sf.key)}"]`),sf,r)) any=true; });
     if(any) out.push(r);
   });
   return out;
@@ -14228,7 +14319,7 @@ function renderAnimals(){
       ${col("Excluded","a_excluded",animalExcluded,[["all","Either"],["no","Not excluded"],["yes","Excluded only"]])}
       ${col("Practice","a_practice",animalPractice,[["all","Either"],["no","Not practice"],["yes","Practice only"]])}
       ${col("Entry","a_entry",animalEntry,[["all","Any entry"],["none","No entries"],
-        ...diaryTypeDefs().map(d=>[d.key,`${d.icon||""} ${d.label}`.trim()])])}
+        ...allDiaryTypeDefs().map(d=>[d.key,`${d.icon||""} ${d.label}`.trim()])])}
     </div>
     <div class="acond-bar">
       ${animalConds.map((c,i)=>`<span class="acond" data-i="${i}">${esc(condLabel(c))}<button type="button" class="acond-x" data-i="${i}" title="Remove">✕</button></span>`).join("")}
@@ -14521,9 +14612,16 @@ function animalSummaryChoice(){
 // one entry per custom animal field this workspace defines, keyed apart from
 // the built-ins so a field called "cage" cannot collide with the real one
 function animalSummaryCustomFields(){
-  const out=[];
-  animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
-    if(f&&f.key) out.push({key:"cf:"+f.key, label:(sec.label?sec.label+" · ":"")+(f.label||f.key), f});
+  const out=[], seen=new Set();
+  // my own sections, plus any I am being shown from a shared project — the
+  // values are already on the animals, so refusing to list the fields only
+  // hid information this workspace can perfectly well read
+  const all=animalSections().concat(
+    Object.keys(DB.sharedDefs||{}).flatMap(sp=>((DB.sharedDefs[sp]||{}).animalSections||[])));
+  all.forEach(sec=>(sec.fields||[]).forEach(f=>{
+    if(!f||!f.key||seen.has(f.key))return;
+    seen.add(f.key);
+    out.push({key:"cf:"+f.key, label:(sec.label?sec.label+" · ":"")+(f.label||f.key), f});
   }));
   return out;
 }
@@ -14799,7 +14897,10 @@ function paintDiary(container,a,opts){
   })();
   let viewY=startD.getFullYear(), viewM=startD.getMonth();
   let selDate=todayDateStr();
-  let visibleTypes=new Set(diaryTypeDefs().map(t=>t.key));
+  // allDiaryTypeDefs, not diaryTypeDefs: an entry written against a shared
+  // project's own type would otherwise start hidden here, with the chip that
+  // would reveal it missing too
+  let visibleTypes=new Set(allDiaryTypeDefs().map(t=>t.key));
   let formType=null, editingId=null;
   if(opts.editId){
     const seed=a.diary.find(e=>e.id===opts.editId);
@@ -14941,14 +15042,7 @@ function paintDiary(container,a,opts){
         }
         // metrics fields are whatever this task's library definition currently
         // specifies (flexible per task) - read each by its stable param key
-        const metrics={};
-        host.querySelectorAll(".dg-metric-field").forEach(el=>{
-          const raw=el.value;
-          if(el.dataset.type==="yesno"){ if(raw!=="")metrics[el.dataset.key]=raw==="1"; return; }
-          if(el.dataset.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))metrics[el.dataset.key]=n; return; }
-          if(raw.trim()!=="")metrics[el.dataset.key]=raw.trim();
-        });
-        data={task:taskName, metrics};
+        data={task:taskName, metrics:readMetricFields(host)};
       } else {
         // generic field-driven types: read each of this type's defined
         // fields by its stable key, typed per the field's declared type
@@ -15065,7 +15159,7 @@ function paintDiary(container,a,opts){
         <span class="dn">${d}</span>${wv}${dots?`<span class="dg-dots">${dots}</span>`:""}</div>`;
     }
 
-    const typebar=`<button type="button" class="dg-typebtn" data-all="1">✓ All</button>`+diaryTypeDefs().map(t=>
+    const typebar=`<button type="button" class="dg-typebtn" data-all="1">✓ All</button>`+allDiaryTypeDefs().map(t=>
       `<button type="button" class="dg-typebtn ${visibleTypes.has(t.key)?"on":""}" data-t="${t.key}"><span style="width:6px;height:6px;border-radius:50%;background:${t.color};display:inline-block"></span>${t.icon} ${t.label}</button>`
     ).join("");
     const dayEntries=a.diary.filter(e=>e.date===selDate).sort((x,y)=>x.created-y.created);
@@ -15083,7 +15177,7 @@ function paintDiary(container,a,opts){
         <b style="font-size:11.5px">${selDate||"—"}</b>
         ${formType?"":`<select class="dg-addpick" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:3px 7px;font-size:11px">
           <option value="">＋ add entry…</option>
-          ${diaryTypeDefs().map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}
+          ${allDiaryTypeDefs().map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}
         </select>`}
       </div>
       <div class="dg-list">
@@ -15094,7 +15188,7 @@ function paintDiary(container,a,opts){
               <span>${diaryTypeDef(e.type).icon}</span>
               <span class="dg-esum" title="${escAttr(diaryEntrySummary(e,a))}">${esc(diaryEntrySummary(e,a))}</span>
               ${e.seriesId?`<span class="dg-rep" title="One of ${diarySeriesCount(a,e.seriesId)} repeating entries">↻</span>`:""}
-              ${coveredByTask(e)?`<button class="dg-round" data-id="${e.id}" title="Part of the task ${escAttr((taskOf(e.fromTask)||{}).title||"")} — open it">◉</button>`:""}
+              ${diaryBelongsTo(e)?`<button class="dg-round" data-id="${e.id}" title="${escAttr(diaryBelongsTo(e))} — open it">◉</button>`:""}
               <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
               <button class="dg-edit" data-id="${e.id}">✎</button>
               <button class="dg-del" data-id="${e.id}">✕</button>
@@ -15105,7 +15199,7 @@ function paintDiary(container,a,opts){
       </div>`;
 
     container.querySelectorAll(".dg-typebtn").forEach(b=>b.onclick=()=>{
-      if(b.dataset.all){ diaryTypeDefs().forEach(t=>visibleTypes.add(t.key)); draw(); return; }
+      if(b.dataset.all){ allDiaryTypeDefs().forEach(t=>visibleTypes.add(t.key)); draw(); return; }
       const t=b.dataset.t;
       if(visibleTypes.has(t))visibleTypes.delete(t); else visibleTypes.add(t);
       draw();
@@ -15169,6 +15263,13 @@ function paintDiary(container,a,opts){
     const roundBtn=e.target.closest(".dg-round");
     if(roundBtn){
       const entry=a.diary.find(x=>x.id===roundBtn.dataset.id); if(!entry)return;
+      // whichever scheduled it, the mark opens that thing — one gesture, so
+      // "where did this come from" has the same answer wherever you ask it
+      if(entry.fromPlan){
+        const ex=(DB.experiments||[]).find(x=>x.id===entry.fromPlan);
+        if(!ex){ toast("That experiment is gone"); return; }
+        closeModal(); experimentModal(ex,()=>render()); return;
+      }
       const t=taskOf(entry.fromTask); if(!t){ toast("That task is gone"); return; }
       // the occurrence this row belongs to, found by the round id its key holds
       const when=Object.keys(taskRosterMap(t)).find(k=>(rosterSlot(t,k)||{}).rid===entry.fromOcc);
@@ -16651,7 +16752,7 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
 
   function paintDiary(){
     if(!animals.length){ body.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:10px 0">No animals yet — add one on the Animals tab first.</div>`; return; }
-    const types=diaryTypeDefs();
+    const types=allDiaryTypeDefs();
     body.innerHTML=`
       <div class="drow">
         <div class="fld" style="flex:1"><label>Animal</label>
@@ -16736,31 +16837,9 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
       let data={};
       if(type==="training"){
         const taskName=document.getElementById("tc_task").value.trim();
-        const metrics={};
-        fieldsHost.querySelectorAll(".dg-metric-field").forEach(el=>{
-          const raw=el.value;
-          if(el.dataset.type==="yesno"){ if(raw!=="")metrics[el.dataset.key]=raw==="1"; return; }
-          if(el.dataset.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))metrics[el.dataset.key]=n; return; }
-          if(raw.trim()!=="")metrics[el.dataset.key]=raw.trim();
-        });
-        data={task:taskName, metrics};
+        data={task:taskName, metrics:readMetricFields(fieldsHost)};
       } else {
-        const def=diaryTypeDef(type);
-        def.fields.forEach(f=>{
-          if(f.type==="table"){
-            const box=[...fieldsHost.querySelectorAll(".dg-table")].find(x=>x.dataset.key===f.key);
-            if(box){ const an=DB.animals.find(x=>x.id===animalId);
-              const v=readTableField(box,f,an);
-              if(Array.isArray(v)?v.length:Object.keys(v).length) data[f.key]=v; }
-            return;
-          }
-          const el=[...fieldsHost.querySelectorAll(".dg-field")].find(x=>x.dataset.key===f.key);
-          if(!el)return;
-          const raw=el.value;
-          if(f.type==="yesno"){ if(raw!=="")data[f.key]=raw==="1"; return; }
-          if(f.type==="number"){ if(raw.trim()==="")return; const n=parseFloat(raw.trim().replace(",",".")); if(!isNaN(n))data[f.key]=n; return; }
-          if(raw.trim()!=="")data[f.key]=raw.trim();
-        });
+        data=readTypeData(fieldsHost,type,DB.animals.find(x=>x.id===animalId));
       }
       data.note=document.getElementById("tc_note").value.trim();
       const rep=readDiaryRepeat(document,"tc");
@@ -16918,10 +16997,9 @@ document.getElementById("expCal").addEventListener("click",()=>{
       .map(o=>({id:`${t.id}-${o.when}`,title:t.title,deadline:o.when,endDate:o.endDate,
                 duration:t.duration,notes:t.notes,status:t.status})))
   ];
-  const timelineTypeKeys=new Set(diaryTypeDefs().filter(t=>t.timeline).map(t=>t.key));
   const diaryEvents=[];
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(timelineTypeKeys.has(e.type)&&!coveredByTask(e)) diaryEvents.push({a,e}); }));
+    if(diaryDrawsOnTimeline(e)) diaryEvents.push({a,e}); }));
   if(!due.length && !diaryEvents.length){ toast("No scheduled tasks or timeline entries"); return; }
   const pad=n=>String(n).padStart(2,"0"), stamp=new Date().toISOString().replace(/[-:]/g,"").split(".")[0]+"Z";
   const esc2=s=>(s||"").replace(/[\\;,]/g,m=>"\\"+m).replace(/\n/g,"\\n");
@@ -17512,7 +17590,7 @@ function exportFullDatabaseExcel(){
   // is where the grouping is otherwise invisible
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>diary.push([a.name||"",e.date||"",e.time||"",e.endTime||"",
     diaryTypeDef(e.type).label,noTime(e,a),yes(e.done),e.seriesRule?repeatLabel(e.seriesRule,e.date)||"Yes":"",
-    coveredByTask(e)?((taskOf(e.fromTask)||{}).title||""):"",stamp(e.created)])));
+    diaryBelongsTo(e),stamp(e.created)])));
 
   const inj=[];
   DB.animals.forEach(a=>(a.surgeryDetail&&a.surgeryDetail.injections||[]).forEach((x,i)=>{
