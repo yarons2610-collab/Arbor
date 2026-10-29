@@ -181,6 +181,7 @@
   .dd-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--ink-dim);border-radius:8px;padding:7px 9px;font-size:12.5px;cursor:pointer}
   .dd-row:hover{background:var(--panel)}
   .dd-row.on{color:var(--ink);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
+  .dd-head{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);padding:7px 9px 3px;letter-spacing:.04em}
   .dd-check{cursor:pointer}
   /* sharing: green means it leaves this device, magenta means it does not */
   .share-row .share-seg{margin-bottom:4px}
@@ -2004,7 +2005,8 @@ function changedHere(base,coll,id,obj){
    the calendar jumping zoom while being read. Kept here instead, and put back
    over whatever a pull brings in. */
 const LOCAL_VIEW_KEYS=["calMode","calFilters","calAlldayCollapsed","topCollapsed",
-  "animalFilters","notesFilter","notesSort","notesView","notesGroup","matSubTab","calZoom","colourByAuthor","expTaskSort","expTaskGroup","expViewBy"];
+  "animalFilters","notesFilter","notesSort","notesView","notesGroup","matSubTab","calZoom","colourByAuthor","expTaskSort","expTaskGroup","expViewBy",
+  "animalSummary"];
 const VIEW_STATE_KEY="arbor_view_state";
 function saveLocalView(){
   try{
@@ -6149,7 +6151,11 @@ function openCheckDropdown(anchor, items, isChecked, onToggle){
   closeListDropdown(); closeCalendar(); closeEmojiPicker();
   const pop=document.createElement("div"); pop.className="dd-pop";
   function draw(){
-    pop.innerHTML=items.map(it=>`<label class="dd-row dd-check" title="${escAttr(it.title||it.label)}"><input type="checkbox" data-k="${escAttr(it.key)}" ${isChecked(it.key)?"checked":""}><span>${esc(it.label)}</span></label>`).join("");
+    // an item with `head` is a label over the group below it, not a choice —
+    // what makes a list of a dozen facts plus a lab's own fields readable
+    pop.innerHTML=items.map(it=>it.head
+      ? `<div class="dd-head">${esc(it.head)}</div>`
+      : `<label class="dd-row dd-check" title="${escAttr(it.title||it.label)}"><input type="checkbox" data-k="${escAttr(it.key)}" ${isChecked(it.key)?"checked":""}><span>${esc(it.label)}</span></label>`).join("");
   }
   draw();
   pop.addEventListener("change",ev=>{
@@ -13550,6 +13556,8 @@ function renderAnimals(){
       <div class="af-sortbar"><span class="af-label af-sort">▦<span class="af-word"> Show as</span></span>
         <select id="a_groupby" class="af-sel af-sort">${[["none","List"],["cage","Cages"]]
           .map(o=>`<option value="${o[0]}" ${animalGroupBy===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
+        <button id="a_summary" class="af-sel af-sort" title="Which facts appear in the grey line beside each animal"
+          style="cursor:pointer;text-align:left">☰<span class="af-word"> Summary</span></button>
         <span class="af-label af-sort" style="margin-left:8px">↕<span class="af-word"> Sort by</span></span>
         <select id="a_sort" class="af-sel af-sort">${[["name","Name"],
           ["dob_asc","Born (earliest)"],["dob_desc","Born (latest)"],
@@ -13607,6 +13615,30 @@ function renderAnimals(){
   onPick("a_practice",v=>{ animalPractice=v; DB.config.animalFilters.practice=v; persist(); renderAnimals(); });
   onPick("a_entry",v=>{ animalEntry=v; DB.config.animalFilters.entry=v; persist(); renderAnimals(); });
   onPick("a_groupby",v=>{ animalGroupBy=v; DB.config.animalFilters.groupBy=v; persist(); renderAnimals(); });
+  /* Toggling redraws the list under the open popover, which would take the
+     popover's own anchor with it — so the choice is written and only the cards
+     are repainted, leaving the menu where it is to carry on choosing. */
+  const sumBtn=bar.querySelector("#a_summary");
+  if(sumBtn) sumBtn.addEventListener("click",()=>{
+    const items=[{head:"On the animal"}]
+      .concat(ANIMAL_SUMMARY_BUILTINS.map(b=>({key:b.id,label:b.label})));
+    const custom=animalSummaryCustomFields();
+    if(custom.length) items.push({head:"Your own fields"},...custom.map(c=>({key:c.key,label:c.label})));
+    openCheckDropdown(sumBtn,items,
+      k=>animalSummaryChoice().includes(k),
+      k=>{
+        const cur=animalSummaryChoice();
+        // kept in the order they are listed in, not the order they were
+        // ticked, so the line reads the same way every time
+        const order=items.filter(i=>i.key).map(i=>i.key);
+        const next=cur.includes(k)?cur.filter(x=>x!==k):[...cur,k];
+        DB.config.animalSummary=order.filter(x=>next.includes(x));
+        persist();
+        document.querySelectorAll("#animals .a-sum").forEach(el=>{
+          const a=DB.animals.find(x=>x.id===el.dataset.id); if(a) el.outerHTML=animalSummaryHTML(a)||`<span class="a-sum" data-id="${escAttr(a.id)}"></span>`;
+        });
+      });
+  });
   bar.querySelector("#a_search").addEventListener("input",e=>{
     const pos=e.target.selectionStart;
     animalSearch=e.target.value;
@@ -13807,6 +13839,70 @@ function renderAnimals(){
     });
   }
 }
+/* ---- the summary line on an animal's card ----
+   The grey strip beside an animal's name used to be five hard-coded facts.
+   Which five are worth seeing is a question about the colony in front of you —
+   a behavioural cohort wants strain and age, a surgical one wants the virus and
+   what it was aimed at, and a lab that records something of its own wants that.
+   So it is a choice, and it includes whatever fields this workspace added to
+   the animal window.
+
+   Device-local, like the other view settings (LOCAL_VIEW_KEYS): what one
+   person wants to read at a glance is not a fact about the colony, and a
+   collaborator should not inherit it. Nothing here is an action, so hiding a
+   fact hides no way of doing anything — see the rule that earned itself when a
+   device-local setting once made "+ Project" unreachable. */
+const ANIMAL_SUMMARY_BUILTINS=[
+  {id:"cage",      label:"Cage",          val:a=>a.cage||""},
+  {id:"sex",       label:"Sex",           val:a=>a.sex||""},
+  {id:"strain",    label:"Strain",        val:a=>a.strain||""},
+  {id:"age",       label:"Age in weeks",  val:a=>{const w=ageWeeks(a); return w!=null?w+"w":"";}},
+  {id:"weight",    label:"Latest weight", val:a=>{const w=latestWeight(a); return w!=null?"⚖ "+w+"g":"";}},
+  {id:"born",      label:"Born",          val:a=>a.dob?"🐭 "+fmtDMY(a.dob):""},
+  {id:"sacrificed",label:"Sacrificed",    val:a=>a.sacrificed?"✝ "+fmtDMY(a.sacrificed):""},
+  {id:"virus",     label:"Virus",         val:a=>a.virus||""},
+  {id:"targets",   label:"Targets",       val:a=>a.targets||""},
+  {id:"experiments",label:"Experiments",  val:a=>animalSteps(a.id).map(st=>st.title||"(unnamed)").join(", ")}
+];
+const ANIMAL_SUMMARY_DEFAULT=["cage","sex","strain","age","weight"];
+// Never chosen is not the same as chosen to be empty: an array that has been
+// saved is obeyed even when it holds nothing, the way a deleted field stays
+// deleted rather than being helpfully put back.
+function animalSummaryChoice(){
+  const v=DB.config&&DB.config.animalSummary;
+  return Array.isArray(v)?v:ANIMAL_SUMMARY_DEFAULT.slice();
+}
+// one entry per custom animal field this workspace defines, keyed apart from
+// the built-ins so a field called "cage" cannot collide with the real one
+function animalSummaryCustomFields(){
+  const out=[];
+  animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
+    if(f&&f.key) out.push({key:"cf:"+f.key, label:(sec.label?sec.label+" · ":"")+(f.label||f.key), f});
+  }));
+  return out;
+}
+function animalSummaryValue(a,id){
+  const b=ANIMAL_SUMMARY_BUILTINS.find(x=>x.id===id);
+  if(b) return b.val(a)||"";
+  if(id.slice(0,3)!=="cf:") return "";
+  const key=id.slice(3);
+  const def=animalSummaryCustomFields().find(x=>x.key===id);
+  const f=def&&def.f;
+  if(f&&f.type==="table"){
+    const n=((a.tables||{})[key]||[]).length;
+    return n?`${f.label||key}: ${n}`:"";
+  }
+  const v=(a.custom||{})[key];
+  if(v==null||v==="") return "";
+  if(f&&f.type==="yesno") return (f.label||key)+": "+(v?"Yes":"No");
+  return (f&&f.label?f.label+": ":"")+String(v);
+}
+function animalSummaryHTML(a){
+  const parts=animalSummaryChoice().map(id=>animalSummaryValue(a,id)).filter(x=>String(x).trim()!=="");
+  // always rendered, even when empty, so the chooser has something to replace
+  // in place rather than having to redraw the whole list under its own popover
+  return `<span class="a-sum" data-id="${escAttr(a.id)}" style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">${esc(parts.join(" · "))}</span>`;
+}
 function animalCard(a){
   const card=document.createElement("div");
   const setAside=a.excluded||a.practice;
@@ -13836,7 +13932,7 @@ function animalCard(a){
             excluded, and the whole point of splitting them is seeing both */""}
       ${(!a.alive?[{label:lifeLabel(a),color:lifeColor(a)}]:[]).concat(animalFlags(a))
         .map(f=>`<span style="font-family:var(--mono);font-size:9.5px;color:${f.color};border:1px solid ${f.color}33;background:${f.color}14;border-radius:5px;padding:1px 6px">${esc(f.label)}</span>`).join("")}
-      <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">${esc(a.cage||"")}${a.sex?" · "+esc(a.sex):""}${a.strain?" · "+esc(a.strain):""}${aw!=null?" · "+aw+"w":""}${lw!=null?" · ⚖ "+lw+"g":""}</span>
+      ${animalSummaryHTML(a)}
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:100%;justify-content:flex-end">
         <button class="a-log" data-id="${a.id}" title="Chronological event log" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">📋</button>
         <button class="a-edit" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px">✎</button>
