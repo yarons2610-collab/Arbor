@@ -4945,9 +4945,32 @@ function calColor(x){ return x.kind==="task"?taskColorOf(x.src):stepColor(x.src)
 // own when-string) that have actually been checked off. A non-repeating task
 // just ends up with a set of zero or one. Time passing puts nothing in this
 // set by itself; only the checkmark does.
-function occDone(t,when){ return !!when && (t.doneOccurrences||[]).includes(when); }
+/* For a task that covers animals, "done" is not a fact of its own: the round
+   is done when every animal in it is. Keeping a separate flag meant ticking
+   every mouse off left the task showing as outstanding, and ticking the task
+   said nothing about the mice — one idea recorded twice, which the user then
+   had to keep in step by hand.
+   A covering task with nobody in the round has nothing to derive from, so it
+   falls back to the flag, as does every ordinary task. */
+function taskRoundRows(t,when){
+  if(!taskCoverType(t)||!when) return null;
+  const ids=taskRosterFor(t,when); if(!ids.length) return null;
+  const rows=[];
+  ids.forEach(id=>{
+    const a=(DB.animals||[]).find(x=>x.id===id); if(!a)return;
+    const e=taskOccEntry(t,when,a); if(e)rows.push(e);
+  });
+  return rows.length?rows:null;
+}
+function occDone(t,when){
+  const rows=taskRoundRows(t,when);
+  if(rows) return rows.every(e=>!!e.done);
+  return !!when && (t.doneOccurrences||[]).includes(when);
+}
 function setOccDone(t,when,val){
   if(!t||!when)return;
+  const rows=taskRoundRows(t,when);
+  if(rows){ rows.forEach(e=>{ e.done=val; e.edited=Date.now(); }); persist(); return; }
   const set=new Set(t.doneOccurrences||[]);
   if(val)set.add(when); else set.delete(when);
   t.doneOccurrences=[...set];
@@ -5592,6 +5615,11 @@ function quickFindHits(q){
   (DB.config.siteLib||[]).forEach(x=>{
     const r=score(x.name); if(!isFinite(r))return;
     add("Site","📍",x.name,`AP ${x.ap} · ML ${x.ml} · DV ${x.dv}`,r,go(()=>goMaterials("sites")));
+  });
+  planList().forEach(pl=>{
+    const r=score(pl.name); if(!isFinite(r))return;
+    const n=planStages(pl).length;
+    add("Plan","🗺",pl.name,`${n} stage${n===1?"":"s"}`,r,go(()=>goMaterials("plans")));
   });
   (DB.config.procedureLib||[]).forEach(x=>{
     const r=score(x.name); if(!isFinite(r))return;
@@ -7081,6 +7109,29 @@ function addTask(init){
            isEvent:false,color:null,eventTypeId:null,created:Date.now(),...(init||{})};
   taskList().push(t); persist(); return t;
 }
+/* Everything that names an animal, told once that the animal is gone. Each of
+   these held the id independently, so a deleted mouse went on counting toward
+   its group's tally ("2/2" with one animal left), stayed linked to experiments
+   and projects, and kept a plan run nobody could see or stop. The lists that
+   happened to filter the dead on read hid how many did not. */
+function forgetAnimal(id){
+  const notThis=l=>!(l&&l.kind==="animal"&&l.id===id);
+  (DB.experiments||[]).forEach(ex=>{
+    ex.links=(ex.links||[]).filter(notThis);
+    if(ex.groups) delete ex.groups[id];
+    if(ex.planRuns) delete ex.planRuns[id];
+  });
+  (DB.projects||[]).forEach(pr=>{ pr.links=(pr.links||[]).filter(notThis); });
+  taskList().forEach(t=>{
+    t.links=(t.links||[]).filter(notThis);
+    if(!t.roster)return;
+    Object.keys(t.roster).forEach(k=>{
+      const slot=t.roster[k];
+      if(Array.isArray(slot)) t.roster[k]=slot.filter(x=>x!==id);
+      else if(slot&&Array.isArray(slot.ids)) slot.ids=slot.ids.filter(x=>x!==id);
+    });
+  });
+}
 function deleteTask(id){
   const t=taskList().find(x=>x.id===id); if(t) removeShared("schedule",[t]);
   if(t) releaseTaskCoverage(t);
@@ -7186,6 +7237,9 @@ function addExperiment(){
 function deleteExperiment(id){
   taskList().forEach(t=>{ if(t.experimentId===id) t.experimentId=null; });
   const ex=DB.experiments.find(x=>x.id===id); if(ex) removeShared("experiments",[ex]);
+  // the plan it was running has no reason to go on, so its untouched stages
+  // leave with it and the ones that were filled in become the animals' own
+  releaseScheduledEntries(e=>e.fromPlan===id);
   DB.experiments=DB.experiments.filter(x=>x.id!==id); persist();
 }
 function addProject(){
@@ -7852,23 +7906,30 @@ function shiftTaskRoster(t,shiftKey){
     e.time=hasTime(w)?String(w).slice(11,16):null;
   }));
 }
-/* A task that covered animals and is being deleted, or has just stopped
-   covering them, must not leave its rows orphaned: an empty one had no reason
-   to exist, and a filled one is the animal's own record and stays — released
-   from the task, so the Timeline shows it again like any other entry. */
-function releaseTaskCoverage(t){
-  if(!t)return;
+/* Entries the app wrote because something told it to — a task's round, an
+   experiment's plan — outlive the thing that asked for them unless somebody
+   says otherwise. An empty one had no reason to exist and goes; a filled one
+   is the animal's own record of work actually done and stays, released from
+   whatever scheduled it so it reads as an ordinary entry.
+   Written once for both: a task already did this correctly and deleting an
+   experiment did not, which is the whole shape of the problem — two places
+   meaning the same thing and only one of them right. */
+function releaseScheduledEntries(owns){
   DB.animals.forEach(a=>{
     if(!Array.isArray(a.diary))return;
-    const dropped=a.diary.filter(e=>e.fromTask===t.id&&!diaryRowHasContent(e));
+    const dropped=a.diary.filter(e=>owns(e)&&!diaryRowHasContent(e));
     if(dropped.length) removeShared("diary",dropped,a);
     a.diary=a.diary.filter(e=>{
-      if(e.fromTask!==t.id)return true;
-      if(diaryRowHasContent(e)){ delete e.fromTask; delete e.fromOcc; return true; }
+      if(!owns(e))return true;
+      if(diaryRowHasContent(e)){
+        delete e.fromTask; delete e.fromOcc; delete e.fromPlan; delete e.planStage;
+        return true;
+      }
       return false;
     });
   });
 }
+function releaseTaskCoverage(t){ if(t) releaseScheduledEntries(e=>e.fromTask===t.id); }
 function diaryTasksForStep(st){
   const animals=animalsForStep(st);
   const out=[];
@@ -16332,6 +16393,7 @@ function animalModal(id,draft){
   };
   if(id)document.getElementById("am_del").onclick=()=>{ if(confirm("Delete this animal record?")){
     removeShared("animals",[a]);
+    forgetAnimal(id);
     DB.animals=DB.animals.filter(x=>x.id!==id);persist();closeModal();render();toast("Deleted");}};
   // A cage-mate in one click: the profile, the procedure and every experiment,
   // group and project the original sits in. Not the diary, and not the death —
