@@ -181,6 +181,48 @@
   .dd-row{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--ink-dim);border-radius:8px;padding:7px 9px;font-size:12.5px;cursor:pointer}
   .dd-row:hover{background:var(--panel)}
   .dd-row.on{color:var(--ink);border-color:var(--gold);background:linear-gradient(180deg,#3a2e14,#302410)}
+  /* the animal window as the animal's home */
+  .am-tabs{display:flex;gap:4px;margin:-4px 0 14px;border-bottom:1px solid var(--line);padding-bottom:9px}
+  .am-tab{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:8px;
+    padding:5px 14px;font-size:12.5px;cursor:pointer}
+  .am-tab.on{color:var(--ink);border-color:var(--gcamp);background:var(--panel)}
+  .am-pane.hidden{display:none}
+  .ov{display:flex;flex-direction:column;gap:13px;font-size:12.5px;line-height:1.55}
+  .ov-life{font-size:13px}
+  .ov-sec{border-top:1px solid var(--line);padding-top:9px}
+  .ov-h{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);
+    margin-bottom:5px;display:flex;align-items:center;gap:8px}
+  .ov-dim{color:var(--ink-faint)}
+  .ov-sep{color:var(--ink-faint);margin:0 7px}
+  .ov-btn{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;
+    padding:1px 8px;font-size:10.5px;cursor:pointer;text-transform:none;letter-spacing:0;font-family:inherit}
+  .ov-btn:hover{color:var(--ink);border-color:var(--ink-faint)}
+  .ov-inj{padding-left:2px}
+  .ov-exp{margin-bottom:3px}
+  .ov-link{border:0;background:none;color:var(--ink);padding:0;cursor:pointer;font:inherit;text-decoration:underline;
+    text-decoration-color:var(--line2);text-underline-offset:3px}
+  .ov-dots{display:inline-flex;gap:3px;vertical-align:middle;margin-left:4px}
+  .ov-dot{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--line2);display:inline-block}
+  .ov-dot.done{background:var(--gcamp);border-color:var(--gcamp)}
+  .ov-dot.late{background:var(--overdue);border-color:var(--overdue)}
+  .ov-dot.today{border-color:var(--amber)}
+  .ov-sub{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin:6px 0 2px}
+  .ov-entry{display:flex;align-items:baseline;gap:6px;width:100%;text-align:left;border:0;background:none;color:var(--ink-dim);
+    padding:2px 0;cursor:pointer;font:inherit}
+  .ov-entry:hover b{text-decoration:underline}
+  .ov-entry b{color:var(--ink);font-weight:500;flex:0 0 auto}
+  .ov-entry .ov-dim{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ov-edate{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);flex:0 0 40px}
+  .ov-grid{display:grid;grid-template-columns:max-content 1fr;gap:2px 14px}
+  .ov-k{color:var(--ink-faint)}
+  .ov-baseed{background:var(--bg2);border:1px solid var(--line2);border-radius:9px;padding:9px 11px;margin-top:-4px}
+  .ov-brow{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+  .ov-bnew{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
+  .ov-bnew input{background:var(--bg);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 7px;font-size:12px}
+  .ch-tbl td{font-family:var(--mono);font-size:10.5px}
+  .ch-tbl td.pg-an{font-family:inherit;font-size:12px}
+  .ch-warn{color:var(--overdue)}
+  .ch-sum td{color:var(--ink-dim);border-top:1px solid var(--line2)}
   .pg-tabs{display:flex;gap:4px;margin-bottom:9px}
   .pg-tab{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:7px;
     padding:3px 10px;font-size:11.5px;cursor:pointer;font-family:var(--mono)}
@@ -382,6 +424,8 @@
   .dg-entry{border:1px solid var(--line2);border-radius:8px;padding:7px 9px;margin-bottom:6px;font-size:11.5px}
   .dg-entry .dg-erow{display:flex;align-items:center;gap:6px}
   .dg-entry .dg-ename{flex:0 0 auto;color:var(--ink);font-weight:500}
+  .a-name{border:0;background:none;color:var(--ink);padding:0;font:inherit;font-weight:500;font-size:14px;cursor:pointer}
+  .a-name:hover{text-decoration:underline;text-underline-offset:3px}
   .dg-entry .dg-base{flex:0 0 auto;color:var(--gcamp);font-size:12px}
   .dg-entry .dg-esum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-dim)}
   .dg-entry button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:1px 7px;font-size:11px;cursor:pointer;flex:0 0 auto}
@@ -2031,7 +2075,7 @@ function changedHere(base,coll,id,obj){
    over whatever a pull brings in. */
 const LOCAL_VIEW_KEYS=["calMode","calFilters","calAlldayCollapsed","topCollapsed",
   "animalFilters","notesFilter","notesSort","notesView","notesGroup","matSubTab","calZoom","colourByAuthor","expTaskSort","expTaskGroup","expViewBy",
-  "animalSummary","planSummaryView"];
+  "animalSummary","planSummaryView","cohortCols"];
 const VIEW_STATE_KEY="arbor_view_state";
 function saveLocalView(){
   try{
@@ -3194,6 +3238,21 @@ function mergeRosterMaps(was,theirs,mine){
   });
   return out;
 }
+/* An animal's baselines are one per date, so they merge per date the way a
+   list should: what either side added survives, what this side removed or
+   changed against the agreed copy is honoured. As one whole field, two people
+   each setting a baseline on the same animal came back with only one. */
+function mergeBaselines(was,theirs,mine){
+  const by=list=>{ const m=new Map(); (Array.isArray(list)?list:[]).forEach(b=>{ if(b&&b.date) m.set(String(b.date).slice(0,10),b); }); return m; };
+  const W=by(was), T=by(theirs), M=by(mine);
+  const out=new Map(T);
+  W.forEach((b,d)=>{ if(!M.has(d)) out.delete(d); });                         // removed here
+  M.forEach((b,d)=>{
+    const w=W.get(d);
+    if(!w||JSON.stringify(w)!==JSON.stringify(b)) out.set(d,b);               // added or changed here
+  });
+  return [...out.values()].sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+}
 function mergeFields(theirs,mine,base,id,isDiary){
   const was=base&&((isDiary?base.diaryFull:base.recFull)||{})[id];
   // no agreed copy to compare against: this device decides, as before
@@ -3205,6 +3264,9 @@ function mergeFields(theirs,mine,base,id,isDiary){
        instead whether mine merely *differs* from theirs makes every field I
        left alone overwrite whatever they did to it — which is how renaming a
        task on one side was undone by the other side editing its notes. */
+    if(k==="baselines"){
+      out[k]=mergeBaselines(was[k],theirs[k],mine[k]); return;
+    }
     if(k==="planRuns"){
       /* One entry per animal, each owned by whoever wrote it: merged per key
          rather than as one field, so two people starting different animals do
@@ -4526,6 +4588,13 @@ function migrate(){                       // backfill fields added in later vers
   animalEntry=DB.config.animalFilters.entry||"all";
   animalGroupBy=DB.config.animalFilters.groupBy||"none";
   animalConds=Array.isArray(DB.config.animalFilters.conds)?DB.config.animalFilters.conds:[];
+  /* v290 asked about the procedure under Surgery. Those questions are about
+     the animal and now live there; a filter saved the old way is re-pointed so
+     it keeps meaning exactly what it meant. */
+  const PROC_TO_FACT={__proc_virus:"virus",__proc_site:"targets",__proc_partner:"projections",
+    __proc_head:"headpost",__proc_window:"window",__proc_n:"injections"};
+  animalConds.forEach(c=>{ if(c&&PROC_TO_FACT[c.field]){ c.field=PROC_TO_FACT[c.field]; c.type=COND_ANIMAL;
+    if(c.op==="hasnt") c.op="nothas"; } });
   animalFiltersOpen=!!DB.config.animalFilters.panelOpen;
   // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
   // may still carry — each meant ascending (earliest/oldest first) already,
@@ -4563,6 +4632,17 @@ function migrate(){                       // backfill fields added in later vers
     // mid-rollout via Gist sync — that device would otherwise see its weight
     // calendar go blank. Drop a.weights in a later release once safe.
     if(!Array.isArray(a.diary))a.diary=[];
+    /* v291 kept a baseline as a flag on one weighing. The baseline belongs to
+       the animal, so any such flag becomes an entry in the animal's own list —
+       then the flag goes, so a second run finds nothing to do. Idempotent:
+       setAnimalBaseline replaces a baseline on the same day rather than adding
+       a second. */
+    a.diary.forEach(e=>{
+      if(!e||!e.baseline)return;
+      const g=e.data&&e.data.grams;
+      if(g!=null&&g!==""&&e.date) setAnimalBaseline(a,e.date,g,"");
+      delete e.baseline;
+    });
     if(a.weights && !a._weightsMigrated){
       Object.keys(a.weights).sort().forEach(ds=>{
         a.diary.push({id:uid("d_"), type:"weight", date:ds,
@@ -4893,6 +4973,13 @@ function migrate(){                       // backfill fields added in later vers
   // added something — the rows are deterministic, so re-deriving them costs
   // nothing, but they still have to reach disk and the Gist like any others.
   if(typeof topUpOpenDiarySeries==="function"&&topUpOpenDiarySeries()) persist();
+  /* Every animal's state is brought in line with its history. This is the one
+     place guaranteed to run on every load and after every pull, so an
+     end-of-life entry that arrived from a plan, a round or a collaborator is
+     honoured even though no form ever saw it. */
+  let reconciled=false;
+  (DB.animals||[]).forEach(a=>{ if(reconcileAnimal(a)) reconciled=true; });
+  if(reconciled) persist();
 }
 /* An id now says who made it. Two people creating records at the same moment
    in separate workspaces could otherwise land on the same six random
@@ -8559,6 +8646,8 @@ function autoGrowTextarea(el){
 }
 function experimentModal(st,after){
   const animals=()=>animalsForStep(st);
+  // set once the cohort table exists; the group editors below may run first
+  let paintCohort=()=>{};
   modal(`<h3>Experiment</h3>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Name</label><input id="sm_name" value="${escAttr(st.title)}" autofocus></div>
@@ -8599,6 +8688,9 @@ function experimentModal(st,after){
       <button class="btn ghost" id="sm_addgroup" style="margin-top:6px">＋ Group</button>
       <datalist id="sm_gsuggest">${GROUP_SUGGESTIONS.map(t=>`<option value="${escAttr(t)}">`).join("")}</datalist>
       <div id="sm_groups" style="margin-top:12px"></div></div>
+    <div class="fld"><label style="display:flex;align-items:center;gap:8px">Animals
+      <button type="button" class="ov-btn" id="sm_cohortcols" title="Which facts to show for each animal">columns…</button></label>
+      <div id="sm_cohort"></div></div>
     <div class="fld"><label>Exclusion criteria</label>
       <textarea id="sm_excl" rows="2">${esc(st.exclusions||"")}</textarea></div>
     <div class="fld"><label>Outcome</label>
@@ -8780,6 +8872,9 @@ function experimentModal(st,after){
       +`<option value="__new__">＋ New plan…</option>`;
   }
   paintPlan();
+  // the cohort reads the same facts as each animal's own window; it is
+  // repainted whenever the arms or their membership change below
+  paintCohort=wireCohort(document.getElementById("sm_cohort"),()=>cohortGroupsOfExperiment(st),document.getElementById("sm_cohortcols"));
 
   const save=()=>{
     st.title=document.getElementById("sm_name").value;
@@ -8867,6 +8962,7 @@ function experimentModal(st,after){
     box.innerHTML=`<button class="btn ghost" id="sm_openanimals">🐁 Animals &amp; assignment</button>
       <span class="gp-lab" style="margin-left:10px">${list.length} animal${list.length!==1?"s":""}${(st.groupDefs||[]).length?" · "+esc(tally.text):""}</span>`;
     box.querySelector("#sm_openanimals").onclick=()=>{ save(); animalsModal(st,after); };
+    paintCohort();   // a renamed or added arm is a renamed or added table
   }
   drawGroupDefs(); drawGroups();
   document.getElementById("sm_addgroup").onclick=()=>{ addGroup(st,""); drawGroupDefs(); drawGroups(); };
@@ -8893,6 +8989,9 @@ function projectModal(pr,after){
       <textarea id="pm_q" rows="2">${esc(pr.question||"")}</textarea></div>
     <div class="fld"><label>Notes</label>
       <textarea id="pm_notes" rows="3">${esc(pr.notes||"")}</textarea></div>
+    <div class="fld"><label style="display:flex;align-items:center;gap:8px">Animals
+      <button type="button" class="ov-btn" id="pm_cohortcols" title="Which facts to show for each animal">columns…</button></label>
+      <div id="pm_cohort"></div></div>
     <div class="fld"><label>Uses</label><div id="pm_links"></div></div>
     <div class="share-box">
       <label class="share-main"><input type="checkbox" id="pm_shared" ${pr.shared?"checked":""}>
@@ -8970,6 +9069,7 @@ function projectModal(pr,after){
     toast(`${kids.length} experiment${kids.length!==1?"s":""} now shaded from this project`);
   };
   mountLinkEditor(document.getElementById("pm_links"),pr,()=>{});
+  wireCohort(document.getElementById("pm_cohort"),()=>cohortGroupsOfProject(pr),document.getElementById("pm_cohortcols"));
   /* Sharing. Phase 1 marks the project and shows the consequences; nothing
      leaves this device until the publishing phase. The running total is the
      point of the box — it answers "how much am I about to hand over" without
@@ -12586,7 +12686,7 @@ function renderDiaryTypesLib(hostEl){
           <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto" title="How long an entry of this type runs on the Timeline when it has no explicit end time">
             <input type="number" class="ldt_duration" data-ti="${i}" min="0" step="5" value="${t.defaultDuration||""}" placeholder="30" style="width:52px;${IST};padding:5px 6px"> min default</label>
           <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto"><input type="checkbox" class="ldt_timeline" data-ti="${i}" style="width:auto" ${t.timeline?"checked":""}> shows on Timeline</label>
-          ${t.core?"":`<button class="ldt_del" data-ti="${i}"
+          ${(t.core||roleOfType(t.key))?"":`<button class="ldt_del" data-ti="${i}"
             style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ type</button>`}
         </div>
         <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:6px">Custom fields (every entry also always has a free-text Note, in addition to these)</div>
@@ -12790,7 +12890,10 @@ function renderDiaryTypesLib(hostEl){
     }
     if(delT){
       const t=(DB.config.diaryTypes||[])[+delT.dataset.ti];
-      if(t&&t.core){ toast("Built-in type — can't be deleted"); return; }
+      if(t&&(t.core||roleOfType(t.key))){
+        toast(roleOfType(t.key)?`Arbor relies on what ${t.label||"this type"} means — rename it or change its fields, but it can't be deleted`
+                               :"Built-in type — can't be deleted");
+        return; }
       if(confirm("Delete this entry type? Already-logged entries keep their data, but it'll show without labels/colors without this definition.")){
         (DB.config.diaryTypes||[]).splice(+delT.dataset.ti,1); persist(); paintDTRows();
       }
@@ -13723,7 +13826,14 @@ const COND_OPS={
    like Surgery, Perfusion and Comment with nothing to filter by at all.
    Training carries more still: the behavioural task's name, and whatever
    metrics that task defines in the task library. */
+const COND_ANIMAL="__animal";
 function condFields(typeKey){
+  /* "The animal itself": every fact the animal's window shows, askable as a
+     condition with the same name and the same reading — so a filter can never
+     ask about something the animal does not say, or say it differently. */
+  if(typeKey===COND_ANIMAL)
+    return ANIMAL_FACT_BUILTINS.concat(customFacts()).map(d=>({key:d.id,label:d.label,
+      type:d.type==="date"?"date":d.type==="yesno"?"yesno":d.type==="number"?"number":"text",src:"fact"}));
   const d=diaryTypeDef(typeKey); if(!d)return [];
   const out=[
     {key:"__count",label:"Number of entries",type:"count",src:"count"},
@@ -13734,18 +13844,6 @@ function condFields(typeKey){
     {key:"__done", label:"Status",           type:"done", src:"done"},
     {key:"__note", label:"Note",             type:"text", src:"note"}
   ];
-  /* The procedure belongs to the animal rather than to any one entry, but
-     Surgery is where a person looks for it, so it is offered there and matched
-     against the animal instead of against its entries. */
-  if(typeKey==="surgery"){
-    out.push(
-      {key:"__proc_virus",  label:"Virus injected",     type:"text",  src:"proc"},
-      {key:"__proc_site",   label:"Injection site",     type:"text",  src:"proc"},
-      {key:"__proc_partner",label:"Projection target",  type:"text",  src:"proc"},
-      {key:"__proc_head",   label:"Head-post",          type:"yesno", src:"proc"},
-      {key:"__proc_window", label:"Cranial window",     type:"yesno", src:"proc"},
-      {key:"__proc_n",      label:"Number of injections",type:"count",src:"proc"});
-  }
   if(typeKey==="training"){
     out.push({key:"__task",label:"Task",type:"text",src:"task"});
     // metric keys differ per task, so offer the union across the library
@@ -13771,8 +13869,8 @@ function condValueOf(e,f){
   return (e.data||{})[f.key];
 }
 function condMatches(a,c){
+  if(c.type===COND_ANIMAL) return factMatches(a,c);
   const f=condFieldDef(c.type,c.field); if(!f)return false;
-  if(f.src==="proc") return procCondMatches(a,c,f);
   const entries=(a.diary||[]).filter(e=>e.type===c.type);
   // a count is a fact about the set, not about any one entry
   if(f.type==="count"){
@@ -13802,30 +13900,12 @@ function condMatches(a,c){
     return c.op==="has"?sv.includes(tv):!sv.includes(tv);
   });
 }
-/* A question about the animal's procedure. "Has" asks whether ANY injection
-   says so; "does not have" asks whether none does — the useful reading, rather
-   than "some other injection also exists", which would be true of almost
-   everything. */
-function procCondMatches(a,c,f){
-  const d=(a&&a.surgeryDetail)||null;
-  if(f.key==="__proc_n"){
-    const n=animalInjections(a).length, t=parseFloat(c.value);
-    if(isNaN(t))return false;
-    return c.op==="gt"?n>t:c.op==="lt"?n<t:n===t;
-  }
-  if(f.type==="yesno"){
-    const b=!!(d&&(f.key==="__proc_head"?d.headpost:d.window));
-    return c.op==="yes"?b:!b;
-  }
-  const pool=f.key==="__proc_virus"?animalViruses(a)
-           :f.key==="__proc_site"?animalSites(a)
-           :animalPartners(a);
-  const tv=String(c.value||"").toLowerCase();
-  if(!tv) return false;
-  const any=pool.some(v=>String(v).toLowerCase().includes(tv));
-  return c.op==="has"?any:!any;
-}
 function condLabel(c){
+  if(c.type===COND_ANIMAL){
+    const f=condFieldDef(c.type,c.field), ft=f?f.type:"text";
+    const op=((COND_OPS[ft]||COND_OPS.text).find(o=>o[0]===c.op)||["",c.op])[1];
+    return `${f?f.label:c.field} ${op}${ft==="yesno"?"":" "+c.value}`;
+  }
   const d=diaryTypeDef(c.type), f=condFieldDef(c.type,c.field);
   const ft=f?f.type:"text";
   const op=((COND_OPS[ft]||COND_OPS.text).find(o=>o[0]===c.op)||["",c.op])[1];
@@ -13837,7 +13917,8 @@ function openCondModal(after){
   const types=allDiaryTypeDefs();
   if(!types.length){ toast("No entry types defined yet"); return; }
   const draw=()=>{
-    const tKey=document.getElementById("cnd_type")?.value||types[0].key;
+    // the animal comes first: it is the question most filters are asking
+    const tKey=document.getElementById("cnd_type")?.value||COND_ANIMAL;
     const fields=condFields(tKey);
     const fKey=document.getElementById("cnd_field")?.value||fields[0].key;
     const f=condFieldDef(tKey,fKey)||fields[0];
@@ -13850,8 +13931,8 @@ function openCondModal(after){
         f.type==="count"?"e.g. 3":f.type==="number"?"e.g. 22":"text to match"}">`;
     document.getElementById("cnd_body").innerHTML=`
       <div class="drow">
-        <div class="fld" style="flex:1"><label>Entry type</label>
-          <select id="cnd_type">${types.map(t=>`<option value="${t.key}" ${t.key===tKey?"selected":""}>${esc(t.label)}</option>`).join("")}</select></div>
+        <div class="fld" style="flex:1"><label>About</label>
+          <select id="cnd_type"><option value="${COND_ANIMAL}" ${tKey===COND_ANIMAL?"selected":""}>🐭 The animal itself</option>${types.map(t=>`<option value="${t.key}" ${t.key===tKey?"selected":""}>${esc(t.label)}</option>`).join("")}</select></div>
         <div class="fld" style="flex:1"><label>Field</label>
           <select id="cnd_field">${fields.map(x=>`<option value="${escAttr(x.key)}" ${x.key===fKey?"selected":""}>${esc(x.label)}</option>`).join("")}</select></div>
       </div>
@@ -13914,9 +13995,9 @@ function fmtStamp(t,withTime){
   return withTime===false?day:`${day} · ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 function surgeriesOf(a){
-  const today=todayDateStr();
-  const out=(a.diary||[]).filter(e=>e.type==="surgery"&&e.date)
-    .map(e=>({date:e.date,planned:e.date>today,e}));
+  // "planned" is "has not happened", not merely "is in the future": a surgery
+  // a plan scheduled for last Tuesday that nobody ticked did not take place
+  const out=entriesWithRole(a,"surgery").map(e=>({date:e.date,planned:!entryHappened(e),e}));
   if(!out.length&&a.surgery) out.push({date:String(a.surgery).slice(0,10),planned:false,e:null});
   return out.sort((x,y)=>x.date.localeCompare(y.date));
 }
@@ -14038,45 +14119,508 @@ function diaryDefaultDuration(type,entry){
   }
   return diaryTypeDef(type).defaultDuration||30;
 }
-function diaryWeightEntries(a){ return (a.diary||[]).filter(e=>e.type==="weight").sort((x,y)=>x.date.localeCompare(y.date)||x.created-y.created); }
+/* ═══════════════════════════ THE ANIMAL MODEL ═══════════════════════════
+   An animal used to have three faces that never met. The animal window held
+   its profile and procedure but no history; the diary held its history but no
+   state; the card held a glance. Some forty functions each derived a slice of
+   "what is true about this animal", and every surface — card, filters,
+   summary, exports — answered from its own list.
+   Now the animal is the centre and the diary is its history. What follows is
+   the one place that knows what an animal is; every surface asks it. */
+
+/* ---- roles: what a type MEANS ----
+   Four types carry meaning the app depends on: a weighing is the animal's
+   body weight, a surgery is when its procedure happened, a perfusion ends its
+   life, a training session is a behavioural task with its own parameters.
+   That meaning used to live in 24 hard-coded checks against type keys, and
+   was protected by nothing — `core` only stopped deletion, and perfusion was
+   not even core, so deleting it silently switched off end-of-life.
+   Said once here. A type with a role cannot be deleted (its key never changes;
+   its label and its fields remain the user's to shape). Every other type is
+   an observation and stays exactly as free as before. */
+const ENTRY_ROLES={
+  weight:   {type:"weight",   noun:"weighing"},
+  surgery:  {type:"surgery",  noun:"surgery"},
+  endOfLife:{type:"perfusion",noun:"perfusion"},
+  training: {type:"training", noun:"training session"}
+};
+function roleType(role){ return (ENTRY_ROLES[role]||{}).type||null; }
+function roleOfType(key){ return Object.keys(ENTRY_ROLES).find(r=>ENTRY_ROLES[r].type===key)||null; }
+function entryHasRole(e,role){ return !!e&&e.type===roleType(role); }
+function entriesWithRole(a,role){
+  const k=roleType(role); if(!k) return [];
+  return ((a&&a.diary)||[]).filter(e=>e&&e.type===k&&e.date)
+    .sort((x,y)=>String(x.date).localeCompare(String(y.date))||(x.created||0)-(y.created||0));
+}
+
+/* ---- happened, or only scheduled? ----
+   A plan writes next month's two-photon session today, and a round writes
+   this week's feeding for every mouse in it. Those rows exist before the work
+   does, so "there is an entry" stopped meaning "it happened" — yet surgeries,
+   end-of-life and progress were each still deciding that for themselves, by
+   date alone. One rule now:
+   an entry has happened when its day has come AND, if the app wrote it ahead
+   of time, somebody has ticked it or written in it. An entry a person logged
+   by hand has happened by being logged — which is what it always meant. */
+function entryHappened(e){
+  if(!e||!e.date||String(e.date).slice(0,10)>todayDateStr()) return false;
+  if(e.fromPlan||e.fromTask) return !!e.done||diaryRowHasContent(e);
+  return true;
+}
+
+/* ---- weight ---- */
+function diaryWeightEntries(a){ return entriesWithRole(a,"weight"); }
 // The newest entry that actually carries a value. Reading the last one blindly
-// meant a single weight entry saved without grams — which is what happened
-// while the Weight entry type was missing — hid every real weight before it.
-function latestWeight(a){
+// meant a single weight entry saved without grams hid every real weight before it.
+function latestWeightEntry(a){
   const w=diaryWeightEntries(a);
-  for(let i=w.length-1;i>=0;i--){ const g=w[i].data&&w[i].data.grams; if(g!=null&&g!=="")return g; }
+  for(let i=w.length-1;i>=0;i--){ const g=w[i].data&&w[i].data.grams; if(g!=null&&g!=="")return w[i]; }
   return null;
 }
-/* The weight everything else is measured against. The first weighing is the
-   obvious default, but it stops being the right one the moment the animal's
-   normal changes — after a surgery, or when food restriction starts, "85% of
-   baseline" means 85% of the weight it started that period at, not of what it
-   weighed as a juvenile.
-   So any weighing can be marked as the baseline, and each later one measures
-   from the most recent baseline at or before it. Several baselines in a life
-   is the normal case, not an edge one: one before surgery, one at the start of
-   restriction. Marking nothing leaves the first weighing in charge, which is
-   what every existing animal already does. */
-function weightBaselineOf(a,e){
-  const w=diaryWeightEntries(a);
-  const idx=w.findIndex(x=>x.id===e.id); if(idx<0)return null;
-  for(let i=idx;i>=0;i--) if(w[i].baseline&&w[i].data&&w[i].data.grams!=null) return w[i];
-  return w[0]||null;
+function latestWeight(a){ const e=latestWeightEntry(a); return e?e.data.grams:null; }
+
+/* The weight everything else is measured against belongs to the ANIMAL, not to
+   any weighing. A weighing is something that happened on a day; the baseline
+   is a decision about the animal — "from now on, 100% is this" — and it may be
+   a single weighing, the mean of three, or a number from the supplier sheet.
+   So the animal holds a list of them, each from a date, and every weighing
+   reads the one in force on its own day. Several in a life is the normal case:
+   one before surgery, one at the start of restriction.
+   With none set, the first weighing stands in, which is what every animal
+   already did — nothing to migrate for an animal that never set one. */
+function animalBaselines(a){
+  return (Array.isArray(a&&a.baselines)?a.baselines:[])
+    .filter(b=>b&&b.date&&b.grams!=null&&b.grams!=="")
+    .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
 }
-// Whether this animal's baseline has been moved at all — the label only needs
-// to explain itself when it is not simply the first weighing.
-function weightHasOwnBaseline(a){ return diaryWeightEntries(a).some(x=>x.baseline); }
-// %/absolute change for one weight entry vs. the recording right before it
-// and vs. the baseline in force at that point — null fields when there's
-// nothing to compare against (the baseline itself, or a reference of 0).
+function baselineAt(a,date){
+  const d=String(date||todayDateStr()).slice(0,10);
+  const set=animalBaselines(a).filter(b=>String(b.date).slice(0,10)<=d);
+  if(set.length){ const b=set[set.length-1]; return {grams:+b.grams,date:b.date,note:b.note||"",set:true}; }
+  const first=diaryWeightEntries(a).find(e=>e.data&&e.data.grams!=null&&e.data.grams!=="");
+  return first?{grams:+first.data.grams,date:first.date,note:"",set:false,entry:first}:null;
+}
+function setAnimalBaseline(a,date,grams,note){
+  if(!a||!date||grams==null||grams==="") return null;
+  const d=String(date).slice(0,10);
+  a.baselines=animalBaselines(a).filter(b=>String(b.date).slice(0,10)!==d)
+    .concat([{date:d,grams:+grams,note:note||"",at:Date.now(),by:meId()}]);
+  return a.baselines;
+}
+function clearAnimalBaseline(a,date){
+  const d=String(date).slice(0,10);
+  a.baselines=animalBaselines(a).filter(b=>String(b.date).slice(0,10)!==d);
+}
+// %/absolute change for one weighing vs. the one before it and vs. the
+// baseline the animal had on that day.
 function weightChangeInfo(a,e){
   const w=diaryWeightEntries(a);
   const idx=w.findIndex(x=>x.id===e.id); if(idx<0)return null;
-  const cur=w[idx].data.grams; if(cur==null)return null;
-  const mk=ref=>(!ref||ref.id===e.id||ref.data.grams==null)?null
-    :{date:ref.date,delta:cur-ref.data.grams,pct:ref.data.grams?(cur-ref.data.grams)/ref.data.grams*100:null};
-  return {prev: idx>0?mk(w[idx-1]):null, base: mk(weightBaselineOf(a,e))};
+  const cur=w[idx].data&&w[idx].data.grams; if(cur==null||cur==="")return null;
+  const mk=(refG,refDate)=>(refG==null||refG==="")?null
+    :{date:refDate,delta:cur-refG,pct:+refG?(cur-refG)/refG*100:null};
+  let prev=null;
+  for(let i=idx-1;i>=0;i--){ const g=w[i].data&&w[i].data.grams; if(g!=null&&g!==""){ prev=mk(+g,w[i].date); break; } }
+  const b=baselineAt(a,e.date);
+  // the weighing that IS the baseline compares against nothing — whether it
+  // stands in as the first weighing, or a baseline was set from it that day
+  const isSelf=b&&((b.entry&&b.entry.id===e.id)||
+    (b.set&&String(b.date).slice(0,10)===String(e.date).slice(0,10)&&+b.grams===+cur));
+  const base=(b&&!isSelf)?Object.assign(mk(b.grams,b.date)||{},{set:b.set}):null;
+  return {prev,base:(base&&base.delta!=null)?base:null};
 }
+function pctOfBaseline(a){
+  const lw=latestWeightEntry(a); if(!lw) return null;
+  const b=baselineAt(a,lw.date); if(!b||!b.grams) return null;
+  if(b.entry&&b.entry.id===lw.id) return 100;
+  return +lw.data.grams/b.grams*100;
+}
+
+/* ---- life ----
+   An end-of-life entry that has happened ends the animal's life. This used to
+   be applied by the two forms that save a perfusion by hand, and by nothing
+   else — so a perfusion that arrived from a plan, a round, or a collaborator
+   left the animal alive. Asked here instead, from migrate() (boot and every
+   pull) and after any diary write, so no path can miss it.
+   Monotone by design: it can end a life, never restore one. Bringing an
+   animal back is a person's decision, made in its window. */
+function reconcileAnimal(a){
+  if(!a) return false;
+  let changed=false;
+  const end=entriesWithRole(a,"endOfLife").filter(entryHappened);
+  if(end.length&&a.alive!==false){
+    const d=String(end[0].date).slice(0,10);
+    applyPerfusionSacrifice(a,d);
+    changed=true;
+  }
+  return changed;
+}
+
+/* ---- what is true about an animal: the one vocabulary ----
+   Every surface that describes an animal — its window, its card, the filters,
+   the export, an experiment's table — used to keep its own list of what could
+   be said and its own way of working each thing out, so the card's "Virus"
+   read a legacy field the filters never looked at, and the export knew about
+   surgeries the card did not. A fact is said once here: what it is called,
+   what kind of value it is, how it is worked out, and how it reads in a line.
+   Every surface reads this list, so a fact added here appears everywhere it
+   could be wanted, and means the same thing in each.
+   Ids are kept stable (and match the card's old ids) so a summary line or a
+   saved filter set up before this still means what it meant. */
+function factText(def,v,a){
+  if(def.text) return def.text(v,a);
+  if(v==null||v===""||(Array.isArray(v)&&!v.length)) return "";
+  if(def.type==="yesno") return v?def.label.toLowerCase():"";
+  if(def.type==="date")  return fmtDMY(v);
+  if(Array.isArray(v))   return v.join(", ");
+  return String(v);
+}
+function daysAgoText(iso){
+  const n=calDayDelta(String(iso).slice(0,10),todayDateStr());
+  return n===0?"today":n===1?"yesterday":n>1?`${n}d ago`:n===-1?"tomorrow":`in ${-n}d`;
+}
+// The next stage of any plan this animal is running, soonest first.
+function animalNextStage(a){
+  let best=null;
+  (DB.experiments||[]).forEach(ex=>{
+    if(!planRunFor(ex,a.id))return;
+    planProgress(ex,a).forEach(p=>{
+      if(p.done)return;
+      if(!best||p.date<best.date) best={date:p.date,label:p.stage.label||diaryTypeDef(p.stage.type).label,ex,late:p.late};
+    });
+  });
+  return best;
+}
+function animalOverdueStages(a){
+  let n=0;
+  (DB.experiments||[]).forEach(ex=>{ if(planRunFor(ex,a.id)) planProgress(ex,a).forEach(p=>{ if(p.late)n++; }); });
+  return n;
+}
+const ANIMAL_FACT_BUILTINS=[
+  {id:"status",    group:"Life", label:"Status", type:"text",
+    get:a=>a.alive?"Alive":lifeLabel(a), text:v=>v==="Alive"?"":v},
+  {id:"setAside",  group:"Life", label:"Set aside", type:"text",
+    get:a=>animalFlags(a).map(f=>f.label).join(", ")},
+  {id:"age",       group:"Life", label:"Age in weeks", type:"number",
+    get:a=>ageWeeks(a), text:v=>v!=null?v+"w":""},
+  {id:"born",      group:"Life", label:"Born", type:"date",
+    get:a=>a.dob||null, text:v=>v?"🐭 "+fmtDMY(v):""},
+  {id:"sacrificed",group:"Life", label:"Sacrificed", type:"date",
+    get:a=>a.sacrificed||null, text:v=>v?"✝ "+fmtDMY(v):""},
+  {id:"cage",      group:"Profile", label:"Cage", type:"text", get:a=>a.cage||""},
+  {id:"sex",       group:"Profile", label:"Sex", type:"text", get:a=>a.sex||""},
+  {id:"strain",    group:"Profile", label:"Strain", type:"text", get:a=>a.strain||""},
+  {id:"weight",    group:"Body", label:"Latest weight", type:"number",
+    get:a=>{ const g=latestWeight(a); return g==null||g===""?null:+g; }, text:v=>v!=null?"⚖ "+v+"g":""},
+  {id:"baseline",  group:"Body", label:"Baseline weight", type:"number",
+    get:a=>{ const b=baselineAt(a,todayDateStr()); return b?b.grams:null; },
+    text:(v,a)=>{ if(v==null)return ""; const b=baselineAt(a,todayDateStr()); return `baseline ${v}g${b&&b.set?" since "+fmtDMY(b.date):""}`; }},
+  {id:"pctBaseline",group:"Body", label:"% of baseline", type:"number",
+    get:a=>{ const p=pctOfBaseline(a); return p==null?null:Math.round(p*10)/10; },
+    text:v=>v!=null?`${Math.round(v)}% of baseline`:""},
+  {id:"virus",     group:"Procedure", label:"Virus", type:"text", get:a=>animalVirusText(a)},
+  {id:"targets",   group:"Procedure", label:"Injection sites", type:"text", get:a=>animalSiteText(a)},
+  {id:"projections",group:"Procedure", label:"Projection targets", type:"text", get:a=>animalPartners(a).join(", ")},
+  {id:"injections",group:"Procedure", label:"Number of injections", type:"number",
+    get:a=>animalInjections(a).length, text:v=>v?`${v} injection${v===1?"":"s"}`:""},
+  {id:"headpost",  group:"Procedure", label:"Head-post", type:"yesno", get:a=>!!((a.surgeryDetail||{}).headpost)},
+  {id:"window",    group:"Procedure", label:"Cranial window", type:"yesno", get:a=>!!((a.surgeryDetail||{}).window)},
+  {id:"lastSurgery",group:"Procedure", label:"Last surgery", type:"date",
+    get:a=>{ const s=surgeriesOf(a).filter(x=>!x.planned); return s.length?s[s.length-1].date:null; },
+    text:v=>v?"🔪 "+fmtDMY(v):""},
+  {id:"postOp",    group:"Procedure", label:"Days post-op", type:"number",
+    get:a=>{ const s=surgeriesOf(a).filter(x=>!x.planned); return s.length?daysSinceDate(a,s[s.length-1].date):null; },
+    text:v=>v!=null?`${v}d post-op`:""},
+  {id:"experiments",group:"Experiments", label:"Experiments", type:"text",
+    get:a=>animalSteps(a.id).map(st=>st.title||"(unnamed)").join(", ")},
+  {id:"group",     group:"Experiments", label:"Group", type:"text",
+    get:a=>animalGroups(a.id).map(x=>x.g.name||"(unnamed)").join(", ")},
+  {id:"projects",  group:"Experiments", label:"Projects", type:"text",
+    get:a=>animalProjects(a.id).map(p=>p.name||"(unnamed)").join(", ")},
+  {id:"nextStage", group:"Experiments", label:"Next plan stage", type:"date",
+    get:a=>{ const n=animalNextStage(a); return n?n.date:null; },
+    text:(v,a)=>{ const n=animalNextStage(a); return n?`next: ${n.label} ${fmtDMY(n.date).slice(0,5)}${n.late?" (late)":""}`:""; }},
+  {id:"overdue",   group:"Experiments", label:"Overdue plan stages", type:"number",
+    get:a=>animalOverdueStages(a), text:v=>v?`${v} overdue`:""},
+  {id:"lastEntry", group:"Diary", label:"Last diary entry", type:"date",
+    get:a=>lastDiaryDate(a)||null, text:v=>v?"last entry "+daysAgoText(v):""}
+];
+/* Every entry type — yours as much as the built-in ones — says something about
+   the animal: when it last happened, when it is next due, how often, and the
+   latest value of each of its fields. These come for free from the type, so a
+   type you define today is filterable, exportable and showable on the card
+   without anything else being configured. */
+function typeFacts(t){
+  if(!t||!t.key) return [];
+  const K=t.key, L=t.label||K, I=t.icon||"";
+  const of=a=>(a.diary||[]).filter(e=>e.type===K);
+  const out=[
+    {id:`ty:${K}:last`, group:L, label:`Last ${L}`, type:"date",
+      get:a=>{ const h=of(a).filter(entryHappened).map(e=>e.date).sort(); return h.length?h[h.length-1]:null; },
+      text:v=>v?`${I} ${L} ${daysAgoText(v)}`.trim():""},
+    {id:`ty:${K}:next`, group:L, label:`Next ${L}`, type:"date",
+      get:a=>{ const n=of(a).filter(e=>!entryHappened(e)&&String(e.date).slice(0,10)>=todayDateStr()).map(e=>e.date).sort(); return n.length?n[0]:null; },
+      text:v=>v?`${I} next ${L} ${fmtDMY(v).slice(0,5)}`.trim():""},
+    {id:`ty:${K}:n`, group:L, label:`Number of ${L}`, type:"number",
+      get:a=>of(a).filter(entryHappened).length, text:v=>v?`${I} ${L} ×${v}`.trim():""}
+  ];
+  (t.fields||[]).forEach(f=>{
+    if(!f||!f.key||f.type==="table")return;
+    out.push({id:`ty:${K}:f:${f.key}`, group:L, label:`${L} · ${f.label||f.key}`,
+      type:f.type==="yesno"?"yesno":f.type==="number"?"number":"text",
+      get:a=>{ const h=of(a).filter(e=>entryHappened(e)&&e.data&&e.data[f.key]!=null&&e.data[f.key]!=="")
+                 .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+               return h.length?h[h.length-1].data[f.key]:null; },
+      text:v=>v==null||v===""?"":`${f.label||f.key}: ${f.type==="yesno"?(v?"Yes":"No"):v}`});
+  });
+  return out;
+}
+// The animal window's own fields, yours and any read from a shared project.
+function customFacts(){
+  const out=[], seen=new Set();
+  animalSections().concat(Object.keys(DB.sharedDefs||{}).flatMap(sp=>((DB.sharedDefs[sp]||{}).animalSections||[])))
+    .forEach(sec=>(sec.fields||[]).forEach(f=>{
+      if(!f||!f.key||seen.has(f.key))return; seen.add(f.key);
+      out.push({id:"cf:"+f.key, group:sec.label||"Your own fields",
+        label:(sec.label?sec.label+" · ":"")+(f.label||f.key),
+        type:f.type==="yesno"?"yesno":f.type==="number"?"number":f.type==="table"?"number":"text",
+        get:a=>{
+          if(f.type==="table"){ const n=((a.tables||{})[f.key]||[]).length; return n||null; }
+          const v=(a.custom||{})[f.key]; return v==null||v===""?null:v; },
+        text:v=>v==null||v===""?"":(f.type==="table"?`${f.label||f.key}: ${v}`:
+          `${f.label||f.key}: ${f.type==="yesno"?(v?"Yes":"No"):v}`)});
+    }));
+  return out;
+}
+function animalFactDefs(){
+  return ANIMAL_FACT_BUILTINS
+    .concat(allDiaryTypeDefs().flatMap(typeFacts))
+    .concat(customFacts());
+}
+function animalFactDef(id){ return animalFactDefs().find(d=>d.id===id)||null; }
+function animalFact(a,id){
+  const def=animalFactDef(id); if(!def||!a) return {def,value:null,text:""};
+  let v=null; try{ v=def.get(a); }catch(e){ v=null; }
+  return {def,value:v,text:factText(def,v,a)};
+}
+// A fact as a condition, for the filters: same name, same reading.
+function factMatches(a,c){
+  const f=animalFact(a,c.field); if(!f.def) return false;
+  const v=f.value, t=f.def.type;
+  if(t==="yesno") return c.op==="yes"?!!v:!v;
+  if(t==="number"){
+    if(v==null||v==="")return false;
+    const n=+v, x=parseFloat(c.value); if(isNaN(x))return false;
+    return c.op==="gt"?n>x:c.op==="lt"?n<x:n===x;
+  }
+  if(t==="date"){
+    if(!v)return false;
+    const d1=String(v).slice(0,10), d2=String(c.value||"").slice(0,10); if(!d2)return false;
+    return c.op==="after"?d1>d2:c.op==="before"?d1<d2:d1===d2;
+  }
+  const sv=String(v==null?"":v).toLowerCase(), tv=String(c.value||"").toLowerCase();
+  if(!tv) return false;
+  return c.op==="has"?sv.includes(tv):!sv.includes(tv);
+}
+
+/* ---- the animal's overview: state and history in one place ----
+   What the animal window opens on. Everything here is read from the facts
+   above and from the animal's own diary — nothing is stored for it — so it is
+   current the moment anything about the animal changes, wherever that change
+   was made. Each part says where it can be changed, so the overview is also
+   the way in to everything else. */
+function animalOverviewHTML(a){
+  const F=id=>animalFact(a,id);
+  const sec=(title,body,more)=>body?`<div class="ov-sec"><div class="ov-h">${esc(title)}${more||""}</div>${body}</div>`:"";
+  const dim=t=>`<span class="ov-dim">${t}</span>`;
+  const join=(...xs)=>xs.filter(Boolean).join(`<span class="ov-sep">·</span>`);
+
+  // life and profile, one line
+  const life=join(
+    a.alive?`<span style="color:var(--gcamp)">alive</span>`:`<span style="color:${lifeColor(a)}">${esc(lifeLabel(a).toLowerCase())}${a.sacrificed?" "+esc(fmtDMY(a.sacrificed)):""}</span>`,
+    ...animalFlags(a).map(f=>`<span style="color:${f.color}">${esc(f.label)}</span>`),
+    F("age").value!=null?esc(F("age").value+" weeks"):"",
+    [a.sex,a.strain].filter(Boolean).map(esc).join(" "),
+    a.cage?"cage "+esc(a.cage):"");
+
+  // body: the latest weighing against the baseline in force today
+  const lw=latestWeightEntry(a), b=baselineAt(a,todayDateStr()), pct=pctOfBaseline(a);
+  const pctCol=pct==null?"":pct<80?"var(--overdue)":pct<85?"var(--amber)":"var(--ink)";
+  const body=lw?join(
+      `⚖ <b>${esc(String(lw.data.grams))}g</b> ${dim(daysAgoText(lw.date))}`,
+      pct!=null&&!(b&&b.entry&&b.entry.id===lw.id)?`<b style="color:${pctCol}">${Math.round(pct)}%</b> of baseline`:"",
+      b?`baseline ${esc(String(b.grams))}g ${dim(b.set?"set "+fmtDMY(b.date):"(first weighing)")}`:"")
+    :dim("no weighings yet");
+  const baseCtl=`<button type="button" class="ov-btn ov-baseedit">${animalBaselines(a).length?"baselines…":"set baseline…"}</button>`;
+
+  // procedure, with the surgery it happened in
+  const det=a.surgeryDetail||null;
+  const injs=animalInjections(a);
+  const surg=surgeriesOf(a), done=surg.filter(x=>!x.planned), next=surg.find(x=>x.planned);
+  const proc=(det||surg.length)?[
+      join(det&&det.headpost?"head-post":"", det&&det.window?"cranial window":"",
+        done.length?`🔪 ${esc(fmtDMY(done[done.length-1].date))} ${dim(F("postOp").text)}`:"",
+        next?`<span style="color:var(--amber)">surgery booked ${esc(fmtDMY(next.date))}</span>`:""),
+      ...injs.map(i=>`<div class="ov-inj">${esc(i.virus||"(no virus named)")}${i.siteRegion?" — "+esc(i.siteRegion):""}${
+        i.partnerRegion?" → "+esc(i.partnerRegion):""}${injectionDate(a,i)?" "+dim(fmtDMY(injectionDate(a,i))):""}</div>`)
+    ].filter(Boolean).join(""):"";
+
+  // where it sits, and how far along each plan it is
+  const exps=animalSteps(a.id).map(ex=>{
+    const g=animalGroups(a.id).find(x=>x.st.id===ex.id);
+    const run=planRunFor(ex,a.id), pl=planForAnimal(ex,a);
+    const prog=run?planProgress(ex,a):[];
+    const dots=prog.map(p=>`<span class="ov-dot ${p.done?"done":p.late?"late":p.date===todayDateStr()?"today":""}" title="${escAttr((p.stage.label||"")+" — "+fmtDMY(p.date)+(p.done?" · done":p.late?" · overdue":""))}"></span>`).join("");
+    const nx=prog.find(p=>!p.done);
+    return `<div class="ov-exp"><button type="button" class="ov-link ov-openexp" data-ex="${escAttr(ex.id)}">${esc(ex.title||"(unnamed experiment)")}</button>${
+      g?" › "+esc(g.g.name||"group"):""}${
+      pl?(run?` <span class="ov-dots">${dots}</span>${nx
+          ?(nx.late?` <span style="color:var(--overdue)">overdue: ${esc(nx.stage.label||"stage")} ${esc(fmtDMY(nx.date).slice(0,5))}</span>`
+                   :` ${dim("next "+esc(nx.stage.label||"stage")+" "+fmtDMY(nx.date).slice(0,5))}`)
+          :` ${dim("plan complete")}`}`
+            :` ${dim(esc(pl.name||"plan")+" — not started")}`):""}</div>`;
+  });
+  const projs=animalProjectLinks(a.id).filter(pr=>!animalSteps(a.id).some(ex=>ex.projectId===pr.id))
+    .map(pr=>`<div class="ov-exp">${esc(pr.name||"(unnamed project)")} ${dim("project")}</div>`);
+
+  // the diary, summarised: what last happened, and what is coming
+  const typesHere=[...new Set((a.diary||[]).map(e=>e.type))];
+  const recent=(a.diary||[]).filter(entryHappened)
+    .sort((x,y)=>String(y.date).localeCompare(String(x.date))||(y.created||0)-(x.created||0)).slice(0,5);
+  const coming=(a.diary||[]).filter(e=>!entryHappened(e)&&String(e.date).slice(0,10)>=todayDateStr())
+    .sort((x,y)=>String(x.date).localeCompare(String(y.date))).slice(0,5);
+  const overdue=(a.diary||[]).filter(e=>!entryHappened(e)&&String(e.date).slice(0,10)<todayDateStr()&&(e.fromPlan||e.fromTask));
+  const eRow=e=>{ const d=diaryTypeDef(e.type), sum=diaryEntrySummaryShort(e,a);
+    return `<button type="button" class="ov-entry ov-gotoday" data-d="${escAttr(String(e.date).slice(0,10))}">
+      <span class="ov-edate">${esc(fmtDMY(e.date).slice(0,5))}</span>${esc(d.icon||"")} <b>${esc(d.label)}</b>${sum?" "+dim(esc(sum)):""}</button>`; };
+  const diary=[
+    overdue.length?`<div class="ov-sub" style="color:var(--overdue)">${overdue.length} scheduled ${overdue.length===1?"entry has":"entries have"} passed without being done</div>`+overdue.slice(0,3).map(eRow).join(""):"",
+    coming.length?`<div class="ov-sub">Coming up</div>`+coming.map(eRow).join(""):"",
+    recent.length?`<div class="ov-sub">Recently</div>`+recent.map(eRow).join(""):""
+  ].join("")||dim("nothing logged yet");
+
+  // the animal's own fields, as recorded
+  const own=customFacts().map(d=>({d,v:animalFact(a,d.id)})).filter(x=>x.v.text);
+  const fields=own.length?`<div class="ov-grid">${own.map(x=>`<span class="ov-k">${esc(x.d.label.replace(/^.* · /,""))}</span><span>${esc(String(x.v.value))}</span>`).join("")}</div>`:"";
+
+  return `<div class="ov">
+    <div class="ov-life">${life}</div>
+    ${sec("Body",body+`<div id="ov_baseedit"></div>`,baseCtl)}
+    ${sec("Procedure",proc,`<button type="button" class="ov-btn ov-godetails" data-focus="proc">edit…</button>`)}
+    ${sec("Experiments",exps.concat(projs).join("")||dim("not in any experiment"))}
+    ${fields?sec("Recorded on the animal",fields,`<button type="button" class="ov-btn ov-godetails">edit…</button>`):""}
+    ${sec("Diary",diary,`<button type="button" class="ov-btn ov-godiary">open diary…</button>`)}
+  </div>`;
+}
+/* The baselines, edited where they are read. A baseline is the animal's — a
+   number from a date — so it is set here, from the latest weighing or by hand,
+   and every weighing in the diary reads it. */
+function animalBaselineEditorHTML(a){
+  const lw=latestWeightEntry(a);
+  const list=animalBaselines(a);
+  return `<div class="ov-baseed">
+    ${list.length?list.map(b=>`<div class="ov-brow"><span class="ov-edate">${esc(fmtDMY(b.date))}</span>
+      <b>${esc(String(b.grams))}g</b>${b.note?` <span class="ov-dim">${esc(b.note)}</span>`:""}
+      <button type="button" class="ov-btn ov-basedel" data-d="${escAttr(b.date)}" title="Remove this baseline">✕</button></div>`).join("")
+      :`<div class="ov-dim" style="margin-bottom:6px">No baseline set — the first weighing stands in.</div>`}
+    <div class="ov-bnew">
+      <input type="number" step="0.1" min="0" id="ov_bg" value="${escAttr(lw?String(lw.data.grams):"")}" placeholder="grams" style="width:80px">
+      <span class="ov-dim">g from</span>
+      <input type="date" id="ov_bd" value="${escAttr(lw?String(lw.date).slice(0,10):todayDateStr())}">
+      <input type="text" id="ov_bn" placeholder="note (e.g. mean of 3, start of restriction)" style="flex:1;min-width:120px">
+      <button type="button" class="btn accent ov-baseadd" style="font-size:12px;padding:4px 12px">Set</button>
+    </div>
+  </div>`;
+}
+
+/* ---- many animals at once: an experiment's or a project's cohort ----
+   The same facts, as columns. An experiment is a question about its animals,
+   so its window should be able to show them the way the animals themselves
+   do — weight against baseline, what was injected, how far along the plan —
+   rather than as a list of names. Grouped by arm when there are arms, with a
+   line under each that sums up what can be summed: the arm's mean weight
+   against baseline is the number the whole cohort is judged by.
+   Which columns is a view choice, kept on this device like the card's line. */
+const COHORT_DEFAULT=["pctBaseline","weight","virus","postOp","nextStage"];
+function cohortCols(){
+  const v=DB.config&&DB.config.cohortCols;
+  return (Array.isArray(v)?v:COHORT_DEFAULT).filter(id=>animalFactDef(id));
+}
+function cohortTableHTML(groups){
+  const cols=cohortCols().map(id=>animalFactDef(id));
+  const head=`<tr><th>Animal</th>${cols.map(c=>`<th>${esc(c.label)}</th>`).join("")}</tr>`;
+  const cell=(a,c)=>{
+    const f=animalFact(a,c.id);
+    let t=c.type==="number"&&f.value!=null&&f.value!==""?String(f.value):f.text;
+    if(c.id==="pctBaseline"&&f.value!=null) t=Math.round(f.value)+"%";
+    if(c.type==="date"&&f.value) t=c.id==="nextStage"?f.text.replace(/^next: /,""):fmtDMY(f.value);
+    if(c.type==="yesno") t=f.value?"✓":"";
+    const warn=(c.id==="pctBaseline"&&f.value!=null&&f.value<80)||(c.id==="overdue"&&f.value>0)||(c.id==="nextStage"&&/late/.test(f.text));
+    return `<td class="${warn?"ch-warn":""}">${esc(t||"")}</td>`;
+  };
+  const summary=list=>{
+    const tds=cols.map(c=>{
+      if(c.type!=="number") return `<td></td>`;
+      const vs=list.map(a=>animalFact(a,c.id).value).filter(v=>v!=null&&v!==""&&!isNaN(+v)).map(Number);
+      if(!vs.length) return `<td></td>`;
+      const m=vs.reduce((x,y)=>x+y,0)/vs.length;
+      const sd=vs.length>1?Math.sqrt(vs.reduce((x,y)=>x+(y-m)*(y-m),0)/(vs.length-1)):null;
+      const fmt=v=>c.id==="pctBaseline"?Math.round(v)+"%":(Math.round(v*10)/10).toString();
+      return `<td title="mean of ${vs.length}${sd!=null?", SD "+fmt(sd):""}">${fmt(m)}${sd!=null?` <span class="ov-dim">±${fmt(sd)}</span>`:""}</td>`;
+    }).join("");
+    return `<tr class="ch-sum"><td>mean · n=${list.length}</td>${tds}</tr>`;
+  };
+  return groups.filter(g=>g.animals.length).map(g=>`
+    <div class="pg-block">${g.label?`<div class="pg-head">${esc(g.label)}<span class="pg-sub">${g.animals.length} animal${g.animals.length===1?"":"s"}</span></div>`:""}
+      <div class="pg-wrap"><table class="pg-tbl ch-tbl"><thead>${head}</thead><tbody>
+        ${g.animals.map(a=>`<tr><td class="pg-an"><button type="button" class="ov-link ch-open" data-a="${escAttr(a.id)}">${esc(a.name)}</button></td>${cols.map(c=>cell(a,c)).join("")}</tr>`).join("")}
+        ${g.animals.length>1?summary(g.animals):""}
+      </tbody></table></div></div>`).join("")
+    ||`<div class="ov-dim" style="font-size:12px">No animals yet.</div>`;
+}
+// Experiments group by their arms; animals in no arm come last.
+function cohortGroupsOfExperiment(ex){
+  const members=animalsForStep(ex);
+  const out=(ex.groupDefs||[]).map(g=>({label:g.name||"(unnamed arm)",animals:members.filter(a=>(ex.groups||{})[a.id]===g.id)}));
+  const loose=members.filter(a=>!(ex.groupDefs||[]).some(g=>(ex.groups||{})[a.id]===g.id));
+  if(loose.length) out.push({label:(ex.groupDefs||[]).length?"Not in a group":"",animals:loose});
+  return out;
+}
+// A project's animals, gathered by the experiment they belong to.
+function cohortGroupsOfProject(pr){
+  const seen=new Set(), out=[];
+  (DB.experiments||[]).filter(ex=>ex.projectId===pr.id).forEach(ex=>{
+    const list=animalsForStep(ex).filter(a=>!seen.has(a.id)); list.forEach(a=>seen.add(a.id));
+    if(list.length) out.push({label:ex.title||"(unnamed experiment)",animals:list});
+  });
+  const direct=(DB.animals||[]).filter(a=>!seen.has(a.id)&&animalProjectLinks(a.id).some(p=>p.id===pr.id));
+  if(direct.length) out.push({label:"In the project directly",animals:direct});
+  return out;
+}
+// Wires a cohort table: names open the animal, and the column chooser is the
+// same checklist the card's line uses, over the same facts.
+function wireCohort(host,groupsFn,anchorBtn){
+  const paint=()=>{ host.innerHTML=cohortTableHTML(groupsFn()); };
+  paint();
+  host.addEventListener("click",ev=>{
+    const b=ev.target.closest(".ch-open"); if(!b)return;
+    closeModal(); animalModal(b.dataset.a);
+  });
+  if(anchorBtn) anchorBtn.addEventListener("click",()=>{
+    const items=[]; let lastGroup=null;
+    animalFactDefs().forEach(d=>{
+      if(d.group!==lastGroup){ items.push({head:d.group}); lastGroup=d.group; }
+      items.push({key:d.id,label:d.label});
+    });
+    openCheckDropdown(anchorBtn,items,k=>cohortCols().includes(k),k=>{
+      const cur=cohortCols(), order=items.filter(i=>i.key).map(i=>i.key);
+      const next=cur.includes(k)?cur.filter(x=>x!==k):[...cur,k];
+      DB.config.cohortCols=order.filter(x=>next.includes(x)); persist(); paint();
+    });
+  });
+  return paint;
+}
+
 function fmtWeightChange(c){
   if(!c)return null;
   const sign=c.delta>=0?"+":""; const pct=c.pct!=null?` (${c.pct>=0?"+":""}${c.pct.toFixed(1)}%)`:"";
@@ -14368,11 +14912,10 @@ function diaryEntrySummary(e,a){
       return n?`${f.label||"rows"}: ${n}`:null; }
     return `${f.label} ${f.type==="yesno"?(v?"Yes":"No"):v}`;
   }).filter(Boolean);
-  if(e.type==="weight"&&a){
+  if(entryHasRole(e,"weight")&&a){
     const wc=weightChangeInfo(a,e);
     if(wc&&wc.prev) parts.push(`${fmtWeightChange(wc.prev)} vs prev`);
     if(wc&&wc.base) parts.push(`${fmtWeightChange(wc.base)} vs baseline`);
-    if(e.baseline) parts.push("baseline");
   }
   const note=diaryNoteOf(d); if(note)parts.push(note);
   return timePrefix+(parts.join(" · ")||"—");
@@ -14391,21 +14934,21 @@ function diaryEntryDetailHTML(e,a){
       const v=d[f.key];
       rows.push(arow(f.label, v==null||v===""?null:(f.type==="yesno"?(v?"Yes":"No"):v)));
     });
-    if(e.type==="weight"&&a){
+    if(entryHasRole(e,"weight")&&a){
       const wc=weightChangeInfo(a,e);
-      const base=weightBaselineOf(a,e);
+      const b=baselineAt(a,e.date);
       if(wc&&wc.prev) rows.push(arow("Change since previous", fmtWeightChange(wc.prev)));
       if(wc&&wc.base) rows.push(arow(
-        base&&base.id!==(diaryWeightEntries(a)[0]||{}).id?`Change since baseline (${fmtDMY(base.date)})`:"Change since first",
+        b&&b.set?`Change since baseline (${b.grams}g, ${fmtDMY(b.date)})`:"Change since first weighing",
         fmtWeightChange(wc.base)));
-      /* Said here rather than hidden in the edit form: the place you read a
-         weight against its baseline is the place you decide the baseline is
-         the wrong one. */
-      rows.push(arowHTML("Baseline", e.baseline
-        ? `<span style="color:var(--gcamp)">every later weighing is measured from this one</span>
-           <button type="button" class="dg-basex" data-id="${escAttr(e.id)}" style="margin-left:8px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 9px;font-size:11px;cursor:pointer">Clear</button>`
-        : `<button type="button" class="dg-baseset" data-id="${escAttr(e.id)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 9px;font-size:11px;cursor:pointer">Start the baseline here</button>
-           <span style="color:var(--ink-faint);margin-left:8px">${base?`now measured from ${esc(fmtDMY(base.date))}`:"no earlier weighing to measure from"}</span>`));
+      /* The baseline is the animal's, so it is set on the animal — this button
+         is a shortcut to "make this weighing the animal's baseline", and the
+         animal's window is where the list of baselines lives and is edited. */
+      const g=e.data&&e.data.grams;
+      const isBase=b&&b.set&&String(b.date).slice(0,10)===String(e.date).slice(0,10)&&+b.grams===+g;
+      if(g!=null&&g!=="") rows.push(arowHTML("Baseline", isBase
+        ? `<span style="color:var(--gcamp)">the animal's baseline from this day</span>`
+        : `<button type="button" class="dg-baseset" data-id="${escAttr(e.id)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 9px;font-size:11px;cursor:pointer">Make ${esc(String(g))}g the animal's baseline</button>`));
     }
   }
   rows.push(arow("Note", diaryNoteOf(d)));
@@ -14414,7 +14957,7 @@ function diaryEntryDetailHTML(e,a){
      window with no way across. The entry now says what it did, read from the
      animal's own procedure rather than copied, so editing either shows in
      both. */
-  if(e.type==="surgery"&&a){
+  if(entryHasRole(e,"surgery")&&a){
     const det=a.surgeryDetail||null;
     const injs=injectionsOfSurgery(a,e);
     const bits=[];
@@ -14533,10 +15076,13 @@ function renderAnimals(){
      are repainted, leaving the menu where it is to carry on choosing. */
   const sumBtn=bar.querySelector("#a_summary");
   if(sumBtn) sumBtn.addEventListener("click",()=>{
-    const items=[{head:"On the animal"}]
-      .concat(ANIMAL_SUMMARY_BUILTINS.map(b=>({key:b.id,label:b.label})));
-    const custom=animalSummaryCustomFields();
-    if(custom.length) items.push({head:"Your own fields"},...custom.map(c=>({key:c.key,label:c.label})));
+    // the same facts the animal's window shows and the filters can ask about,
+    // grouped the way the registry groups them
+    const items=[]; let lastGroup=null;
+    animalFactDefs().forEach(d=>{
+      if(d.group!==lastGroup){ items.push({head:d.group}); lastGroup=d.group; }
+      items.push({key:d.id,label:d.label});
+    });
     openCheckDropdown(sumBtn,items,
       k=>animalSummaryChoice().includes(k),
       k=>{
@@ -14765,18 +15311,6 @@ function renderAnimals(){
    collaborator should not inherit it. Nothing here is an action, so hiding a
    fact hides no way of doing anything — see the rule that earned itself when a
    device-local setting once made "+ Project" unreachable. */
-const ANIMAL_SUMMARY_BUILTINS=[
-  {id:"cage",      label:"Cage",          val:a=>a.cage||""},
-  {id:"sex",       label:"Sex",           val:a=>a.sex||""},
-  {id:"strain",    label:"Strain",        val:a=>a.strain||""},
-  {id:"age",       label:"Age in weeks",  val:a=>{const w=ageWeeks(a); return w!=null?w+"w":"";}},
-  {id:"weight",    label:"Latest weight", val:a=>{const w=latestWeight(a); return w!=null?"⚖ "+w+"g":"";}},
-  {id:"born",      label:"Born",          val:a=>a.dob?"🐭 "+fmtDMY(a.dob):""},
-  {id:"sacrificed",label:"Sacrificed",    val:a=>a.sacrificed?"✝ "+fmtDMY(a.sacrificed):""},
-  {id:"virus",     label:"Virus",         val:a=>animalVirusText(a)},
-  {id:"targets",   label:"Targets",       val:a=>animalSiteText(a)},
-  {id:"experiments",label:"Experiments",  val:a=>animalSteps(a.id).map(st=>st.title||"(unnamed)").join(", ")}
-];
 const ANIMAL_SUMMARY_DEFAULT=["cage","sex","strain","age","weight"];
 // Never chosen is not the same as chosen to be empty: an array that has been
 // saved is obeyed even when it holds nothing, the way a deleted field stays
@@ -14785,40 +15319,11 @@ function animalSummaryChoice(){
   const v=DB.config&&DB.config.animalSummary;
   return Array.isArray(v)?v:ANIMAL_SUMMARY_DEFAULT.slice();
 }
-// one entry per custom animal field this workspace defines, keyed apart from
-// the built-ins so a field called "cage" cannot collide with the real one
-function animalSummaryCustomFields(){
-  const out=[], seen=new Set();
-  // my own sections, plus any I am being shown from a shared project — the
-  // values are already on the animals, so refusing to list the fields only
-  // hid information this workspace can perfectly well read
-  const all=animalSections().concat(
-    Object.keys(DB.sharedDefs||{}).flatMap(sp=>((DB.sharedDefs[sp]||{}).animalSections||[])));
-  all.forEach(sec=>(sec.fields||[]).forEach(f=>{
-    if(!f||!f.key||seen.has(f.key))return;
-    seen.add(f.key);
-    out.push({key:"cf:"+f.key, label:(sec.label?sec.label+" · ":"")+(f.label||f.key), f});
-  }));
-  return out;
-}
-function animalSummaryValue(a,id){
-  const b=ANIMAL_SUMMARY_BUILTINS.find(x=>x.id===id);
-  if(b) return b.val(a)||"";
-  if(id.slice(0,3)!=="cf:") return "";
-  const key=id.slice(3);
-  const def=animalSummaryCustomFields().find(x=>x.key===id);
-  const f=def&&def.f;
-  if(f&&f.type==="table"){
-    const n=((a.tables||{})[key]||[]).length;
-    return n?`${f.label||key}: ${n}`:"";
-  }
-  const v=(a.custom||{})[key];
-  if(v==null||v==="") return "";
-  if(f&&f.type==="yesno") return (f.label||key)+": "+(v?"Yes":"No");
-  return (f&&f.label?f.label+": ":"")+String(v);
-}
+/* The card's line is a selection from the animal's facts — not a list of its
+   own. It used to be, which is how its "Virus" came to read a legacy field the
+   filters never consulted. */
 function animalSummaryHTML(a){
-  const parts=animalSummaryChoice().map(id=>animalSummaryValue(a,id)).filter(x=>String(x).trim()!=="");
+  const parts=animalSummaryChoice().map(id=>animalFact(a,id).text).filter(x=>String(x||"").trim()!=="");
   // always rendered, even when empty, so the chooser has something to replace
   // in place rather than having to redraw the whole list under its own popover
   return `<span class="a-sum" data-id="${escAttr(a.id)}" style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">${esc(parts.join(" · "))}</span>`;
@@ -14847,7 +15352,7 @@ function animalCard(a){
   card.innerHTML=`
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span style="width:9px;height:9px;border-radius:50%;background:${animalStateColor(a)};flex:0 0 auto" title="${escAttr([a.alive?"Alive":lifeLabel(a),...animalFlags(a).map(f=>f.label)].join(" · "))}"></span>
-      ${authorBadgeHTML(a)}<span style="font-weight:500;font-size:14px">${esc(a.name)}</span>
+      ${authorBadgeHTML(a)}<button type="button" class="a-name" title="Open ${escAttr(a.name)}">${esc(a.name)}</button>
       ${/* said in words, not only as a dot: an animal can be sacrificed AND
             excluded, and the whole point of splitting them is seeing both */""}
       ${(!a.alive?[{label:lifeLabel(a),color:lifeColor(a)}]:[]).concat(animalFlags(a))
@@ -14884,7 +15389,8 @@ function animalCard(a){
     // while this panel was still hidden (display:none) — refresh it once visible so it
     // doesn't require opening "Enlarge" once before the inline view works
     if(!open&&bvInstance)bvInstance.refresh();};
-  card.querySelector(".a-edit").onclick=()=>animalModal(a.id);
+  card.querySelector(".a-edit").onclick=()=>animalModal(a.id,null,{tab:"details"});
+  const nm=card.querySelector(".a-name"); if(nm) nm.onclick=()=>animalModal(a.id);
   card.querySelector(".a-log").onclick=()=>openEventLogModal([a.id]);
   // inline date buttons for born / surgery / sacrificed
   card.querySelectorAll(".adc-btn").forEach(btn=>{
@@ -15078,6 +15584,11 @@ function paintDiary(container,a,opts){
   // would reveal it missing too
   let visibleTypes=new Set(allDiaryTypeDefs().map(t=>t.key));
   let formType=null, editingId=null;
+  // opened from the animal's overview on one entry's day: show that day
+  if(opts.date&&!opts.editId){
+    selDate=String(opts.date).slice(0,10);
+    const sd=new Date(selDate+"T00:00:00"); viewY=sd.getFullYear(); viewM=sd.getMonth();
+  }
   if(opts.editId){
     const seed=a.diary.find(e=>e.id===opts.editId);
     // opened from the Timeline to edit one specific entry: show that entry's
@@ -15233,7 +15744,7 @@ function paintDiary(container,a,opts){
         // perfusion terminates the animal as part of the procedure, so it always
         // implies sacrifice (not the reverse) - only for a completed (today or
         // earlier), not a future-scheduled, entry.
-        if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
+        reconcileAnimal(a);   // an end-of-life entry that has happened ends the life
         persist(); notifyChange();
         formType=null; editingId=null;
         if(opts.closeOnDone){ closeModal(); flushSyncRender(); return; }
@@ -15311,13 +15822,14 @@ function paintDiary(container,a,opts){
     for(let d=1;d<=dim;d++){
       const ds=`${viewY}-${pad(viewM+1)}-${pad(d)}`;
       const dayEntries=a.diary.filter(e=>e.date===ds);
-      const wEntry=dayEntries.find(e=>e.type==="weight");
+      const WK=roleType("weight");
+      const wEntry=dayEntries.find(e=>e.type===WK);
       const cls=["wt-cal-day"];
       if(ds===todayDateStr())cls.push("today");
       if(dayEntries.length)cls.push("has-val");
       if(ds===selDate)cls.push("sel");
       let trend="";
-      if(wEntry&&visibleTypes.has("weight")){
+      if(wEntry&&visibleTypes.has(WK)){
         const idx=wSorted.findIndex(e=>e.id===wEntry.id);
         const prev=idx>0?wSorted[idx-1]:null;
         if(prev&&prev.data.grams){
@@ -15327,10 +15839,10 @@ function paintDiary(container,a,opts){
           else if(dv<0) trend=`<span class="wt-down" title="${dv.toFixed(1)}g${pctStr} since ${prev.date}">▼</span>`;
         }
       }
-      const otherTypes=[...new Set(dayEntries.filter(e=>e.type!=="weight"&&visibleTypes.has(e.type)).map(e=>e.type))];
+      const otherTypes=[...new Set(dayEntries.filter(e=>e.type!==WK&&visibleTypes.has(e.type)).map(e=>e.type))];
       const dots=otherTypes.map(t=>`<span class="dg-dot" style="background:${diaryTypeDef(t).color}" title="${diaryTypeDef(t).label}"></span>`).join("");
       const wg=wEntry&&wEntry.data?wEntry.data.grams:null;
-      const wv=(wEntry&&visibleTypes.has("weight")&&wg!=null&&wg!=="")?`<span class="wv">${wg}${trend}</span>`:"";
+      const wv=(wEntry&&visibleTypes.has(WK)&&wg!=null&&wg!=="")?`<span class="wv">${wg}${trend}</span>`:"";
       cells+=`<div class="${cls.join(" ")}" data-date="${ds}" title="${dayEntries.length?dayEntries.length+" entr"+(dayEntries.length===1?"y":"ies"):"click to add an entry"}">
         <span class="dn">${d}</span>${wv}${dots?`<span class="dg-dots">${dots}</span>`:""}</div>`;
     }
@@ -15369,7 +15881,8 @@ function paintDiary(container,a,opts){
               <span>${diaryTypeDef(e.type).icon}</span>
               <span class="dg-ename">${esc(diaryTypeDef(e.type).label||e.type)}</span>
               <span class="dg-esum" title="${escAttr(diaryEntrySummary(e,a))}">${esc(diaryEntrySummaryShort(e,a))}</span>
-              ${e.baseline?`<span class="dg-base" title="Baseline — later weighings are measured from this one">⌂</span>`:""}
+              ${animalBaselines(a).some(b=>String(b.date).slice(0,10)===String(e.date).slice(0,10))&&entryHasRole(e,"weight")
+                ?`<span class="dg-base" title="The animal's baseline is set from this day">⌂</span>`:""}
               ${e.seriesId?`<span class="dg-rep" title="One of ${diarySeriesCount(a,e.seriesId)} repeating entries">↻</span>`:""}
               ${diaryBelongsTo(e)?`<button class="dg-round" data-id="${e.id}" title="${escAttr(diaryBelongsTo(e))} — open it">◉</button>`:""}
               <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
@@ -15443,18 +15956,16 @@ function paintDiary(container,a,opts){
       askDeleteWithFollowUps(a,[entry],finish,"Delete this diary entry?");
       return;
     }
-    const baseSet=e.target.closest(".dg-baseset"), baseClear=e.target.closest(".dg-basex");
-    if(baseSet||baseClear){
-      const id=(baseSet||baseClear).dataset.id;
-      const entry=a.diary.find(x=>x.id===id); if(!entry)return;
-      entry.baseline=!!baseSet;
-      entry.edited=Date.now();
+    const baseSet=e.target.closest(".dg-baseset");
+    if(baseSet){
+      const entry=a.diary.find(x=>x.id===baseSet.dataset.id); if(!entry)return;
+      setAnimalBaseline(a,entry.date,entry.data.grams,"");
       persist(); notifyChange(); draw();
-      toast(baseSet?`Baseline starts ${fmtDMY(entry.date)}`:"Baseline cleared");
+      toast(`${a.name}'s baseline is ${entry.data.grams}g from ${fmtDMY(entry.date)}`);
       return;
     }
     const procBtn=e.target.closest(".dg-openproc");
-    if(procBtn){ closeModal(); animalModal(procBtn.dataset.a); return; }
+    if(procBtn){ closeModal(); animalModal(procBtn.dataset.a,null,{tab:"details"}); return; }
     const roundBtn=e.target.closest(".dg-round");
     if(roundBtn){
       const entry=a.diary.find(x=>x.id===roundBtn.dataset.id); if(!entry)return;
@@ -15662,10 +16173,7 @@ function animalSiteText(a){ const v=animalSites(a); return v.length?v.join(", ")
    the usual case) names no surgery, and falls to the earliest one — so an
    existing animal reads correctly with nothing migrated and nothing guessed
    beyond the obvious. */
-function surgeryEntries(a){
-  return (a&&a.diary||[]).filter(e=>e.type==="surgery"&&e.date)
-    .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
-}
+function surgeryEntries(a){ return entriesWithRole(a,"surgery"); }
 function surgeryOfInjection(a,inj){
   const list=surgeryEntries(a); if(!list.length) return null;
   if(inj&&inj.surgeryId){ const hit=list.find(e=>e.id===inj.surgeryId); if(hit) return hit; }
@@ -16357,7 +16865,8 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   };
 }
 
-function animalModal(id,draft){
+function animalModal(id,draft,opts){
+  opts=opts||{};
   const a=id?DB.animals.find(x=>x.id===id):{alive:true,tasks:[]};
   if(!Array.isArray(a.tasks))a.tasks=[];
   // `view` supplies initial field values: normally the stored record, but when
@@ -16376,7 +16885,23 @@ function animalModal(id,draft){
   const F=(fid,lab,val,type="text")=>`<div class="fld" style="flex:1"><label>${lab}</label><input id="${fid}" type="${type}" value="${escAttr(val||"")}"></div>`;
   const dbtn=(fid,val)=>`<button type="button" id="${fid}" class="datebtn datebtn-sm ${val?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${val?fmtWhenFull(val):"set date"}</button>`;
   const seg=(fid,on)=>`<div class="seg" id="${fid}"><button data-v="1" class="${on?"on":""}">Yes</button><button data-v="0" class="${!on?"on":""}">No</button></div>`;
-  modal(`<h3>${id?"Edit":"New"} animal</h3>
+  /* An existing animal opens on its overview: what is true of it now, what
+     has happened and what is coming, with its experiments — everything about
+     it in one place, which is what this window was not. Its diary is the next
+     tab, and what used to be the whole window is the third: the details you
+     edit and Save. A new animal has nothing to overview yet, so it opens
+     straight into its details. Returning from the library mid-edit (`draft`)
+     goes back to the details it was editing. */
+  const hub=!!id;
+  const startTab=!hub?"details":(draft?"details":(opts.tab||"overview"));
+  modal(`<h3>${hub?esc(a.name||"Animal"):"New animal"}</h3>
+    ${hub?`<div class="am-tabs">
+      <button type="button" class="am-tab" data-pane="overview">Overview</button>
+      <button type="button" class="am-tab" data-pane="diary">Diary</button>
+      <button type="button" class="am-tab" data-pane="details">Details</button></div>
+    <div class="am-pane" data-pane="overview"><div id="am_overview"></div></div>
+    <div class="am-pane" data-pane="diary"><div id="am_diaryhost"></div></div>`:""}
+    <div class="am-pane" data-pane="details">
     <div class="drow">${F("am_name","Name",view.name)}</div>
     <div class="fld"><label>Experiments &amp; groups</label><div id="am_attach"></div></div>
     <div class="drow">${F("am_cage","Cage",view.cage)}${F("am_sex","Sex",view.sex)}${F("am_strain","Strain",view.strain)}</div>
@@ -16417,7 +16942,57 @@ function animalModal(id,draft){
     ${renderAnimalSections(a)}
     <div id="am_sec_add" class="am-sec-add"></div>
     <div class="fld"><label>Notes</label><div id="am_comwrap"></div></div>
+    </div>
     <div class="actions">${id?`<button class="btn danger" id="am_del">Delete</button><button class="btn ghost" id="am_dup" style="margin-right:auto">⧉ Duplicate</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
+
+  /* ---- the hub's tabs ----
+     Overview and Diary write as they go, like the diary always did; Details is
+     the form, kept by Save. The form stays in the page while the other tabs
+     are shown, so switching away and back loses nothing typed into it. */
+  if(hub){
+    const root=document.getElementById("modal");
+    let diaryPainted=false;
+    const showTab=(name,diaryOpts)=>{
+      root.querySelectorAll(".am-tab").forEach(b=>b.classList.toggle("on",b.dataset.pane===name));
+      root.querySelectorAll(".am-pane").forEach(p=>p.classList.toggle("hidden",p.dataset.pane!==name));
+      if(name==="overview") paintOverview();
+      // the diary is painted when first looked at, and again whenever it is
+      // asked to open on a particular day
+      if(name==="diary"&&(!diaryPainted||diaryOpts)){
+        diaryPainted=true;
+        paintDiary(document.getElementById("am_diaryhost"),a,Object.assign({onChange:()=>{}},diaryOpts||{}));
+      }
+    };
+    const paintOverview=()=>{
+      const host=document.getElementById("am_overview"); if(!host)return;
+      host.innerHTML=animalOverviewHTML(a);
+    };
+    root.querySelectorAll(".am-tab").forEach(b=>b.addEventListener("click",()=>showTab(b.dataset.pane)));
+    document.getElementById("am_overview").addEventListener("click",ev=>{
+      const t=ev.target;
+      if(t.closest(".ov-godiary")){ showTab("diary"); return; }
+      if(t.closest(".ov-godetails")){ showTab("details"); return; }
+      const day=t.closest(".ov-gotoday");
+      if(day){ showTab("diary",{date:day.dataset.d}); return; }
+      const exb=t.closest(".ov-openexp");
+      if(exb){ const ex=DB.experiments.find(x=>x.id===exb.dataset.ex); if(ex){ closeModal(); experimentModal(ex,()=>render()); } return; }
+      if(t.closest(".ov-baseedit")){
+        const ed=document.getElementById("ov_baseedit");
+        ed.innerHTML=ed.innerHTML?"":animalBaselineEditorHTML(a); return; }
+      const del=t.closest(".ov-basedel");
+      if(del){ clearAnimalBaseline(a,del.dataset.d); persist(); render(); paintOverview();
+        document.getElementById("ov_baseedit").innerHTML=animalBaselineEditorHTML(a); return; }
+      if(t.closest(".ov-baseadd")){
+        const g=document.getElementById("ov_bg").value.trim(), d=document.getElementById("ov_bd").value;
+        if(!g||isNaN(+g)||+g<=0){ toast("Give the baseline in grams"); return; }
+        if(!d){ toast("Give the date it applies from"); return; }
+        setAnimalBaseline(a,d,+g,document.getElementById("ov_bn").value.trim());
+        persist(); render(); paintOverview();
+        toast(`${a.name}'s baseline is ${+g}g from ${fmtDMY(d)}`);
+        return; }
+    });
+    showTab(startTab);
+  }
 
   // Which experiments this animal is in and which group of each. For an existing
   // animal this reads and writes the experiments directly — same assignment the
@@ -17098,7 +17673,7 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
       data.note=document.getElementById("tc_note").value.trim();
       const rep=readDiaryRepeat(document,"tc");
       const n=pushDiarySeries(a,{type,date:entryDate,time:entryTime,endTime:entryEndTime,data},rep);
-      if(type==="perfusion" && entryDate<=todayDateStr()) applyPerfusionSacrifice(a, entryDate);
+      reconcileAnimal(a);
       persist(); closeModal(); render();
       toast(n>1?`${n} ${diaryTypeDef(type).label} entries added for ${a.name}`
                 :`${diaryTypeDef(type).label} entry added for ${a.name}`);
@@ -17834,8 +18409,13 @@ function exportFullDatabaseExcel(){
       a.dob||"",ageWeeks(a)??"",a.sacrificed||"",
       surg.map(x=>fmtDMY(x.date)+(x.planned?" (planned)":"")).join(", "),
       last?daysSinceDate(a,last.date):"", lw??"",
+      // the same facts the animal's window shows, so the sheet and the app can
+      // never disagree about what an animal is
+      animalFact(a,"baseline").value??"", (()=>{ const v=animalFact(a,"pctBaseline").value; return v==null?"":Math.round(v); })(),
+      animalFact(a,"virus").value||"", animalFact(a,"targets").value||"", animalFact(a,"projections").value||"",
       yes(a.surgeryDetail&&a.surgeryDetail.headpost),yes(a.surgeryDetail&&a.surgeryDetail.window),
-      where,richTextPlain(richBodyHTML(a.comments,a.commentsRich))];
+      where, (()=>{ const n=animalNextStage(a); return n?`${n.label} ${fmtDMY(n.date)}${n.late?" (overdue)":""}`:""; })(),
+      richTextPlain(richBodyHTML(a.comments,a.commentsRich))];
   });
 
   const diary=[];
@@ -17953,7 +18533,8 @@ function exportFullDatabaseExcel(){
     if(f.type!=="table") customCols.push([sec,f]); }));
   const sheets=[
     sheet("Animals",["Name","Cage","Sex","Strain","Status","Practice","Excluded","Born","Age (weeks)","Sacrificed","Surgeries",
-      "Days since last surgery","Latest weight (g)","Head-post","Cranial window","Experiments (group)","Comments"],animals,0),
+      "Days since last surgery","Latest weight (g)","Baseline (g)","% of baseline","Virus","Injection sites","Projection targets",
+      "Head-post","Cranial window","Experiments (group)","Next plan stage","Comments"],animals,0),
     sheet("Diary entries",["Animal","Date","Time","End time","Type","Details","Done","Repeats","Part of","Logged"],diary,0,1,2),
     ...(customCols.length?[sheet("Animal fields",
       ["Animal",...customCols.map(([sec,f])=>`${sec.label||"Section"} · ${f.label||f.key}`)],

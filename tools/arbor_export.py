@@ -231,13 +231,130 @@ class Workspace:
 
     @staticmethod
     def latest_weight(a):
-        w = a.get("weights") or {}
-        if isinstance(w, dict) and w:
+        """The newest weighing that carries a value. This used to read
+        a.weights - the map weighings were migrated OUT of, and which the app
+        has kept frozen since only as a fallback for old devices - so every
+        weighing logged after that migration was missing from this sheet.
+        Mirrors latestWeightEntry() in the app."""
+        w = Workspace.weight_entries(a)
+        if w:
+            return w[-1]["data"]["grams"]
+        legacy = a.get("weights") or {}
+        if isinstance(legacy, dict) and legacy:
             try:
-                return w[max(w.keys())]
+                return legacy[max(legacy.keys())]
             except (ValueError, TypeError):
                 return ""
         return ""
+
+    # ---- the animal model, mirrored from the app -------------------------
+    # This exporter runs on its own, twice a day, without the app open, so it
+    # cannot ask the app what an animal is. These follow the app's own rules
+    # one for one (entryHappened, baselineAt, pctOfBaseline, animalViruses...)
+    # and must change when those do. Kept together so that is one place.
+
+    @staticmethod
+    def entry_happened(e):
+        d = as_date(e.get("date"))
+        if not isinstance(d, dt.date) or d > dt.date.today():
+            return False
+        if e.get("fromPlan") or e.get("fromTask"):
+            return bool(e.get("done")) or Workspace.has_content(e)
+        return True
+
+    @staticmethod
+    def has_content(e):
+        if e.get("done"):
+            return True
+        for v in (e.get("data") or {}).values():
+            if v is None or v == "":
+                continue
+            if isinstance(v, (list, dict)) and not v:
+                continue
+            return True
+        return False
+
+    @staticmethod
+    def weight_entries(a):
+        out = []
+        for e in a.get("diary") or []:
+            g = (e.get("data") or {}).get("grams")
+            if e.get("type") == "weight" and g not in (None, "") and e.get("date"):
+                out.append(e)
+        out.sort(key=lambda e: (str(e.get("date")), e.get("created") or 0))
+        return out
+
+    @staticmethod
+    def baseline_at(a, date):
+        """The baseline in force on a date: the animal's own, set from that
+        date or earlier, else its first weighing."""
+        d = str(date)[:10]
+        own = sorted((b for b in (a.get("baselines") or [])
+                      if b.get("date") and b.get("grams") not in (None, "")
+                      and str(b["date"])[:10] <= d),
+                     key=lambda b: str(b["date"]))
+        if own:
+            return float(own[-1]["grams"]), str(own[-1]["date"])[:10], True
+        w = Workspace.weight_entries(a)
+        if w:
+            return float(w[0]["data"]["grams"]), str(w[0]["date"])[:10], False
+        return None
+
+    @staticmethod
+    def pct_baseline(a):
+        w = Workspace.weight_entries(a)
+        if not w:
+            return ""
+        last = w[-1]
+        b = Workspace.baseline_at(a, last["date"])
+        if not b or not b[0]:
+            return ""
+        return round(float(last["data"]["grams"]) / b[0] * 100)
+
+    @staticmethod
+    def injections(a):
+        return (a.get("surgeryDetail") or {}).get("injections") or []
+
+    @staticmethod
+    def joined(values):
+        seen = []
+        for v in values:
+            if v and v not in seen:
+                seen.append(v)
+        return ", ".join(seen)
+
+    @staticmethod
+    def viruses(a):
+        return Workspace.joined(i.get("virus") for i in Workspace.injections(a)) or (a.get("virus") or "")
+
+    @staticmethod
+    def sites(a):
+        return Workspace.joined(i.get("siteRegion") for i in Workspace.injections(a)) or (a.get("targets") or "")
+
+    @staticmethod
+    def projections(a):
+        return Workspace.joined(i.get("partnerRegion") for i in Workspace.injections(a))
+
+    def next_stage(self, a):
+        """The earliest stage a plan scheduled for this animal that has not
+        happened yet, read from the entries the plan wrote."""
+        pending = [e for e in (a.get("diary") or [])
+                   if e.get("fromPlan") and not Workspace.entry_happened(e) and e.get("date")]
+        if not pending:
+            return ""
+        e = min(pending, key=lambda x: str(x["date"]))
+        ex = next((x for x in self.experiments if x.get("id") == e.get("fromPlan")), None)
+        label = self.diary_label(e.get("type"))
+        if ex:
+            for pid in [ex.get("planId")] + [g.get("planId") for g in (ex.get("groupDefs") or [])]:
+                pl = next((p for p in self.plans if p.get("id") == pid), None)
+                st = next((s for s in ((pl or {}).get("stages") or []) if s.get("id") == e.get("planStage")), None)
+                if st and st.get("label"):
+                    label = st["label"]
+                    break
+        d = as_date(e["date"])
+        late = isinstance(d, dt.date) and d < dt.date.today()
+        return f"{label} {d.strftime('%d/%m/%Y') if isinstance(d, dt.date) else e['date']}" + (" (overdue)" if late else "")
 
     @staticmethod
     def age_weeks(a):
@@ -249,15 +366,16 @@ class Workspace:
         return round((end - dob).days / 7)
 
     def surgery_dates(self, a):
-        """Every surgery on the animal: the profile's own date plus any logged
-        as diary entries, deduplicated."""
+        """Every surgery that has happened: the profile's own date plus any
+        logged as diary entries. A surgery booked for next week is not one the
+        animal has had - counting it made "days since last surgery" negative."""
         out = set()
         if a.get("surgery"):
             d = as_date(a["surgery"])
-            if isinstance(d, dt.date):
+            if isinstance(d, dt.date) and d <= dt.date.today():
                 out.add(d)
         for e in a.get("diary") or []:
-            if e.get("type") == "surgery":
+            if e.get("type") == "surgery" and Workspace.entry_happened(e):
                 d = as_date(e.get("date"))
                 if isinstance(d, dt.date):
                     out.add(d)
@@ -593,18 +711,23 @@ def build_sheets(w):
             ", ".join(d.strftime("%d/%m/%Y") for d in surg),
             (dt.date.today() - last).days if last else "",
             Workspace.latest_weight(a),
+            (lambda b: b[0] if b else "")(Workspace.baseline_at(a, dt.date.today())),
+            Workspace.pct_baseline(a),
+            Workspace.viruses(a), Workspace.sites(a), Workspace.projections(a),
             yes((a.get("surgeryDetail") or {}).get("headpost")),
             yes((a.get("surgeryDetail") or {}).get("window")),
             w.where(a.get("id")),
+            w.next_stage(a),
             plain(a.get("comments")),
         ])
     sheets.append(Sheet(
         "Animals",
         ["Name", "Cage", "Sex", "Strain", "Status", "Practice", "Excluded", "Born",
          "Age (weeks)", "Sacrificed", "Surgeries", "Days since last surgery",
-         "Latest weight (g)", "Head-post", "Cranial window", "Experiments (group)",
-         "Comments"],
-        animals, sort=[0], wide=[10, 15, 16]))
+         "Latest weight (g)", "Baseline (g)", "% of baseline", "Virus",
+         "Injection sites", "Projection targets", "Head-post", "Cranial window",
+         "Experiments (group)", "Next plan stage", "Comments"],
+        animals, sort=[0], wide=[10, 20, 22]))
 
     diary = []
     for a in w.animals:
