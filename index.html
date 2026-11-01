@@ -381,6 +381,7 @@
   .dg-typebtn.on{color:var(--ink);border-color:var(--line-strong,var(--line2))}
   .dg-entry{border:1px solid var(--line2);border-radius:8px;padding:7px 9px;margin-bottom:6px;font-size:11.5px}
   .dg-entry .dg-erow{display:flex;align-items:center;gap:6px}
+  .dg-entry .dg-ename{flex:0 0 auto;color:var(--ink);font-weight:500}
   .dg-entry .dg-esum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-dim)}
   .dg-entry button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:1px 7px;font-size:11px;cursor:pointer;flex:0 0 auto}
   .dg-entry.done{opacity:.6}
@@ -14277,6 +14278,14 @@ function renderTypeFields(type,d,animal){
   return `<div class="dg-metrics-grid">${def.fields.map(f=>
     `<div${f.type==="table"?' class="dg-wide"':""}><label>${esc(f.label||"(unnamed)")}</label>${renderTypeField(f,d[f.key],null,animal)}</div>`).join("")}</div>`;
 }
+/* What the summary adds *beside* the type's name: the dash that stands for
+   "nothing here yet" is noise once the name is shown, and a time on its own
+   should not be dressed up as a value. */
+function diaryEntrySummaryShort(e,a){
+  const s=diaryEntrySummary(e,a);
+  if(!s||s==="—") return "";
+  return s.replace(/ · —$/,"").replace(/^—$/,"");
+}
 function diaryEntrySummary(e,a){
   const d=e.data||{};
   const timePrefix=e.time?`${e.time}${e.endTime?"–"+e.endTime:""} · `:"";
@@ -15246,8 +15255,14 @@ function paintDiary(container,a,opts){
           <div class="dg-entry${e.done?" done":""}" style="border-left:3px solid ${diaryTypeDef(e.type).color}">
             <div class="dg-erow">
               <button type="button" class="step-dot dg-done${e.done?" on":""}" data-id="${e.id}" title="${e.done?"Done — click to undo":"Mark done"}">${e.done?"✓":""}</button>
+              ${/* The row showed the type's icon and then whatever had been
+                    filled in — so a scheduled entry nobody had touched read as
+                    an icon and a dash, and which of ten types it was had to be
+                    guessed from a glyph. The name is what identifies it, so it
+                    is said, and the summary only adds to it. */""}
               <span>${diaryTypeDef(e.type).icon}</span>
-              <span class="dg-esum" title="${escAttr(diaryEntrySummary(e,a))}">${esc(diaryEntrySummary(e,a))}</span>
+              <span class="dg-ename">${esc(diaryTypeDef(e.type).label||e.type)}</span>
+              <span class="dg-esum" title="${escAttr(diaryEntrySummary(e,a))}">${esc(diaryEntrySummaryShort(e,a))}</span>
               ${e.seriesId?`<span class="dg-rep" title="One of ${diarySeriesCount(a,e.seriesId)} repeating entries">↻</span>`:""}
               ${diaryBelongsTo(e)?`<button class="dg-round" data-id="${e.id}" title="${escAttr(diaryBelongsTo(e))} — open it">◉</button>`:""}
               <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
