@@ -13462,7 +13462,7 @@ function renderNotes(){
         </div>
       </div>
       ${owner?`<span class="note-owner" style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);border:1px solid var(--line2);border-radius:5px;padding:1px 6px" dir="auto" title="${escAttr(owner)}">${esc(owner)}</span>`:""}
-      <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto;white-space:nowrap">${n.updated?new Date(n.updated).toLocaleDateString():""}</span>
+      <span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);flex:0 0 auto;white-space:nowrap">${n.updated?fmtStamp(n.updated,false):""}</span>
       <button class="lit-del" title="Delete">✕</button>`;
     row.querySelector(".note-expand").onclick=e=>{
       e.stopPropagation();
@@ -13733,6 +13733,18 @@ function condFields(typeKey){
     {key:"__done", label:"Status",           type:"done", src:"done"},
     {key:"__note", label:"Note",             type:"text", src:"note"}
   ];
+  /* The procedure belongs to the animal rather than to any one entry, but
+     Surgery is where a person looks for it, so it is offered there and matched
+     against the animal instead of against its entries. */
+  if(typeKey==="surgery"){
+    out.push(
+      {key:"__proc_virus",  label:"Virus injected",     type:"text",  src:"proc"},
+      {key:"__proc_site",   label:"Injection site",     type:"text",  src:"proc"},
+      {key:"__proc_partner",label:"Projection target",  type:"text",  src:"proc"},
+      {key:"__proc_head",   label:"Head-post",          type:"yesno", src:"proc"},
+      {key:"__proc_window", label:"Cranial window",     type:"yesno", src:"proc"},
+      {key:"__proc_n",      label:"Number of injections",type:"count",src:"proc"});
+  }
   if(typeKey==="training"){
     out.push({key:"__task",label:"Task",type:"text",src:"task"});
     // metric keys differ per task, so offer the union across the library
@@ -13759,6 +13771,7 @@ function condValueOf(e,f){
 }
 function condMatches(a,c){
   const f=condFieldDef(c.type,c.field); if(!f)return false;
+  if(f.src==="proc") return procCondMatches(a,c,f);
   const entries=(a.diary||[]).filter(e=>e.type===c.type);
   // a count is a fact about the set, not about any one entry
   if(f.type==="count"){
@@ -13787,6 +13800,29 @@ function condMatches(a,c){
     if(f.type==="select") return c.op==="is"?sv===tv:sv!==tv;
     return c.op==="has"?sv.includes(tv):!sv.includes(tv);
   });
+}
+/* A question about the animal's procedure. "Has" asks whether ANY injection
+   says so; "does not have" asks whether none does — the useful reading, rather
+   than "some other injection also exists", which would be true of almost
+   everything. */
+function procCondMatches(a,c,f){
+  const d=(a&&a.surgeryDetail)||null;
+  if(f.key==="__proc_n"){
+    const n=animalInjections(a).length, t=parseFloat(c.value);
+    if(isNaN(t))return false;
+    return c.op==="gt"?n>t:c.op==="lt"?n<t:n===t;
+  }
+  if(f.type==="yesno"){
+    const b=!!(d&&(f.key==="__proc_head"?d.headpost:d.window));
+    return c.op==="yes"?b:!b;
+  }
+  const pool=f.key==="__proc_virus"?animalViruses(a)
+           :f.key==="__proc_site"?animalSites(a)
+           :animalPartners(a);
+  const tv=String(c.value||"").toLowerCase();
+  if(!tv) return false;
+  const any=pool.some(v=>String(v).toLowerCase().includes(tv));
+  return c.op==="has"?any:!any;
 }
 function condLabel(c){
   const d=diaryTypeDef(c.type), f=condFieldDef(c.type,c.field);
@@ -13863,6 +13899,19 @@ function ageWeeks(a){ if(!a.dob)return null; const end=a.sacrificed?new Date(a.s
    used to count from the first and say nothing about any after it. */
 // "2026-09-02" → "02/09/2026": day/month/year, how dates are read in the lab
 function fmtDMY(iso){ const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||"")); return m?`${m[3]}/${m[2]}/${m[1]}`:String(iso||""); }
+/* The same day/month/year for a moment in time. toLocaleString() wrote
+   "11/1/2026", which on a machine set to one locale means the 11th of January
+   and on another the 1st of November — in a lab record that is not a styling
+   preference. Takes a timestamp, a Date or an ISO string, so every caller can
+   stop choosing. */
+function fmtStamp(t,withTime){
+  if(t==null||t==="")return "";
+  const d=t instanceof Date?t:new Date(typeof t==="number"?t:String(t));
+  if(isNaN(d))return "";
+  const p=n=>String(n).padStart(2,"0");
+  const day=`${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()}`;
+  return withTime===false?day:`${day} · ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 function surgeriesOf(a){
   const today=todayDateStr();
   const out=(a.diary||[]).filter(e=>e.type==="surgery"&&e.date)
@@ -14327,7 +14376,31 @@ function diaryEntryDetailHTML(e,a){
     }
   }
   rows.push(arow("Note", diaryNoteOf(d)));
-  rows.push(arow("Logged", new Date(e.created).toLocaleString()+(e.edited?" · edited "+new Date(e.edited).toLocaleString():"")));
+  /* A surgery entry used to show only its own fields, while what was actually
+     done — the injections, the head-post, the window — sat in the animal
+     window with no way across. The entry now says what it did, read from the
+     animal's own procedure rather than copied, so editing either shows in
+     both. */
+  if(e.type==="surgery"&&a){
+    const det=a.surgeryDetail||null;
+    const injs=injectionsOfSurgery(a,e);
+    const bits=[];
+    if(det&&det.headpost) bits.push("head-post");
+    if(det&&det.window) bits.push("cranial window");
+    if(bits.length) rows.push(arow("Fitted", bits.join(" · ")));
+    if(injs.length){
+      rows.push(arowHTML("Injections",injs.map(i=>{
+        const where=[i.siteRegion,i.partnerRegion?"→ "+i.partnerRegion:""].filter(Boolean).join(" ");
+        const coords=[i.ap!=null?`AP ${i.ap}`:"",i.ml!=null?`ML ${i.ml}`:"",i.dv!=null?`DV ${i.dv}`:""].filter(Boolean).join(" · ");
+        return `<div style="margin-bottom:2px">${esc(i.virus||"(no virus named)")}${where?" — "+esc(where):""}${
+          coords?`<span style="color:var(--ink-faint);font-family:var(--mono);font-size:10px"> · ${esc(coords)}</span>`:""}</div>`;
+      }).join("")));
+    } else if(det) {
+      rows.push(arowHTML("Injections",`<span style="color:var(--ink-faint)">none recorded against this surgery</span>`));
+    }
+    rows.push(arowHTML("","<button type=\"button\" class=\"dg-openproc\" data-a=\""+escAttr(a.id)+"\" style=\"border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 10px;font-size:11.5px;cursor:pointer\">Open the animal\u2019s procedure</button>"));
+  }
+  rows.push(arow("Logged", fmtStamp(e.created)+(e.edited?" · edited "+fmtStamp(e.edited):"")));
   return `<div class="dg-detail">${rows.join("")}</div>`;
 }
 function pipe(v){ return v===true?{c:"var(--gcamp)",m:"✓"}:v===false?{c:"var(--overdue)",m:"✕"}:{c:"var(--ink-faint)",m:"·"}; }
@@ -14667,8 +14740,8 @@ const ANIMAL_SUMMARY_BUILTINS=[
   {id:"weight",    label:"Latest weight", val:a=>{const w=latestWeight(a); return w!=null?"⚖ "+w+"g":"";}},
   {id:"born",      label:"Born",          val:a=>a.dob?"🐭 "+fmtDMY(a.dob):""},
   {id:"sacrificed",label:"Sacrificed",    val:a=>a.sacrificed?"✝ "+fmtDMY(a.sacrificed):""},
-  {id:"virus",     label:"Virus",         val:a=>a.virus||""},
-  {id:"targets",   label:"Targets",       val:a=>a.targets||""},
+  {id:"virus",     label:"Virus",         val:a=>animalVirusText(a)},
+  {id:"targets",   label:"Targets",       val:a=>animalSiteText(a)},
   {id:"experiments",label:"Experiments",  val:a=>animalSteps(a.id).map(st=>st.title||"(unnamed)").join(", ")}
 ];
 const ANIMAL_SUMMARY_DEFAULT=["cage","sex","strain","age","weight"];
@@ -14908,7 +14981,7 @@ function openEventLogModal(presetIds){
 
   document.getElementById("el_txt").onclick=()=>{
     const evs=events(); if(!evs.length){ toast("Nothing to export"); return; }
-    let lastDate=null, txt=`Arbor event log — exported ${new Date().toLocaleString()}\r\n`;
+    let lastDate=null, txt=`Arbor event log — exported ${fmtStamp(Date.now())}\r\n`;
     evs.forEach(({a,e})=>{
       if(e.date!==lastDate){ lastDate=e.date; txt+=`\r\n${e.date}\r\n${"-".repeat(e.date.length)}\r\n`; }
       txt+=`  ${lineFor(a,e)}\r\n`;
@@ -15336,6 +15409,8 @@ function paintDiary(container,a,opts){
       askDeleteWithFollowUps(a,[entry],finish,"Delete this diary entry?");
       return;
     }
+    const procBtn=e.target.closest(".dg-openproc");
+    if(procBtn){ closeModal(); animalModal(procBtn.dataset.a); return; }
     const roundBtn=e.target.closest(".dg-round");
     if(roundBtn){
       const entry=a.diary.find(x=>x.id===roundBtn.dataset.id); if(!entry)return;
@@ -15510,6 +15585,55 @@ function brainMap(surgery,plane){
   });
   g+=`</svg>`; return g;
 }
+/* ---- what is actually in this animal ----
+   The procedure (injections, head-post, window) is recorded in the animal
+   window and nowhere else knew about it: the filters and conditions could ask
+   about any diary field but not about the virus that was injected, which is
+   the question a colony is actually sorted by. These read the procedure once,
+   so the card, the filters and the conditions all answer from the same place
+   instead of each going to look, or — worse — reading the legacy free-text
+   a.virus / a.targets, which are empty for every animal recorded properly. */
+function animalInjections(a){ return ((a&&a.surgeryDetail)||{}).injections||[]; }
+function animalViruses(a){
+  return [...new Set(animalInjections(a).map(i=>i&&i.virus).filter(Boolean))];
+}
+function animalSites(a){
+  const out=[];
+  animalInjections(a).forEach(i=>{ if(i&&i.siteRegion)out.push(i.siteRegion); });
+  return [...new Set(out)];
+}
+function animalPartners(a){
+  return [...new Set(animalInjections(a).map(i=>i&&i.partnerRegion).filter(Boolean))];
+}
+// The legacy free-text fields are still read, but only when nothing real is
+// recorded — an animal entered before the injection editor existed still says
+// what it was given.
+function animalVirusText(a){ const v=animalViruses(a); return v.length?v.join(", "):((a&&a.virus)||""); }
+function animalSiteText(a){ const v=animalSites(a); return v.length?v.join(", "):((a&&a.targets)||""); }
+/* An injection was performed in a surgery, so it can say which one — and then
+   it has a date, and a surgery has contents. Before this they were two records
+   that never referred to each other: the animal window knew what was injected
+   and the diary knew when a surgery happened, and nothing joined them.
+   An injection recorded before this (or alongside a single surgery, which is
+   the usual case) names no surgery, and falls to the earliest one — so an
+   existing animal reads correctly with nothing migrated and nothing guessed
+   beyond the obvious. */
+function surgeryEntries(a){
+  return (a&&a.diary||[]).filter(e=>e.type==="surgery"&&e.date)
+    .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+}
+function surgeryOfInjection(a,inj){
+  const list=surgeryEntries(a); if(!list.length) return null;
+  if(inj&&inj.surgeryId){ const hit=list.find(e=>e.id===inj.surgeryId); if(hit) return hit; }
+  return list[0];
+}
+function injectionsOfSurgery(a,e){
+  if(!e) return [];
+  const list=surgeryEntries(a), isFirst=list.length&&list[0].id===e.id;
+  return animalInjections(a).filter(inj=>
+    inj.surgeryId?inj.surgeryId===e.id:isFirst);
+}
+function injectionDate(a,inj){ const e=surgeryOfInjection(a,inj); return e?e.date:null; }
 function surgerySummary(a){
   const s=a.surgeryDetail; if(!s)return "";
   const parts=[]; if(s.headpost)parts.push("head-post"); if(s.window)parts.push("window");
@@ -15956,6 +16080,15 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
           <button class="inj-dn" data-i="${i}" style="${BS};padding:0 7px;font-size:9px">▼</button>
         </div>
         <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 18px;text-align:center">${i+1}</span>
+        ${/* An injection happened in a surgery, so it has a date — read from
+             that surgery's own diary entry rather than stored twice. A
+             template being written in the library has no animal and no date,
+             and says nothing instead of pretending. */""}
+        ${(()=>{ const an=opts.animal; if(!an)return "";
+          const sg=surgeryOfInjection(an,inj);
+          if(!sg) return `<span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)" title="No surgery is logged for this animal yet — log one in the diary and these injections belong to it">no surgery logged</span>`;
+          return `<span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)" title="Done in the surgery logged on this date">🔪 ${esc(fmtDMY(sg.date))}</span>`;
+        })()}
         ${colorBtnHTML(inj.color,{attrs:`data-i="${i}" data-f="color"`,fallback:INJ_COLORS[i%INJ_COLORS.length],title:"Marker colour for this injection"})}
         <select data-i="${i}" data-f="type" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 7px;font-size:12px;flex:0 0 auto">
           <option value="retro"  ${inj.type==="retro" ?"selected":""}>retro</option>
@@ -16334,7 +16467,7 @@ function animalModal(id,draft){
   /* Mounted whether or not the section is on screen, so turning it back on is
      instant and nothing has to be rebuilt mid-edit. What it reads is only
      written back when the section is actually shown — see formRecord. */
-  const procEditor=mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary, {offerTubeUse:true});
+  const procEditor=mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary, {offerTubeUse:true,animal:a});
 
   // these live inside the Procedure section, so they are simply not there
   // when it has been put away
@@ -17171,7 +17304,7 @@ function openHistoryModal(){
     body().innerHTML=`<p style="margin:0 0 12px;line-height:1.6">Every save is kept. Pick one to see what it
       had that your workspace doesn't have now.</p>
       <div class="hist-list">${list.slice(0,40).map((h,i)=>`<button type="button" class="hist-row" data-i="${i}">
-        <span class="hist-when">${esc(new Date(h.committed_at).toLocaleString())}</span>
+        <span class="hist-when">${esc(fmtStamp(h.committed_at))}</span>
         <span class="hist-go">look inside →</span>
       </button>`).join("")}</div>
       <div id="hist_detail"></div>`;
@@ -17199,7 +17332,7 @@ function openHistoryModal(){
             <span class="hc-now">${now===then?"same as now":`${now} now`}</span></div>`;
         }).join("");
         det.innerHTML=`<div class="hist-detail">
-          <div class="hist-head">${esc(new Date(h.committed_at).toLocaleString())}</div>
+          <div class="hist-head">${esc(fmtStamp(h.committed_at))}</div>
           <div class="hist-counts">${countsHTML}</div>
           <div class="hist-restore-all">
             <button type="button" class="btn accent" id="hist_restore_all">↺ Restore this whole version</button>
@@ -17215,7 +17348,7 @@ function openHistoryModal(){
         </div>`;
         const allBtn=det.querySelector("#hist_restore_all");
         if(allBtn) allBtn.onclick=()=>{
-          const when=new Date(h.committed_at).toLocaleString();
+          const when=fmtStamp(h.committed_at);
           const summary=COUNTED.map(([k,noun])=>`${nOf(old,k)} ${noun}${nOf(old,k)!==1?"s":""}`).join(", ");
           if(!confirm(`Replace your whole workspace with the version from ${when}?\n\nThat version holds: ${summary}.\n\nWhatever is in the workspace now is overwritten. This device keeps the restored copy until you sync, so nothing is pushed until you choose to.`))return;
           /* migrate() holds one-time conversions that are destructive if they
