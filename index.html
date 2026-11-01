@@ -382,6 +382,7 @@
   .dg-entry{border:1px solid var(--line2);border-radius:8px;padding:7px 9px;margin-bottom:6px;font-size:11.5px}
   .dg-entry .dg-erow{display:flex;align-items:center;gap:6px}
   .dg-entry .dg-ename{flex:0 0 auto;color:var(--ink);font-weight:500}
+  .dg-entry .dg-base{flex:0 0 auto;color:var(--gcamp);font-size:12px}
   .dg-entry .dg-esum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-dim)}
   .dg-entry button{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:1px 7px;font-size:11px;cursor:pointer;flex:0 0 auto}
   .dg-entry.done{opacity:.6}
@@ -14046,15 +14047,35 @@ function latestWeight(a){
   for(let i=w.length-1;i>=0;i--){ const g=w[i].data&&w[i].data.grams; if(g!=null&&g!=="")return g; }
   return null;
 }
+/* The weight everything else is measured against. The first weighing is the
+   obvious default, but it stops being the right one the moment the animal's
+   normal changes — after a surgery, or when food restriction starts, "85% of
+   baseline" means 85% of the weight it started that period at, not of what it
+   weighed as a juvenile.
+   So any weighing can be marked as the baseline, and each later one measures
+   from the most recent baseline at or before it. Several baselines in a life
+   is the normal case, not an edge one: one before surgery, one at the start of
+   restriction. Marking nothing leaves the first weighing in charge, which is
+   what every existing animal already does. */
+function weightBaselineOf(a,e){
+  const w=diaryWeightEntries(a);
+  const idx=w.findIndex(x=>x.id===e.id); if(idx<0)return null;
+  for(let i=idx;i>=0;i--) if(w[i].baseline&&w[i].data&&w[i].data.grams!=null) return w[i];
+  return w[0]||null;
+}
+// Whether this animal's baseline has been moved at all — the label only needs
+// to explain itself when it is not simply the first weighing.
+function weightHasOwnBaseline(a){ return diaryWeightEntries(a).some(x=>x.baseline); }
 // %/absolute change for one weight entry vs. the recording right before it
-// and vs. this animal's very first recording — null fields when there's
-// nothing to compare against (first-ever entry, or a previous weight of 0).
+// and vs. the baseline in force at that point — null fields when there's
+// nothing to compare against (the baseline itself, or a reference of 0).
 function weightChangeInfo(a,e){
   const w=diaryWeightEntries(a);
   const idx=w.findIndex(x=>x.id===e.id); if(idx<0)return null;
   const cur=w[idx].data.grams; if(cur==null)return null;
-  const mk=ref=>(!ref||ref.data.grams==null)?null:{date:ref.date,delta:cur-ref.data.grams,pct:ref.data.grams?(cur-ref.data.grams)/ref.data.grams*100:null};
-  return {prev: idx>0?mk(w[idx-1]):null, first: idx>0?mk(w[0]):null};
+  const mk=ref=>(!ref||ref.id===e.id||ref.data.grams==null)?null
+    :{date:ref.date,delta:cur-ref.data.grams,pct:ref.data.grams?(cur-ref.data.grams)/ref.data.grams*100:null};
+  return {prev: idx>0?mk(w[idx-1]):null, base: mk(weightBaselineOf(a,e))};
 }
 function fmtWeightChange(c){
   if(!c)return null;
@@ -14350,7 +14371,8 @@ function diaryEntrySummary(e,a){
   if(e.type==="weight"&&a){
     const wc=weightChangeInfo(a,e);
     if(wc&&wc.prev) parts.push(`${fmtWeightChange(wc.prev)} vs prev`);
-    if(wc&&wc.first) parts.push(`${fmtWeightChange(wc.first)} vs first`);
+    if(wc&&wc.base) parts.push(`${fmtWeightChange(wc.base)} vs baseline`);
+    if(e.baseline) parts.push("baseline");
   }
   const note=diaryNoteOf(d); if(note)parts.push(note);
   return timePrefix+(parts.join(" · ")||"—");
@@ -14371,8 +14393,19 @@ function diaryEntryDetailHTML(e,a){
     });
     if(e.type==="weight"&&a){
       const wc=weightChangeInfo(a,e);
+      const base=weightBaselineOf(a,e);
       if(wc&&wc.prev) rows.push(arow("Change since previous", fmtWeightChange(wc.prev)));
-      if(wc&&wc.first) rows.push(arow("Change since first", fmtWeightChange(wc.first)));
+      if(wc&&wc.base) rows.push(arow(
+        base&&base.id!==(diaryWeightEntries(a)[0]||{}).id?`Change since baseline (${fmtDMY(base.date)})`:"Change since first",
+        fmtWeightChange(wc.base)));
+      /* Said here rather than hidden in the edit form: the place you read a
+         weight against its baseline is the place you decide the baseline is
+         the wrong one. */
+      rows.push(arowHTML("Baseline", e.baseline
+        ? `<span style="color:var(--gcamp)">every later weighing is measured from this one</span>
+           <button type="button" class="dg-basex" data-id="${escAttr(e.id)}" style="margin-left:8px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 9px;font-size:11px;cursor:pointer">Clear</button>`
+        : `<button type="button" class="dg-baseset" data-id="${escAttr(e.id)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 9px;font-size:11px;cursor:pointer">Start the baseline here</button>
+           <span style="color:var(--ink-faint);margin-left:8px">${base?`now measured from ${esc(fmtDMY(base.date))}`:"no earlier weighing to measure from"}</span>`));
     }
   }
   rows.push(arow("Note", diaryNoteOf(d)));
@@ -15336,6 +15369,7 @@ function paintDiary(container,a,opts){
               <span>${diaryTypeDef(e.type).icon}</span>
               <span class="dg-ename">${esc(diaryTypeDef(e.type).label||e.type)}</span>
               <span class="dg-esum" title="${escAttr(diaryEntrySummary(e,a))}">${esc(diaryEntrySummaryShort(e,a))}</span>
+              ${e.baseline?`<span class="dg-base" title="Baseline — later weighings are measured from this one">⌂</span>`:""}
               ${e.seriesId?`<span class="dg-rep" title="One of ${diarySeriesCount(a,e.seriesId)} repeating entries">↻</span>`:""}
               ${diaryBelongsTo(e)?`<button class="dg-round" data-id="${e.id}" title="${escAttr(diaryBelongsTo(e))} — open it">◉</button>`:""}
               <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
@@ -15407,6 +15441,16 @@ function paintDiary(container,a,opts){
         return;
       }
       askDeleteWithFollowUps(a,[entry],finish,"Delete this diary entry?");
+      return;
+    }
+    const baseSet=e.target.closest(".dg-baseset"), baseClear=e.target.closest(".dg-basex");
+    if(baseSet||baseClear){
+      const id=(baseSet||baseClear).dataset.id;
+      const entry=a.diary.find(x=>x.id===id); if(!entry)return;
+      entry.baseline=!!baseSet;
+      entry.edited=Date.now();
+      persist(); notifyChange(); draw();
+      toast(baseSet?`Baseline starts ${fmtDMY(entry.date)}`:"Baseline cleared");
       return;
     }
     const procBtn=e.target.closest(".dg-openproc");

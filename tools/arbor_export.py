@@ -313,6 +313,10 @@ class Workspace:
             if f.get("type") == "yesno":
                 v = "Yes" if v else "No"
             bits.append(f"{f.get('label') or f.get('key')}: {v}")
+        # a weighing can be marked as the baseline every later one is measured
+        # from; the app says so in its own summary, so the sheet does too
+        if e.get("baseline"):
+            bits.append("baseline")
         if e.get("type") == "training":
             if data.get("task"):
                 bits.insert(0, f"Task: {data['task']}")
