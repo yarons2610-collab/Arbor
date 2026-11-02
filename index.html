@@ -2020,6 +2020,9 @@ let localDirty=false;
 // not read the Gist yet", which reads as "anything there is news to us".
 let lastSyncedRemoteVersion=null;
 // The record collections a sync merges, record by record.
+// lists kept on an animal, merged item by item (see mergeAnimalLists)
+const ANIMAL_LISTS=[{key:"baselines",idOf:b=>b.date?String(b.date).slice(0,10):null},
+                    {key:"restrictions",idOf:r=>r.id},{key:"fovs",idOf:f=>f.id}];
 const MERGE_KEYS=["domains","tasks","spines","projects","experiments","schedule",
                   "readings","protocols","other","notes","animals","tags"];
 const SYNC_MARK_KEY="arbor_sync_mark";
@@ -2082,7 +2085,12 @@ function snapshotBase(db){
     cfgItems[key]=m;
   });
   const inv={}; Object.keys(db.inventory||{}).forEach(k=>{ inv[k]=hashJSON(db.inventory[k]); });
-  return {rec,diary,cfg,cfgItems,inv};
+  // the lists that live on an animal, item by item (see mergeAnimalLists)
+  const sub={};
+  (db.animals||[]).forEach(a=>{ if(!a||!a.id)return; const m={};
+    ANIMAL_LISTS.forEach(({key,idOf})=>{ const h={}; (Array.isArray(a[key])?a[key]:[]).forEach(x=>{ const id=x&&idOf(x); if(id)h[id]=hashJSON(x); }); m[key]=h; });
+    sub[a.id]=m; });
+  return {rec,diary,cfg,cfgItems,inv,sub};
 }
 function baseHash(base,coll,id){
   if(!base||!base.rec)return undefined;
@@ -3291,6 +3299,27 @@ function mergeById(was,theirs,mine){
   M.forEach((x,id)=>{ const w=W.get(id); if(!w||JSON.stringify(w)!==JSON.stringify(x)) out.set(id,x); });
   return [...out.values()];
 }
+/* Fields of view merge per FOV and, inside one, per setting — one person
+   noting a new depth while another marks a dendrite reconstructed are two
+   edits to one FOV, and merged whole the second one lost the first. Dendrites
+   merge by id, like restriction periods. */
+function mergeFovs(was,theirs,mine){
+  const by=list=>{ const m=new Map(); (Array.isArray(list)?list:[]).forEach(x=>{ if(x&&x.id) m.set(x.id,x); }); return m; };
+  const W=by(was), T=by(theirs), M=by(mine), out=new Map(T);
+  W.forEach((x,id)=>{ if(!M.has(id)) out.delete(id); });
+  M.forEach((m,id)=>{
+    const w=W.get(id), t=T.get(id);
+    if(!w||!t){ if(!w) out.set(id,m); return; }      // new here; or removed there and left alone here
+    if(JSON.stringify(w)===JSON.stringify(m)) return;  // untouched here: theirs stands
+    const f=Object.assign({},t);
+    new Set([...Object.keys(m),...Object.keys(w)]).forEach(k=>{
+      if(k==="dendrites"){ f.dendrites=mergeById(w.dendrites,t.dendrites,m.dendrites); return; }
+      if(JSON.stringify(w[k])!==JSON.stringify(m[k])){ if(k in m) f[k]=m[k]; else delete f[k]; }
+    });
+    out.set(id,f);
+  });
+  return [...out.values()];
+}
 function mergeFields(theirs,mine,base,id,isDiary){
   const was=base&&((isDiary?base.diaryFull:base.recFull)||{})[id];
   // no agreed copy to compare against: this device decides, as before
@@ -3307,6 +3336,9 @@ function mergeFields(theirs,mine,base,id,isDiary){
     }
     if(k==="restrictions"){
       out[k]=mergeById(was[k],theirs[k],mine[k]); return;
+    }
+    if(k==="fovs"){
+      out[k]=mergeFovs(was[k],theirs[k],mine[k]); return;
     }
     if(k==="planRuns"){
       /* One entry per animal, each owned by whoever wrote it: merged per key
@@ -4252,6 +4284,25 @@ function freshWorkspace(){
    changed it since the agreed copy wins (this one, if both did). `base` is what
    the two last agreed on — null when this copy does not descend from it, and
    then the remote's version of anything shared is taken. */
+/* Baselines, restriction periods and fields of view are lists on the animal,
+   and two of your own devices add to them independently — the phone logs a
+   feeding while the laptop ends a restriction. Taken whole with the rest of
+   the animal, the last device to sync erased the other's. Merged item by
+   item against the agreed copy instead: what either side added survives, and
+   what this side removed or changed is honoured. A base from before these
+   hashes existed has nothing to compare with, so this side's list stands. */
+function mergeAnimalLists(out,remoteA,localA,base){
+  const was=base&&base.sub&&base.sub[localA.id]; if(!was)return;
+  ANIMAL_LISTS.forEach(({key,idOf})=>{
+    const W=was[key]||{}, R=Array.isArray(remoteA[key])?remoteA[key]:[], L=Array.isArray(localA[key])?localA[key]:[];
+    const m=new Map(); R.forEach(x=>{ const id=x&&idOf(x); if(id)m.set(id,x); });
+    const Lm=new Map(); L.forEach(x=>{ const id=x&&idOf(x); if(id)Lm.set(id,x); });
+    Object.keys(W).forEach(id=>{ if(!Lm.has(id)) m.delete(id); });              // removed here
+    Lm.forEach((x,id)=>{ if(W[id]!==hashJSON(x)) m.set(id,x); });              // added or changed here
+    out[key]=[...m.values()];
+    if(key!=="restrictions") out[key].sort((x,y)=>String(idOf(x)).localeCompare(String(idOf(y))));
+  });
+}
 function mergeWorkspaces(remote,local,base){
   const stamps={deletions:unionStamps(remote.deletions,local.deletions),revivals:unionStamps(remote.revivals,local.revivals)};
   remote.deletions=stamps.deletions; remote.revivals=stamps.revivals;
@@ -4266,7 +4317,8 @@ function mergeWorkspaces(remote,local,base){
       const i=at.get(x.id);
       // the remote lacks it: absence is never a deletion
       if(i==null){ at.set(x.id,out.length); out.push(x); return; }
-      if(k==="animals"){ if(changedHere(base,k,x.id,animalFields(x))) out[i]=Object.assign({},out[i],animalFields(x)); }
+      if(k==="animals"){ if(changedHere(base,k,x.id,animalFields(x))){
+        const merged=Object.assign({},out[i],animalFields(x)); mergeAnimalLists(merged,out[i],x,base); out[i]=merged; } }
       else if(changedHere(base,k,x.id,x)) out[i]=x;
     });
     remote[k]=out.filter(x=>!(x&&x.id&&dead(k,x.id)));
@@ -11227,7 +11279,6 @@ const STOCK={ unset:{label:"set status",color:"#5b6678"}, have:{label:"In stock"
   low:{label:"Low",color:"#f2b756"}, out:{label:"Out",color:"#ff5f6d"}, order:{label:"To order",color:"#3fd0d6"} };
 function invOf(name){ return DB.inventory[name]||{status:"unset",note:""}; }
 function setInv(name,patch){ DB.inventory[name]={...invOf(name),...patch}; persist(); }
-function materialNames(){ const s=new Set(); DB.tasks.forEach(t=>(t.materials||[]).forEach(m=>s.add(m))); Object.keys(DB.inventory).forEach(m=>s.add(m)); return [...s]; }
 function materialTasks(name){ return DB.tasks.filter(t=>(t.materials||[]).includes(name)); }
 function renameMaterial(oldN,newN){ newN=(newN||"").trim(); if(!newN||newN===oldN)return;
   DB.tasks.forEach(t=>{ if(t.materials)t.materials=[...new Set(t.materials.map(m=>m===oldN?newN:m))]; });
