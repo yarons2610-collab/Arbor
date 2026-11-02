@@ -5035,9 +5035,27 @@ function migrate(){                       // backfill fields added in later vers
    app shows once, for a person to look at. */
 const V2_TYPE_MAP={dt_c9wh_dj57qywf:{type:"microscopy",purpose:"structural"},   // "Spines"
                    dt_c9wh_sc5v8d3l:{type:"microscopy",purpose:"structural",note:"Reconstruction"}};
+// Hebrew inside an English sentence keeps its own direction without reordering the rest
+const bidiIso=t=>"\u2068"+String(t==null?"":t)+"\u2069";
 function v2Report(key,text){
   DB._v2report=DB._v2report||[];
-  if(!DB._v2report.some(r=>r.key===key)) DB._v2report.push({key,text,at:Date.now(),seen:false});
+  if(!DB._v2report.some(r=>r.key===key)) DB._v2report.push({key,text});
+}
+/* The report is shown once per device — which notes this device has seen is
+   kept here, not in the workspace, so a report written on one computer still
+   shows on the next. The bell window keeps a link to it after that. */
+const V2_SEEN_KEY="arbor_v2report_seen";
+function v2ReportUnseen(){
+  let seen=[]; try{ seen=JSON.parse(localStorage.getItem(V2_SEEN_KEY)||"[]"); }catch(e){}
+  return (DB._v2report||[]).filter(r=>!seen.includes(r.key));
+}
+function openV2Report(){
+  const list=DB._v2report||[];
+  modal(`<h3>What changed in Arbor 2.0</h3>
+    <div style="font-size:12px;color:var(--ink-dim);margin:0 0 10px">Your records were moved into the new record kinds. Nothing filled in was dropped; the points below are the ones worth a look.</div>
+    ${list.map(r=>`<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--line)">${esc(r.text)}</div>`).join("")||`<div style="font-size:11px;color:var(--ink-faint)">Nothing needed attention.</div>`}
+    <div class="actions"><button class="btn" onclick="closeModal()">Got it</button></div>`,{wide:true});
+  try{ localStorage.setItem(V2_SEEN_KEY,JSON.stringify(list.map(r=>r.key))); }catch(e){}
 }
 function migrateV2(){
   let changed=false;
@@ -5073,7 +5091,7 @@ function migrateV2(){
         const ang=/זוית\s*(-?\d+(?:\.\d+)?)/.exec(diaryNoteOf(e.data)||"");
         if(ang&&!(e.data.settings&&e.data.settings.angle!=null)){
           e.data.settings=Object.assign({},e.data.settings,{angle:+ang[1]}); changed=true;
-          v2Report("angle:"+e.id,`${a.name}, ${fmtDMY(e.date)}: read the table angle ${ang[1]} from the note "${diaryNoteOf(e.data)}".`); }
+          v2Report("angle:"+e.id,`${a.name}, ${fmtDMY(e.date)}: read the table angle ${ang[1]} from the note "${bidiIso(diaryNoteOf(e.data))}".`); }
       }
       // post-op: 1.0's tick meant it was given
       if(e.type==="postop"&&e.done&&e.data&&e.data.given==null){ e.data.given=true; changed=true; }
@@ -5147,7 +5165,7 @@ function migrateV2(){
     a.restrictions=animalRestrictions(a).filter(x=>!(x.start<=start&&(!x.end||x.end>=start))).concat([{
       id:rid,start,target:RESTRICTION_TARGET,end:ended,endReason:ended?"from the 1.0 feeding tasks":"",ration:null,at:0,by:a.by||meId()}]);
     if(baseW&&!animalBaselines(a).length) setAnimalBaseline(a,baseW.date,+baseW.data.grams,"restriction start (from 1.0)");
-    v2Report("rs:"+a.id,`${a.name}: restriction from ${fmtDMY(start)}${ended?" to "+fmtDMY(ended):" — ongoing"}, baseline ${baseW?baseW.data.grams+" g ("+fmtDMY(baseW.date)+")":"not found — set it in the animal's window"}, made from ${tasks.length} feeding task${tasks.length===1?"":"s"} (${[...new Set(tasks.map(t=>t.title))].join(", ")}).`);
+    v2Report("rs:"+a.id,`${a.name}: restriction from ${fmtDMY(start)}${ended?" to "+fmtDMY(ended):" — ongoing"}, baseline ${baseW?baseW.data.grams+" g ("+fmtDMY(baseW.date)+")":"not found — set it in the animal's window"}, made from ${tasks.length} feeding task${tasks.length===1?"":"s"} (${[...new Set(tasks.map(t=>bidiIso(t.title)))].join(", ")}).`);
     changed=true;
   });
   // identical starting weights on one day usually mean a value copied across animals
@@ -5158,7 +5176,7 @@ function migrateV2(){
     v2Report("samebase:"+k,`${names.join(", ")} all start from exactly ${g} g on ${fmtDMY(d)} — if that was copied rather than weighed, correct each baseline in the animal's window.`); });
   if(coverTasks.length){
     coverTasks.forEach(t=>deleteTask(t.id));
-    v2Report("rounds",`${coverTasks.length} feeding task${coverTasks.length===1?"":"s"} (האכלות) retired — the daily feeding now comes from the restrictions themselves.`);
+    v2Report("rounds",`${coverTasks.length} feeding task${coverTasks.length===1?"":"s"} (${bidiIso("האכלות")}) retired — the daily feeding now comes from the restrictions themselves.`);
     changed=true;
   }
   // protocol stages name record kinds; a plan an arm points at must exist
@@ -6746,7 +6764,7 @@ function openNotificationsModal(wantEvents){
       ${taskRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
       ${wantEvents?"":`<div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:14px 0 6px">Animals — needs attention</div>
       ${diaryRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}`}
-      <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`;
+      <div class="actions">${(DB._v2report||[]).length?`<button class="btn ghost" onclick="openV2Report()">What changed in 2.0</button>`:""}<button class="btn ghost" onclick="closeModal()">Close</button></div>`;
   };
   modal("",{wide:true});
   draw();
@@ -19527,6 +19545,7 @@ window.addEventListener("resize",()=>{ if(currentView==="arbor")renderArbor(); }
     resetRecordBaseline();   // deletions are recorded against what was loaded
     bootLoaded=true;         // from here on, saving and syncing are allowed
     render(); pruneOrphanFiles(); syncTopCollapsed();
+    if(v2ReportUnseen().length) openV2Report();
     // shared projects come after the private workspace, never before: they are
     // attached to it, and attaching to a half-loaded workspace is how records
     // end up in the wrong store
