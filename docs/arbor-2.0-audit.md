@@ -18,14 +18,18 @@ Status key: ✅ fine as is · 🔧 rework · 🗑 retire · ✨ new
   list below is shown to the user before it is built.
 - **Plans library in Materials** — removed; plans live in their experiment.
 
-## Progress
+## Progress — full pass done (02/11/2026)
 
-- ✅ Animals tab — restriction board, fixed filter questions, 2.0 sort orders,
-  card details read the procedure (1.0 virus/coords only where no injections
-  were recorded), own fields retired, Event log still to reword.
-- ✅ Materials — plans library removed.
-- ✅ Warnings — a missed step stops after 14 days; 1.0 brains get an assumed
-  PBS date (reported) so they no longer read as overdue.
+Built, then checked on screen and on a fresh migration of the real data:
+Animals tab (restriction board, fixed filter questions, 2.0 sorts, cards,
+own fields retired, the Log with notes and kinds) · animal window (Diary
+month list, form-only records, done only for scheduled records, starting
+values, Save only on Details) · dates dd/mm/yyyy and 24h everywhere ·
+"record" as the one word · Find searches record content · Experiments
+wording · Materials: plans library gone, Behaviour tasks sub-tab · a day's
+feeding can move · phone layout (feeding cards, filter chips, stray sheet)
+· both exports identical row for row. Left switched off rather than cut:
+the old Arbor graph/outline views (unreachable; data kept and exported).
 
 ---
 
