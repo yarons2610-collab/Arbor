@@ -18,6 +18,15 @@ Status key: ✅ fine as is · 🔧 rework · 🗑 retire · ✨ new
   list below is shown to the user before it is built.
 - **Plans library in Materials** — removed; plans live in their experiment.
 
+## Progress
+
+- ✅ Animals tab — restriction board, fixed filter questions, 2.0 sort orders,
+  card details read the procedure (1.0 virus/coords only where no injections
+  were recorded), own fields retired, Event log still to reword.
+- ✅ Materials — plans library removed.
+- ✅ Warnings — a missed step stops after 14 days; 1.0 brains get an assumed
+  PBS date (reported) so they no longer read as overdue.
+
 ---
 
 ## The Animals tab

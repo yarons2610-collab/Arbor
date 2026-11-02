@@ -1148,6 +1148,7 @@
   .aq .aq-tg{border:0;background:none;color:inherit;font:inherit;padding:0;cursor:pointer}
   .aq select,.aq input{background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;font-size:11px;padding:1px 4px}
   .aq-days{width:3.2em;text-align:center}
+  .aq-pick{max-width:14em;text-overflow:ellipsis}
   .acond{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line2);
     border-radius:20px;padding:3px 6px 3px 11px;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
   .acond-x{border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:10px;padding:0 3px}
@@ -14898,7 +14899,9 @@ function renderAnimals(){
         <select id="a_sort" class="af-sel af-sort">${[["name","Name"],
           ["dob_asc","Born (earliest)"],["dob_desc","Born (latest)"],
           ["added_asc","Added (earliest)"],["added_desc","Added (latest)"],
-          ["sac_asc","Sacrificed (earliest)"],["sac_desc","Sacrificed (latest)"]]
+          ["sac_asc","Sacrificed (earliest)"],["sac_desc","Sacrificed (latest)"],
+          ["pct","% of baseline (lowest)"],["rsday","Days on restriction (most)"],["stage","Behaviour stage (furthest)"],
+          ["lastsess","Last session (most recent)"],["postop","Last surgery (most recent)"]]
           .map(o=>`<option value="${o[0]}" ${animalSort===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select></div>
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         <button class="btn ghost${animalActiveFilterCount()?" filt-on":""}" id="a_filters">⚙ Filter${
@@ -15034,9 +15037,18 @@ function renderAnimals(){
     if(!a)return 1; if(!b)return -1; return desc?b.localeCompare(a):a.localeCompare(b); };
   const byAdded=desc=>(x,y)=>(desc?(y.created||0)-(x.created||0):(x.created||0)-(y.created||0))||(x.name||"").localeCompare(y.name||"");
   const byName=(x,y)=>(x.name||"").localeCompare(y.name||"");
+  const byFact=(get,desc)=>(x,y)=>{ const a=get(x), b=get(y);
+    if(a==null&&b==null) return byName(x,y); if(a==null) return 1; if(b==null) return -1;
+    const c=typeof a==="number"?a-b:String(a).localeCompare(String(b)); return (desc?-c:c)||byName(x,y); };
   const sorters={
     dob_asc:byDate("dob",false), dob_desc:byDate("dob",true),
     sac_asc:byDate("sacrificed",false), sac_desc:byDate("sacrificed",true),
+    // by a fact the animal window shows; an animal without one goes last
+    pct:byFact(a=>animalFact(a,"pctBaseline").value,false),
+    rsday:byFact(a=>{ const st=restrictionStatus(a,todayDateStr()); return st?st.daysOn:null; },true),
+    stage:byFact(a=>({beginner:1,middle:2,expert:3})[animalFact(a,"stage").value]||null,true),
+    lastsess:byFact(a=>{ const e=(a.diary||[]).filter(x=>x.type==="training"&&entryHappened(x)).map(x=>x.date).sort().pop(); return e||null; },true),
+    postop:byFact(a=>{ const s=surgeriesOf(a).filter(x=>!x.planned).map(x=>x.date).sort().pop(); return s||null; },true),
     added_asc:byAdded(false), added_desc:byAdded(true),
   };
   list.sort(sorters[animalSort]||byName);
@@ -15214,9 +15226,11 @@ function animalCard(a){
     </div>
     <div class="a-detail" style="display:${expanded?"block":"none"};margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px;line-height:1.6;color:var(--ink-dim)">
       ${arow("Born",a.dob)}${arow("Sacrificed",a.sacrificed)}${arow("Cage",a.cage||"—")}
-      ${arow("Virus",a.virus)}${arow("Targets",a.targets)}${arow("Coords",a.coords)}${arow("Volume",a.volume)}
+      ${/* the procedure says these now; the 1.0 profile values show only for an
+            animal whose injections were never recorded */""}
+      ${arow("Virus",animalVirusText(a))}${arow("Sites",animalSiteText(a))}
+      ${animalInjections(a).length?"":arow("Coords",a.coords)+arow("Volume",a.volume)}
       ${a.comments?arowHTML("Notes",richBodyHTML(a.comments,a.commentsRich)):""}
-      ${(a.tasks&&a.tasks.length)?arow("Tasks",a.tasks.map(tid=>{const t=taskById(tid);return t?t.title:null;}).filter(Boolean).join("  ·  ")):""}
       <div style="display:flex;gap:20px;align-items:flex-start;margin-top:12px;flex-wrap:wrap">
         ${a.surgeryDetail?`<div style="flex:0 0 auto;width:360px;max-width:100%">
           <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:6px">🧠 Surgery map</div>
