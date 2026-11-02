@@ -5018,9 +5018,155 @@ function migrate(){                       // backfill fields added in later vers
      place guaranteed to run on every load and after every pull, so an
      end-of-life entry that arrived from a plan, a round or a collaborator is
      honoured even though no form ever saw it. */
+  if(migrateV2()) persist();
   let reconciled=false;
   (DB.animals||[]).forEach(a=>{ if(reconcileAnimal(a)) reconciled=true; });
   if(reconciled) persist();
+}
+/* ═══════════════════════════ ARBOR 2.0: MIGRATION ═══════════════════════════
+   Turns a 1.0 workspace into 2.0, in place, every load. It works row by row —
+   never "once, then a flag" — because it runs on every device that opens the
+   workspace, possibly before they have synced with each other, and because a
+   collaborator still on 1.0 may keep sending old-shaped rows. Everything it
+   creates has a deterministic id (the same restriction, note or field of view
+   comes out identical on every device), so two devices migrating apart merge
+   into one result instead of two copies.
+   It never guesses silently: anything odd goes into DB._v2report, which the
+   app shows once, for a person to look at. */
+const V2_TYPE_MAP={dt_c9wh_dj57qywf:{type:"microscopy",purpose:"structural"},   // "Spines"
+                   dt_c9wh_sc5v8d3l:{type:"microscopy",purpose:"structural",note:"Reconstruction"}};
+function v2Report(key,text){
+  DB._v2report=DB._v2report||[];
+  if(!DB._v2report.some(r=>r.key===key)) DB._v2report.push({key,text,at:Date.now(),seen:false});
+}
+function migrateV2(){
+  let changed=false;
+  const isEmpty=e=>!diaryRowHasContent(e)&&!e.done;
+  const coverTasks=taskList().filter(t=>t.coverType==="weight");
+  const coverIds=new Set(coverTasks.map(t=>t.id));
+  (DB.animals||[]).forEach(a=>{
+    if(!Array.isArray(a.diary)) return;
+    const drop=[];
+    a.diary.forEach(e=>{
+      if(!e) return;
+      // custom 1.0 types that 2.0 designed into kinds
+      const m=V2_TYPE_MAP[e.type];
+      if(m){ e.type=m.type; e.data=e.data||{}; if(!e.data.purpose) e.data.purpose=m.purpose;
+        if(m.note&&!diaryNoteOf(e.data)) e.data.note=m.note; changed=true; }
+      // weighings: the 1.0 "Amount (g)" field is the ration; a value the size
+      // of a mouse is a weight typed in the wrong box — reported, not used
+      if(e.type==="weight"&&e.data&&e.data.f_a847sm!=null&&e.data.f_a847sm!==""){
+        const r=+e.data.f_a847sm;
+        if(r>10){ e.data.rationSuspect=r; v2Report("ration:"+e.id,`${a.name}, ${fmtDMY(e.date)}: a ration of ${r} g looks like a weight typed in the ration box — kept aside, not used.`); }
+        else if(e.data.ration==null) e.data.ration=r;
+        delete e.data.f_a847sm; changed=true;
+      }
+      // behaviour: 1.0 metrics become the session's own fields; "זוית N" is the table angle
+      if(e.type==="training"&&e.data){
+        const met=e.data.metrics||{}, lib=(DB.config.taskLib||[]).find(t=>t.name===e.data.task);
+        ((lib&&lib.params)||[]).forEach(p=>{ const v=met[p.key]; if(v==null||v==="")return;
+          const L=String(p.label||"").toLowerCase();
+          if(L.startsWith("time")&&e.data.length==null) e.data.length=v;
+          else if(L.startsWith("trial")&&e.data.trials==null) e.data.trials=v;
+          else if(L.startsWith("success")&&e.data.success==null) e.data.success=v; });
+        if(e.data.metrics){ delete e.data.metrics; changed=true; }
+        const ang=/זוית\s*(-?\d+(?:\.\d+)?)/.exec(diaryNoteOf(e.data)||"");
+        if(ang&&!(e.data.settings&&e.data.settings.angle!=null)){
+          e.data.settings=Object.assign({},e.data.settings,{angle:+ang[1]}); changed=true;
+          v2Report("angle:"+e.id,`${a.name}, ${fmtDMY(e.date)}: read the table angle ${ang[1]} from the note "${diaryNoteOf(e.data)}".`); }
+      }
+      // post-op: 1.0's tick meant it was given
+      if(e.type==="postop"&&e.done&&e.data&&e.data.given==null){ e.data.given=true; changed=true; }
+      // repeating series are retired: their empty future slots go, the rest stay as plain records
+      if((e.seriesId||(e.fromTask&&coverIds.has(e.fromTask)))&&isEmpty(e)){ drop.push(e); return; }
+      if(e.seriesId){ delete e.seriesId; delete e.seriesRule; changed=true; }
+      // a feeding round's filled row is just that day's weighing now
+      if(e.fromTask&&coverIds.has(e.fromTask)){ delete e.fromTask; delete e.fromOcc; changed=true; }
+      // comments become dated notes on the animal (deterministic id)
+      if(e.type==="comment"){
+        const nid="n_c_"+String(e.id).replace(/^d_/,"");
+        DB.notes=DB.notes||[];
+        if(!DB.notes.some(n=>n.id===nid)){
+          const txt=diaryNoteOf(e.data||{})||"";
+          DB.notes.push({id:nid,title:txt.split("\n")[0].slice(0,80)||"Note",body:esc(txt).replace(/\n/g,"<br>"),
+            // every value taken from the comment itself, not from this device or
+            // this moment, so the note comes out identical wherever it is made
+            date:String(e.date).slice(0,10),created:e.created||0,updated:e.edited||e.created||0,
+            by:e.by||a.by||meId(),links:[{kind:"animal",id:a.id}]});
+        }
+        drop.push(e); return;
+      }
+    });
+    if(drop.length){ removeShared("diary",drop,a); a.diary=a.diary.filter(e=>!drop.includes(e)); changed=true; }
+    // the "Two Photon → FOVs" table becomes the animal's fields of view
+    animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
+      if(f.type!=="table"||!/fov/i.test(f.label||"")) return;
+      const rows=((a.tables||{})[f.key])||[]; if(!rows.length) return;
+      const col=re=>((f.fields||[]).find(x=>re.test(x.label||""))||{}).key;
+      const kN=col(/fov|number|name/i), kP=col(/^planes?$/i), kF=col(/per plane|frames/i);
+      a.fovs=animalFovs(a);
+      rows.forEach(r=>{ const fid="fov_m_"+String(r.id||"").replace(/^tr_/,"");
+        if(a.fovs.some(x=>x.id===fid)) return;
+        a.fovs.push({id:fid,name:"FOV "+(r[kN]!=null&&r[kN]!==""?r[kN]:a.fovs.length+1),
+          planes:r[kP]!=null&&r[kP]!==""?+r[kP]:undefined, frames:r[kF]!=null&&r[kF]!==""?+r[kF]:undefined, dendrites:[]});
+        changed=true; });
+    }));
+  });
+  const names=new Map();
+  (DB.animals||[]).forEach(a=>{ const k=String(a.name||"").trim().toLowerCase(); if(!k)return; names.set(k,(names.get(k)||0)+1); });
+  names.forEach((n,k)=>{ if(n>1) v2Report("dupname:"+k,`${n} animals are named "${(DB.animals.find(a=>String(a.name||"").trim().toLowerCase()===k)||{}).name}" — worth checking whether one is a duplicate.`); });
+  /* Feeding rounds become restriction periods, then retire. An animal can be
+     covered by several of them (weekdays, weekends, one per period), so each
+     animal's restriction is built from ALL of them together: it starts at the
+     earliest, and stays open if any is still running or the animal was fed
+     in the last week. Built from the first task alone, every animal came out
+     "ended 31/10" while it was plainly still being fed on 01/11. */
+  const cover=new Map();   // animal id -> the tasks covering it
+  coverTasks.forEach(t=>{
+    const ids=new Set();
+    Object.keys(taskRosterMap(t)).forEach(k=>((rosterSlot(t,k)||{}).ids||[]).forEach(id=>ids.add(id)));
+    (t.links||[]).filter(l=>l.kind==="animal").forEach(l=>ids.add(l.id));
+    ids.forEach(id=>{ if(!cover.has(id))cover.set(id,[]); cover.get(id).push(t); });
+  });
+  const today=todayDateStr(), weekAgo=addDaysISO(today,-7).slice(0,10);
+  cover.forEach((tasks,id)=>{
+    const a=(DB.animals||[]).find(x=>x.id===id); if(!a) return;
+    const rid="rs_m_"+String(a.id).replace(/^a_/,"");
+    if(animalRestrictions(a).some(r=>r.id===rid)) return;
+    const w=diaryWeightEntries(a).filter(e=>e.data&&e.data.grams!=null&&e.data.grams!=="");
+    const fed=diaryWeightEntries(a).filter(e=>rationOf(e)!=null||diaryRowHasContent(e)).map(e=>String(e.date).slice(0,10));
+    const occ=tasks.flatMap(t=>Object.keys(taskRosterMap(t)).filter(k=>((rosterSlot(t,k)||{}).ids||[]).includes(id)).map(k=>k.slice(0,10)));
+    const dates=[...fed,...occ,...tasks.map(t=>String(t.when||"").slice(0,10))].filter(Boolean).sort();
+    if(!dates.length) return;
+    const start=dates[0], last=dates.filter(d=>d<=today).pop()||start;
+    const running=tasks.some(t=>t.repeat&&(!t.repeat.until||String(t.repeat.until).slice(0,10)>=today));
+    const recent=last>=weekAgo;
+    const lastUntil=tasks.map(t=>t.repeat&&t.repeat.until?String(t.repeat.until).slice(0,10):null).filter(Boolean).sort().pop();
+    const ended=a.alive===false?(a.sacrificed||last):(running||recent)?null:(lastUntil&&lastUntil<today?lastUntil:last);
+    const baseW=w.filter(e=>String(e.date)<=start).pop()||w[0];
+    a.restrictions=animalRestrictions(a).filter(x=>!(x.start<=start&&(!x.end||x.end>=start))).concat([{
+      id:rid,start,target:RESTRICTION_TARGET,end:ended,endReason:ended?"from the 1.0 feeding tasks":"",ration:null,at:0,by:a.by||meId()}]);
+    if(baseW&&!animalBaselines(a).length) setAnimalBaseline(a,baseW.date,+baseW.data.grams,"restriction start (from 1.0)");
+    v2Report("rs:"+a.id,`${a.name}: restriction from ${fmtDMY(start)}${ended?" to "+fmtDMY(ended):" — ongoing"}, baseline ${baseW?baseW.data.grams+" g ("+fmtDMY(baseW.date)+")":"not found — set it in the animal's window"}, made from ${tasks.length} feeding task${tasks.length===1?"":"s"} (${[...new Set(tasks.map(t=>t.title))].join(", ")}).`);
+    changed=true;
+  });
+  // identical starting weights on one day usually mean a value copied across animals
+  const sameBase={};
+  cover.forEach((tasks,id)=>{ const a=(DB.animals||[]).find(x=>x.id===id), b=a&&animalBaselines(a)[0];
+    if(b){ const k=b.date+"|"+b.grams; (sameBase[k]=sameBase[k]||[]).push(a.name); } });
+  Object.entries(sameBase).forEach(([k,names])=>{ if(names.length<2) return; const [d,g]=k.split("|");
+    v2Report("samebase:"+k,`${names.join(", ")} all start from exactly ${g} g on ${fmtDMY(d)} — if that was copied rather than weighed, correct each baseline in the animal's window.`); });
+  if(coverTasks.length){
+    coverTasks.forEach(t=>deleteTask(t.id));
+    v2Report("rounds",`${coverTasks.length} feeding task${coverTasks.length===1?"":"s"} (האכלות) retired — the daily feeding now comes from the restrictions themselves.`);
+    changed=true;
+  }
+  // protocol stages name record kinds; a plan an arm points at must exist
+  planList().forEach(pl=>planStages(pl).forEach(st=>{ const m=V2_TYPE_MAP[st.type]; if(m){ st.type=m.type; changed=true; } }));
+  (DB.experiments||[]).forEach(ex=>(ex.groupDefs||[]).forEach(g=>{
+    if(g.planId&&!planById(g.planId)) v2Report("plan:"+ex.id+":"+g.id,`"${ex.title}" › ${g.name}: its plan no longer exists — pick one for this arm.`);
+  }));
+  return changed;
 }
 /* An id now says who made it. Two people creating records at the same moment
    in separate workspaces could otherwise land on the same six random
