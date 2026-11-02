@@ -5008,12 +5008,6 @@ function migrate(){                       // backfill fields added in later vers
     if(!Array.isArray(sp.links)) sp.links = sp.ref ? [{kind:"url",url:sp.ref}] : [];
   });
   DB.spines=DB.spines.filter(sp=>DB.tasks.some(t=>t.id===sp.dendriteId));
-  // Open-ended diary series keep a rolling year of rows ahead of today. This
-  // is the one place guaranteed to run on every load and after every pull, so
-  // it is where the horizon gets pushed forward. persist() only if it actually
-  // added something — the rows are deterministic, so re-deriving them costs
-  // nothing, but they still have to reach disk and the Gist like any others.
-  if(typeof topUpOpenDiarySeries==="function"&&topUpOpenDiarySeries()) persist();
   /* Every animal's state is brought in line with its history. This is the one
      place guaranteed to run on every load and after every pull, so an
      end-of-life entry that arrived from a plan, a round or a collaborator is
@@ -5422,35 +5416,6 @@ function commitCalMove(x,newWhen,newEnd,newDur){
       next.endTime=t2>=1440?"23:59":`${p4(Math.floor(t2/60))}:${p4(t2%60)}`;
     }
     const writeDragged=()=>{ e.date=next.date; e.time=next.time; e.endTime=next.endTime; };
-    /* Dropping one occurrence of a repeating entry somewhere else raises the
-       same question dragging a repeating task does, and the same one the
-       diary's own editor asks when the time is typed instead of dragged —
-       there is no reason the answer should depend on which of the two you
-       used. Only the time travels with it: the other occurrences keep their
-       own dates, because they are real rows on real days and some already
-       hold what was measured that day, so sliding their dates would file
-       Monday's weight under Tuesday. A drag sideways onto another day at the
-       same time therefore moves just the entry dragged and asks nothing — a
-       date is the one thing here that cannot belong to the whole series. */
-    const timeMoved=next.time!==(e.time||"")||next.endTime!==(e.endTime||"");
-    if(timeMoved&&e.seriesId&&diarySeriesCount(a,e.seriesId)>1){
-      occurrenceScopeModal(scope=>{
-        const undos=[before];
-        writeDragged();
-        let n=1;
-        if(scope!=="this"){
-          const rows=diarySeriesFrom(a,e,scope).filter(r=>r.id!==e.id);
-          rows.forEach(r=>undos.push(undoDiaryEdit(a,r)));     // captured before the write below
-          rows.forEach(r=>{ r.time=next.time; r.endTime=next.endTime; r.edited=Date.now(); });
-          n+=rows.length;
-        }
-        const scopeLabel=scope==="all"?"whole series":scope==="this"?"just this entry":`${n} entries`;
-        commitUndoable(`${calChangeSummary(newWhen,newEnd,newDur)} (${scopeLabel})`,
-          ()=>undos.forEach(f=>f()));
-        renderTimeline();
-      },{title:"Repeating entry",prompt:"Apply the new time to:",noun:"entry"});
-      return true;
-    }
     writeDragged();
     commitUndoable(calChangeSummary(newWhen,newEnd,newDur),before); return true;
   }
@@ -16604,6 +16569,9 @@ function paintDiary(container,a,opts){
     if(seed){ selDate=seed.date; formType=seed.type; editingId=seed.id;
       const sd=new Date(seed.date+"T00:00:00"); viewY=sd.getFullYear(); viewM=sd.getMonth(); }
   }
+  // opened from the Timeline to make a new record: that kind, on that slot
+  let newTime="", newEnd="";
+  if(opts.newType&&!opts.editId){ formType=opts.newType; newTime=opts.time||""; newEnd=opts.endTime||""; }
   let expandedIds=new Set(); // entries currently showing their full read-only detail
   const WD=["Su","Mo","Tu","We","Th","Fr","Sa"];
   function notifyChange(){ if(opts.onChange) opts.onChange(); }
@@ -16635,15 +16603,10 @@ function paintDiary(container,a,opts){
       </div>
       ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
-      <div hidden>${diaryRepeatHTML("dg",null)}</div>
       ${editingId?`<div class="drow" style="margin-top:4px"><button type="button" class="btn danger dg-formdel">Delete entry</button></div>`:""}
       ${formActions()}</div>`;
   }
   function wireForm(host,type,editing){
-    // repeating series are retired in 2.0 — what recurs is derived (feeding,
-    // post-op checks) or scheduled by a protocol — so none is ever offered
-    wireDiaryRepeat(host,"dg",null,
-      ()=>(editing?editing.date:selDate)||todayDateStr());
     // Opened from the Timeline (openCalItem), this modal exists to edit one
     // entry and nothing else — Cancel/Save should close it, not fall back to
     // the calendar/list view underneath, which is what the animal detail
@@ -16661,8 +16624,8 @@ function paintDiary(container,a,opts){
     // an all-day entry is still one click away by clearing the time.
     let dtValue=editing
       ? editing.date+(editing.time?"T"+editing.time:"")
-      : selDate+"T"+DEFAULT_ENTRY_TIME;
-    let endTimeValue=editing?editing.endTime||"":"";
+      : selDate+"T"+(newTime||DEFAULT_ENTRY_TIME);
+    let endTimeValue=editing?editing.endTime||"":newEnd;
     const endWrap=host.querySelector(".dg-f-endwrap");
     bindDateButton(host.querySelector(".dg-f-datetime"), ()=>dtValue, v=>{
       dtValue=v||selDate;
@@ -16687,7 +16650,6 @@ function paintDiary(container,a,opts){
       { const kf=KIND_FORMS[type]; if(kf&&kf.read) kf.read(host,{a,e:editing||null,date:entryDate},data); }
       data.note=host.querySelector(".dg-f-note").value.trim();
       const doneVal=!!host.querySelector(".dg-f-done")?.classList.contains("on");
-      const rep=readDiaryRepeat(host,"dg");
       // everything after the edit is applied, in one place, so the paths that
       // have to stop and ask a question first can all end the same way
       const finishSave=()=>{
@@ -16700,64 +16662,14 @@ function paintDiary(container,a,opts){
         if(opts.closeOnDone){ closeModal(); flushSyncRender(); return; }
         draw(); flushSyncRender();     // a sync held back while this was open
       };
+      // one record is one row: what recurs in 2.0 is derived (feeding, post-op
+      // checks) or scheduled by a protocol, never a series of copied rows
       if(editing){
-        /* The time an occurrence sits at is a property of the series — "these
-           sessions are at 2pm, not 9am" is almost never about one of them —
-           so changing it asks the same three-way question a repeating task
-           asks. What is recorded in the entry never propagates, whatever the
-           answer: the weight measured that morning, the metrics from that
-           session, the note written after it are that day's own results, and
-           writing them across the series would overwrite every other day's.
-           That asymmetry is the whole reason a diary entry is a real row
-           rather than a rule (see the series notes above). */
-        const wasTime=editing.time||"", wasEnd=editing.endTime||"";
         editing.data=data; editing.date=entryDate; editing.time=entryTime;
         editing.endTime=entryEndTime; editing.edited=Date.now(); editing.done=doneVal;
-        // A repeat can be set, changed or cleared on an entry that already
-        // exists, not only on a new one. Every occurrence is a real record, so
-        // "change the rule" means rewriting the ones after this — never the
-        // ones before, which may already hold results that were recorded.
-        const was=editing.seriesRule||null;
-        const changed=JSON.stringify(was||null)!==JSON.stringify(rep||null);
-        // a rule change already rewrites the tail from this entry, carrying
-        // this time with it — asking on top of that would be a second question
-        // about something the first one has already settled
-        if(!changed && (wasTime!==(entryTime||"")||wasEnd!==(entryEndTime||""))
-           && editing.seriesId && diarySeriesCount(a,editing.seriesId)>1){
-          occurrenceScopeModal(scope=>{
-            if(scope!=="this"){
-              const rows=diarySeriesFrom(a,editing,scope).filter(e=>e.id!==editing.id);
-              rows.forEach(e=>{ e.time=entryTime; e.endTime=entryEndTime; e.edited=Date.now(); });
-              if(rows.length) toast(`New time applied to ${rows.length+1} entries`);
-            }
-            finishSave();
-          },{title:"Repeating entry",prompt:"Apply the new time to:",noun:"entry"});
-          return;
-        }
-        if(changed){
-          const later=diarySeriesFrom(a,editing,"following").filter(e=>e.id!==editing.id);
-          const laterIds=new Set(later.map(e=>e.id));
-          if(laterIds.size) a.diary=a.diary.filter(e=>!laterIds.has(e.id));
-          if(rep){
-            const sid=editing.seriesId||uid("ds_");
-            editing.seriesId=sid; editing.seriesRule={...rep};
-            // regenerate the tail from this entry's own date
-            const dates=diaryRepeatDates(entryDate,rep,rep.until).slice(1);
-            dates.forEach(date=>a.diary.push({type,date,time:entryTime,endTime:entryEndTime,
-              id:diaryOccId(sid,date),data:JSON.parse(JSON.stringify(data)),created:Date.now(),edited:null,
-              seriesId:sid,seriesRule:{...rep}}));
-            toast(dates.length?`Repeats set — ${dates.length+1} entries`:"Repeat cleared");
-          } else {
-            delete editing.seriesId; delete editing.seriesRule;
-            toast(laterIds.size?`Repeat removed — ${laterIds.size} later entr${laterIds.size!==1?"ies":"y"} deleted`:"Repeat removed");
-          }
-        }
-      }
-      else {
-        const n=pushDiarySeries(a,{type,date:entryDate,time:entryTime,endTime:entryEndTime,data},rep);
-        // the tick is for the entry being logged, not for a whole new series
-        if(doneVal){ const first=a.diary[a.diary.length-n]; if(first) first.done=true; }
-        if(n>1) toast(`${n} ${diaryTypeDef(type).label} entries added`);
+      } else {
+        a.diary.push({id:uid("d_"),type,date:entryDate,time:entryTime,endTime:entryEndTime,data,
+          created:Date.now(),edited:null,...(doneVal?{done:true}:{})});
       }
       finishSave();
     };
@@ -16833,7 +16745,6 @@ function paintDiary(container,a,opts){
               <span class="dg-esum" title="${escAttr(diaryEntrySummary(e,a))}">${esc(diaryEntrySummaryShort(e,a))}</span>
               ${animalBaselines(a).some(b=>String(b.date).slice(0,10)===String(e.date).slice(0,10))&&entryHasRole(e,"weight")
                 ?`<span class="dg-base" title="The animal's baseline is set from this day">⌂</span>`:""}
-              ${e.seriesId?`<span class="dg-rep" title="One of ${diarySeriesCount(a,e.seriesId)} repeating entries">↻</span>`:""}
               ${diaryBelongsTo(e)?`<button class="dg-round" data-id="${e.id}" title="${escAttr(diaryBelongsTo(e))} — open it">◉</button>`:""}
               <button class="dg-view" data-id="${e.id}" title="${open?"hide":"view"} details">${open?"▴":"▾"}</button>
               <button class="dg-edit" data-id="${e.id}">✎</button>
@@ -16864,7 +16775,7 @@ function paintDiary(container,a,opts){
     if(formType){
       const host=container.querySelector(".dg-formhost");
       const editing=editingId?a.diary.find(e=>e.id===editingId):null;
-      host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate, editing?editing.time:"", editing?editing.endTime:"");
+      host.innerHTML=renderForm(formType, editing?editing.data:{}, editing?editing.date:selDate, editing?editing.time:(newTime||DEFAULT_ENTRY_TIME), editing?editing.endTime:newEnd);
       wireForm(host,formType,editing);
       wireTableFields(host,formType,a);   // without this, "add row" does nothing
     }
@@ -16884,10 +16795,9 @@ function paintDiary(container,a,opts){
       // which is the only thing the Timeline opens, so an entry could be
       // edited from there but never removed from there
       const entry=editingId?a.diary.find(x=>x.id===editingId):null; if(!entry)return;
-      const finish=rows=>{ const ids=new Set(rows.map(x=>x.id)); const sid=rows[0]&&rows[0].seriesId;
+      const finish=rows=>{ const ids=new Set(rows.map(x=>x.id));
         removeShared("diary",rows,a);          // shared ones leave the file too
         a.diary=a.diary.filter(x=>!ids.has(x.id));
-        if(sid) closeOpenSeriesIfTailRemoved(a,sid,rows.map(x=>x.date));
         formType=null; editingId=null; persist(); notifyChange(); flushSyncRender();
         toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
         // Same rule Cancel and Save already follow: opened from the Timeline to
@@ -16898,12 +16808,7 @@ function paintDiary(container,a,opts){
         // is a phone-only control.
         if(opts.closeOnDone){ closeModal(); return; }
         draw(); };
-      if(entry.seriesId&&diarySeriesCount(a,entry.seriesId)>1){
-        occurrenceScopeModal(scope=>askDeleteWithFollowUps(a,diarySeriesFrom(a,entry,scope),finish),
-          {title:"Repeating entry",prompt:"Delete which of them?",noun:"entry"});
-        return;
-      }
-      askDeleteWithFollowUps(a,[entry],finish,"Delete this diary entry?");
+      if(confirm("Delete this record?")) finish([entry]);
       return;
     }
     const baseSet=e.target.closest(".dg-baseset");
@@ -16943,34 +16848,13 @@ function paintDiary(container,a,opts){
       formType=entry.type; editingId=entry.id; draw();
     } else if(delBtn){
       const entry=a.diary.find(x=>x.id===delBtn.dataset.id); if(!entry)return;
-      // One of a repeating set gets the same three-way question a repeating
-      // task asks. This used to be a confirm() whose Cancel meant "delete just
-      // this one" — so Cancel didn't cancel, and either button deleted
-      // something, which is the opposite of what a confirm dialog promises.
-      const wipe=rows=>{
-        const ids=new Set(rows.map(x=>x.id));
-        // A row that belongs to a task's round would be put straight back the
-        // next time that round is opened — the roster, not the row, is what
-        // says the animal is in it. So deleting the row leaves the round too.
-        rows.forEach(x=>{
-          if(!coveredByTask(x))return;
-          const t=taskOf(x.fromTask); if(!t)return;
-          const when=Object.keys(taskRosterMap(t)).find(k=>(rosterSlot(t,k)||{}).rid===x.fromOcc);
-          if(when) setTaskRoster(t,when,taskRosterFor(t,when).filter(id=>id!==a.id));
-        });
-        a.diary=a.diary.filter(x=>!ids.has(x.id));
-        if(entry.seriesId) closeOpenSeriesIfTailRemoved(a,entry.seriesId,rows.map(x=>x.date));
-        persist(); notifyChange();
-        toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
-        if(opts.closeOnDone){ closeModal(); return; }
-        draw();
-      };
-      if(entry.seriesId&&diarySeriesCount(a,entry.seriesId)>1){
-        occurrenceScopeModal(scope=>askDeleteWithFollowUps(a,diarySeriesFrom(a,entry,scope),wipe),
-          {title:"Repeating entry",prompt:"Delete which of them?",noun:"entry"});
-        return;
-      }
-      askDeleteWithFollowUps(a,[entry],wipe,"Delete this diary entry?");
+      // the same delete the form's button performs — shared ones leave the file too
+      if(!confirm("Delete this record?")) return;
+      removeShared("diary",[entry],a);
+      a.diary=a.diary.filter(x=>x.id!==entry.id);
+      persist(); notifyChange(); toast("Entry deleted");
+      if(opts.closeOnDone){ closeModal(); return; }
+      draw();
     }
   });
 
@@ -18547,28 +18431,21 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
   function paintTask(){ closeModal(); openNewTaskModal(prefillDeadline,prefillEnd,false); }
   function paintEvent(){ closeModal(); openNewTaskModal(prefillDeadline,prefillEnd,true); }
 
-  function paintDiary(){
+  /* A record is made in one form only — the animal's own (paintDiary), which
+     knows every kind's particular part. Here only who and which kind are
+     chosen; the form then opens on that date and time. */
+  function paintRecord(){
     if(!animals.length){ body.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:10px 0">No animals yet — add one on the Animals tab first.</div>`; return; }
     const types=allDiaryTypeDefs();
     body.innerHTML=`
       <div class="drow">
         <div class="fld" style="flex:1"><label>Animal</label>
           <button type="button" id="tc_animal" class="datebtn"></button></div>
-        <div class="fld" style="flex:1"><label>Type</label>
+        <div class="fld" style="flex:1"><label>Kind</label>
           <select id="tc_type">${types.map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}</select></div>
       </div>
-      <div class="drow">
-        <div class="fld" style="flex:1"><label>Date &amp; start time</label>
-          <button type="button" id="tc_dt" class="datebtn"></button></div>
-        <div class="fld" style="flex:1;${time?"":"display:none"}" id="tc_endwrap"><label>End time</label>
-          <button type="button" id="tc_endtime" class="datebtn datebtn-empty"><span style="opacity:.55;margin-right:6px">🕐</span>set end time</button></div>
-      </div>
-      <div id="tc_fields"></div>
-      <label style="margin-top:6px;display:block">Note</label><textarea id="tc_note"></textarea>
-      ${diaryRepeatHTML("tc")}
-      <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="tc_save">Save</button></div>`;
-
-    // the animal the entry is about, chosen through the picker rather than a
+      <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="tc_next">Continue</button></div>`;
+    // the animal the record is about, chosen through the picker rather than a
     // dropdown of every mouse that ever existed (see openAnimalPicker)
     let animalId=(defaultPickedAnimal(animals)||{}).id||"";
     const animalBtn=document.getElementById("tc_animal");
@@ -18582,76 +18459,20 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
     }
     animalBtn.onclick=()=>openAnimalPicker(animalBtn,animalId,id=>{ animalId=id; paintAnimal(); });
     paintAnimal();
-
-    let dtValue=date+(time?"T"+time:""), endTimeValue=time?endTime:"";
-    // anchored on the live date field, not the slot this was opened from, so
-    // "on day 15" / "on the third Tuesday" follow the date actually picked
-    wireDiaryRepeat(document,"tc",null,()=>dtValue.slice(0,10));
-    const dtBtn=document.getElementById("tc_dt");
-    dtBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">📅</span>${fmtWhenFull(dtValue)}`;
-    const endWrap=document.getElementById("tc_endwrap");
-    bindDateButton(dtBtn, ()=>dtValue, v=>{
-      dtValue=v||date; endWrap.style.display=hasTime(dtValue)?"":"none";
-      if(!hasTime(dtValue)) endTimeValue="";
-    }, 15);
-    bindTimeButton(document.getElementById("tc_endtime"), ()=>endTimeValue, v=>{ endTimeValue=v||""; }, 15);
-    // bindTimeButton only repaints the label once the picker is actually
-    // used — an end time carried in from a create-drag needs painting once
-    // up front, or it's correct internally but invisible until you open it
-    if(endTimeValue){
-      const endBtn=document.getElementById("tc_endtime");
-      endBtn.innerHTML=`<span style="opacity:.55;margin-right:6px">🕐</span>${endTimeValue}`;
-      endBtn.classList.remove("datebtn-empty");
-    }
-
-    const typeSel=document.getElementById("tc_type"), fieldsHost=document.getElementById("tc_fields");
-    function paintFields(){
-      const type=typeSel.value;
-      if(type==="training"){
-        fieldsHost.innerHTML=`<label style="margin-top:6px;display:block">Task</label>
-          <input id="tc_task" list="tc_tasklist" autocomplete="off" placeholder="e.g. 2AFC lick">
-          <datalist id="tc_tasklist">${(DB.config.taskLib||[]).map(t=>`<option value="${escAttr(t.name)}">`).join("")}</datalist>
-          <div id="tc_metrics" style="margin-top:6px">${renderMetricsFields("",{})}</div>`;
-        document.getElementById("tc_task").addEventListener("input",e=>{
-          document.getElementById("tc_metrics").innerHTML=renderMetricsFields(e.target.value.trim(),{});
-        });
-      } else {
-        const an=DB.animals.find(x=>x.id===animalId);
-        fieldsHost.innerHTML=renderTypeFields(type,{},an);
-        wireTableFields(fieldsHost,type,an);   // without this, "add row" does nothing
-      }
-    }
-    typeSel.onchange=paintFields; paintFields();
-
-    document.getElementById("tc_save").onclick=()=>{
+    document.getElementById("tc_next").onclick=()=>{
       const a=DB.animals.find(x=>x.id===animalId);
       if(!a){ toast("Choose an animal first"); return; }
-      const type=typeSel.value;
-      const entryDate=(dtValue||date).slice(0,10);
-      const entryTime=hasTime(dtValue)?dtValue.slice(11,16):null;
-      if(endTimeValue&&entryTime&&endTimeValue<=entryTime){ toast("End time must be after the start time — not saved"); return; }
-      const entryEndTime=(entryTime&&endTimeValue&&endTimeValue>entryTime)?endTimeValue:null;
-      let data={};
-      if(type==="training"){
-        const taskName=document.getElementById("tc_task").value.trim();
-        data={task:taskName, metrics:readMetricFields(fieldsHost)};
-      } else {
-        data=readTypeData(fieldsHost,type,DB.animals.find(x=>x.id===animalId));
-      }
-      data.note=document.getElementById("tc_note").value.trim();
-      const rep=readDiaryRepeat(document,"tc");
-      const n=pushDiarySeries(a,{type,date:entryDate,time:entryTime,endTime:entryEndTime,data},rep);
-      reconcileAnimal(a);
-      persist(); closeModal(); render();
-      toast(n>1?`${n} ${diaryTypeDef(type).label} entries added for ${a.name}`
-                :`${diaryTypeDef(type).label} entry added for ${a.name}`);
+      const type=document.getElementById("tc_type").value;
+      modal(`<h3>${esc(a.name)} — ${esc(diaryTypeDef(type).label)}</h3><div id="calDiaryEditHost"></div>`,{wide:true});
+      paintDiary(document.getElementById("calDiaryEditHost"),a,
+        {newType:type,date,time:time||"",endTime:time?endTime:"",onChange:renderTimeline,closeOnDone:true});
     };
   }
 
   document.getElementById("tc_kind").onclick=e=>{
     const b=e.target.closest("button"); if(!b||b.disabled)return;
     document.querySelectorAll("#tc_kind button").forEach(x=>x.classList.toggle("on",x===b));
-    if(b.dataset.v==="task")paintTask(); else if(b.dataset.v==="event")paintEvent(); else paintDiary();
+    if(b.dataset.v==="task")paintTask(); else if(b.dataset.v==="event")paintEvent(); else paintRecord();
   };
   body.innerHTML=`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:10px 0 4px">Pick what to put on this date.</div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`;
