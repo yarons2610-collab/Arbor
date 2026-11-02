@@ -4857,9 +4857,6 @@ function migrate(){                       // backfill fields added in later vers
     if(!Array.isArray(t.links))t.links=[];
     if(t.repeat===undefined)t.repeat=null;
     if(!Array.isArray(t.doneOccurrences))t.doneOccurrences=[];
-    // a task that covers animals (taskCoverType); absent on every task that
-    // does not, which is almost all of them
-    if(t.coverType===undefined)t.coverType=null;
     if(t.roster===undefined)t.roster=null;
   });
   DB.projects.forEach(pr=>{
@@ -5180,6 +5177,12 @@ function migrateV2(){
     if(b){ const k=b.date+"|"+b.grams; (sameBase[k]=sameBase[k]||[]).push(a.name); } });
   Object.entries(sameBase).forEach(([k,names])=>{ if(names.length<2) return; const [d,g]=k.split("|");
     v2Report("samebase:"+k,`${names.join(", ")} all start from exactly ${g} g on ${fmtDMY(d)} — if that was copied rather than weighed, correct each baseline in the animal's window.`); });
+  // a round of any other kind stays a task: its filled rows become ordinary
+  // records, the untouched ones go, and it stops covering animals
+  taskList().filter(t=>t.coverType&&t.coverType!=="weight").forEach(t=>{
+    releaseTaskCoverage(t); t.coverType=null; delete t.roster; changed=true;
+    v2Report("round:"+t.id,`"${bidiIso(t.title||"task")}" no longer makes a record per animal — what was filled in stays on each animal.`);
+  });
   if(coverTasks.length){
     coverTasks.forEach(t=>deleteTask(t.id));
     v2Report("rounds",`${coverTasks.length} feeding task${coverTasks.length===1?"":"s"} (${bidiIso("האכלות")}) retired — the daily feeding now comes from the restrictions themselves.`);
@@ -5245,32 +5248,11 @@ function calColor(x){ return x.kind==="task"?taskColorOf(x.src):stepColor(x.src)
 // own when-string) that have actually been checked off. A non-repeating task
 // just ends up with a set of zero or one. Time passing puts nothing in this
 // set by itself; only the checkmark does.
-/* For a task that covers animals, "done" is not a fact of its own: the round
-   is done when every animal in it is. Keeping a separate flag meant ticking
-   every mouse off left the task showing as outstanding, and ticking the task
-   said nothing about the mice — one idea recorded twice, which the user then
-   had to keep in step by hand.
-   A covering task with nobody in the round has nothing to derive from, so it
-   falls back to the flag, as does every ordinary task. */
-function taskRoundRows(t,when){
-  if(!taskCoverType(t)||!when) return null;
-  const ids=taskRosterFor(t,when); if(!ids.length) return null;
-  const rows=[];
-  ids.forEach(id=>{
-    const a=(DB.animals||[]).find(x=>x.id===id); if(!a)return;
-    const e=taskOccEntry(t,when,a); if(e)rows.push(e);
-  });
-  return rows.length?rows:null;
-}
 function occDone(t,when){
-  const rows=taskRoundRows(t,when);
-  if(rows) return rows.every(e=>!!e.done);
   return !!when && (t.doneOccurrences||[]).includes(when);
 }
 function setOccDone(t,when,val){
   if(!t||!when)return;
-  const rows=taskRoundRows(t,when);
-  if(rows){ rows.forEach(e=>{ e.done=val; e.edited=Date.now(); }); persist(); return; }
   const set=new Set(t.doneOccurrences||[]);
   if(val)set.add(when); else set.delete(when);
   t.doneOccurrences=[...set];
@@ -5453,7 +5435,6 @@ function commitCalMove(x,newWhen,newEnd,newDur){
           };
           src.doneOccurrences=(src.doneOccurrences||[]).map(shiftKey);
           src.excludedDates=(src.excludedDates||[]).map(shiftKey);
-          shiftTaskRoster(src,shiftKey);
           src.when=(d?addDaysISO(src.when,d):src.when).slice(0,10)+(t0?"T"+t0:"");
           if(src.endDate&&d)src.endDate=addDaysISO(src.endDate,d);
         }
@@ -7548,235 +7529,6 @@ function deleteProject(id){
 // a scheduled task (title/when/endDate/repeat) so stepRow, taskDone and taskSpan
 // all work on it unchanged; its id keeps the diary entry's own "d_" prefix so a
 // click can tell the two apart.
-/* ---- repeating diary entries ----
-   These materialise real entries rather than being generated from a rule the
-   way a repeating task is. A task occurrence carries almost nothing of its
-   own — whether it was ticked, and that's it — so a rule plus a set of
-   done-dates describes the whole series. A diary entry is a record of what
-   happened, and every occurrence holds its own data: the weight actually
-   measured that morning, the note actually written after that session. There
-   is nothing to generate from a rule; each occurrence has to be a real row
-   you can open and fill in. Every one of them is an ordinary entry from the
-   moment it exists, so everything that already reads the diary — the
-   Timeline, notifications, the .ics export, search, conditions — needs no
-   knowledge of any of this.
-   They carry a shared seriesId so the set can still be handled as one. */
-const DIARY_REPEAT_CAP=400;   // a ceiling on one materialisation pass, not a limit on the series
-/* An open series is bounded by rows as well as by time, because a year means
-   very different amounts of it depending on the rule: a weekly series is 53
-   rows, a daily one 366. Keeping at most this many rows ahead of today gives a
-   weekly series its whole year and a daily one about four months, and the
-   top-up below extends either one as time passes — so the runway is always
-   long, and never at the cost of carrying hundreds of empty rows per series
-   through every sync. */
-const DIARY_OPEN_MAX=120;
-/* "Every week until when?" is a question a repeating task never has to answer
-   — a task is a rule, so "forever" costs nothing and only the occurrences you
-   are actually looking at get generated. A diary entry is a real row, so
-   forever would mean infinitely many rows, which is why an end date was
-   required at first. Requiring it was the wrong trade: most of the reasons to
-   repeat an entry (weigh this animal every Monday, check the incision daily)
-   have no end anyone knows at the time, and being made to invent one is worse
-   than the plumbing it saved.
-   An open-ended series instead keeps a rolling year of rows ahead of today,
-   extended a little further every time the app loads. Which rows those are is
-   decided by the rule, not by when a top-up happened to run, and each one's
-   id is derived from its series and its date (diaryOccId) — so two devices
-   topping up the same series independently produce byte-identical records
-   that the sync merge folds together instead of duplicating. */
-const DIARY_OPEN_HORIZON_DAYS=365;
-function diaryHorizon(fromISO){ return addDays(fromISO||todayDateStr(),DIARY_OPEN_HORIZON_DAYS); }
-function diaryOccId(seriesId,date){ return "d_"+String(seriesId).replace(/^ds_/,"")+"_"+date.replace(/-/g,""); }
-/* The dates come from taskOccurrences — the same generator a repeating task
-   uses. Writing a second one gave diary entries a smaller vocabulary (no
-   yearly, no custom) and its own bugs: it stepped month to month from the
-   previous date, so the 31st clamped to the 28th in February and stayed
-   there. One engine means one set of rules and one set of fixes. */
-function diaryRepeatDates(startISO,rule,untilISO){
-  if(!rule||!rule.every)return [startISO];
-  // no end date is a real answer, not a missing one: generate a year out from
-  // whichever is later, the series' own start or today, so a series begun long
-  // ago still reaches a year past now rather than a year past its first entry
-  const open=!(untilISO||rule.until);
-  const until=open
-    ? diaryHorizon(startISO>todayDateStr()?startISO:todayDateStr())
-    : (untilISO||rule.until);
-  if(until<=startISO)return [startISO];
-  const pseudo={id:"diary-preview",when:startISO,endDate:null,
-    repeat:{...rule,until},excludedDates:[],doneOccurrences:[]};
-  const dates=taskOccurrences(pseudo,startISO,until).map(o=>o.when.slice(0,10));
-  return (dates.length?dates:[startISO]).slice(0,DIARY_REPEAT_CAP);
-}
-// The repeat controls, shared by the animal's own diary form and the
-// Timeline's "new entry" flow so the two can't drift apart — and the same
-// editor the task editor uses, so "custom" means the same thing in both.
-function diaryRepeatHTML(prefix,rule){ return repeatEditorHTML(prefix,rule); }
-/* Unlike a task, a diary rule has nowhere to live until the entry is saved —
-   there is no record yet to hang it on — so the editor writes into this
-   per-prefix scratch slot and the save path reads it back out. Keyed by
-   prefix because the animal form ("dg") and the Timeline's ("tc") can both
-   be open in the same page. */
-const diaryPendingRule={};
-function wireDiaryRepeat(root,prefix,initial,anchorFn){
-  diaryPendingRule[prefix]=initial?JSON.parse(JSON.stringify(initial)):null;
-  wireRepeatEditor(root,prefix,()=>diaryPendingRule[prefix],
-    r=>{ diaryPendingRule[prefix]=r; }, anchorFn||(()=>todayDateStr()));
-}
-// An end date is optional — leaving it at "no end" means exactly that, and the
-// series is kept a rolling year ahead instead (see diaryRepeatDates).
-function readDiaryRepeat(root,prefix){
-  const r=diaryPendingRule[prefix];
-  return (r&&r.every)?r:null;
-}
-/* Aftercare, defined on the type itself: "a surgery schedules two post-op
-   checks, one a day". Every rule is {type, after, count, every, time} — which
-   type to schedule, how many days later the first one lands, how many there
-   are and how far apart, optionally at a time of day. The entries it creates
-   are ordinary entries: editable, tickable, deletable, and they carry
-   autoFrom so a second save of the same entry can't double-book them. */
-function scheduleRelatedEntries(a,entry){
-  const def=diaryTypeDef(entry.type), rules=(def&&def.related)||[];
-  let made=0;
-  rules.forEach(r=>{
-    // diaryTypeDef() hands back a fallback for an unknown key rather than
-    // nothing, so ask the real list: a rule left pointing at a type that has
-    // since been deleted must schedule nothing at all
-    if(!r||!diaryTypeExists(r.type))return;
-    const count=Math.max(1,+r.count||1), every=Math.max(1,+r.every||1), after=+r.after||0;
-    for(let i=0;i<count;i++){
-      const date=addDaysISO(entry.date,after+i*every).slice(0,10);
-      if((a.diary||[]).some(e=>e.type===r.type&&e.date===date&&e.autoFrom===entry.id))continue;
-      // an empty time in the rule means "same time of day as the entry it
-      // follows" — a surgery at noon books its post-op checks at noon, rather
-      // than dropping them all into the all-day row
-      a.diary.push({id:uid("d_"),type:r.type,date,time:r.time||entry.time||null,endTime:null,data:{},
-        created:Date.now(),edited:null,autoFrom:entry.id});
-      made++;
-    }
-  });
-  return made;
-}
-// The entries that exist only because these ones were logged (see
-// scheduleRelatedEntries) — nobody scheduled them by hand, so deleting what
-// they follow should offer to take them along.
-function followUpsOf(a,rows){
-  const ids=new Set(rows.map(r=>r.id));
-  return (a.diary||[]).filter(e=>e.autoFrom&&ids.has(e.autoFrom)&&!ids.has(e.id));
-}
-/* Asks only when there is something to ask about: with no follow-ups this is
-   the plain confirm it always was, and the caller does the deleting either
-   way. Three answers, because "delete the surgery but keep the post-op
-   checks I have already filled in" is a real thing to want. */
-function askDeleteWithFollowUps(a,rows,onGo,plainPrompt){
-  const kids=followUpsOf(a,rows);
-  if(!kids.length){ if(!plainPrompt||confirm(plainPrompt)) onGo(rows); return; }
-  const many=kids.length>1, label=many?`${kids.length} follow-up entries`:"1 follow-up entry";
-  modal(`<h3>Delete entry</h3>
-    <p style="color:var(--ink-dim);font-size:13px;line-height:1.6;margin:0 0 14px">
-      This scheduled ${label} (${kids.slice(0,4).map(e=>esc(diaryTypeDef(e.type).label)+" "+esc(fmtDMY(e.date))).join(", ")}${kids.length>4?", …":""}).</p>
-    <div style="display:flex;flex-direction:column;gap:8px">
-      <button type="button" class="btn danger" id="dfu_all" style="text-align:left;justify-content:flex-start">Delete this and ${many?"them":"it"}</button>
-      <button type="button" class="btn ghost" id="dfu_one" style="text-align:left;justify-content:flex-start">Delete this only, keep ${many?"them":"it"}</button>
-    </div>
-    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button></div>`,{center:true});
-  document.getElementById("dfu_all").onclick=()=>{ closeModal(); onGo([...rows,...kids]); };
-  document.getElementById("dfu_one").onclick=()=>{ closeModal(); onGo(rows); };
-}
-function pushDiarySeries(a,base,rep,seriesId){
-  let dates=rep?diaryRepeatDates(base.date,rep,rep.until):[base.date];
-  if(rep&&!rep.until) dates=dates.slice(0,DIARY_OPEN_MAX);
-  const sid=dates.length>1?(seriesId||uid("ds_")):null;
-  const made=[];
-  dates.forEach(date=>{
-    const e={...base,id:sid?diaryOccId(sid,date):uid("d_"),date,
-      data:JSON.parse(JSON.stringify(base.data||{})),
-      created:Date.now(),edited:null,
-      ...(sid?{seriesId:sid,seriesRule:{...rep}}:{})};
-    a.diary.push(e); made.push(e);
-  });
-  // every occurrence brings its own aftercare; a follow-up never schedules
-  // follow-ups of its own, or one rule pair could fill the diary forever
-  if(!base.autoFrom){
-    const n=made.reduce((sum,e)=>sum+scheduleRelatedEntries(a,e),0);
-    if(n) toast(`＋${n} follow-up ${n===1?"entry":"entries"} scheduled`);
-  }
-  return dates.length;
-}
-// The occurrences of one series from a given date onward, oldest first.
-function diarySeriesFrom(a,entry,scope){
-  if(!entry.seriesId)return [entry];
-  const all=(a.diary||[]).filter(e=>e.seriesId===entry.seriesId)
-    .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
-  if(scope==="all")return all;
-  if(scope==="following")return all.filter(e=>e.date>=entry.date);
-  return [entry];
-}
-function diarySeriesCount(a,seriesId){
-  return (a.diary||[]).filter(e=>e.seriesId===seriesId).length;
-}
-// Ending an open series: the rule stops at the last row that is actually
-// left, so the top-up below has nothing further to add. Written to every
-// remaining occurrence because seriesRule travels on the rows themselves —
-// there is no separate series record to edit.
-function closeDiarySeries(a,seriesId,untilISO){
-  (a.diary||[]).forEach(e=>{ if(e.seriesId===seriesId&&e.seriesRule)
-    e.seriesRule={...e.seriesRule,until:untilISO}; });
-}
-// Deleting the far end of an open-ended series is how you end one, so the rule
-// has to stop at the last row that survives — otherwise the next top-up would
-// hand back exactly what was just deleted. Taking a gap out of the middle
-// changes nothing: the top-up never fills those in.
-function closeOpenSeriesIfTailRemoved(a,seriesId,removedDates){
-  const left=(a.diary||[]).filter(e=>e.seriesId===seriesId);
-  if(!left.length)return;
-  const rule=left[0].seriesRule;
-  if(!rule||!rule.every||rule.until)return;
-  const lastLeft=left.map(e=>e.date).sort().pop();
-  if(!removedDates.some(d=>d>lastLeft))return;
-  closeDiarySeries(a,seriesId,lastLeft);
-}
-/* Keeps every open-ended series stocked a year ahead. Runs from migrate(), so
-   it happens on boot and again after every sync pull, and is written to be
-   safe to run at any time: it only ever adds dates the rule itself produces,
-   only ones later than the last row the series still has, and always under an
-   id derived from the series and the date. That combination is what makes it
-   idempotent — a second run adds nothing, and two devices running it at once
-   produce the same rows rather than two sets of them.
-   Deliberately never fills a gap: a row deleted from the middle of a series
-   stays deleted. Only the far end grows. */
-function topUpOpenDiarySeries(){
-  let added=0;
-  const horizon=diaryHorizon(todayDateStr());
-  (DB.animals||[]).forEach(a=>{
-    if(!Array.isArray(a.diary)||!a.diary.length)return;
-    const open=new Map();
-    a.diary.forEach(e=>{
-      if(!e.seriesId||!e.seriesRule||!e.seriesRule.every||e.seriesRule.until)return;
-      const list=open.get(e.seriesId)||[]; list.push(e); open.set(e.seriesId,list);
-    });
-    open.forEach((entries,sid)=>{
-      entries.sort((x,y)=>String(x.date).localeCompare(String(y.date)));
-      const first=entries[0], last=entries[entries.length-1];
-      if(last.date>=horizon)return;
-      const have=new Set(entries.map(e=>e.date));
-      // room is counted in rows still ahead of today, so a series naturally
-      // reclaims space as its old occurrences fall into the past
-      let room=DIARY_OPEN_MAX-entries.filter(e=>e.date>=todayDateStr()).length;
-      diaryRepeatDates(first.date,first.seriesRule).forEach(date=>{
-        if(room<=0||date<=last.date||have.has(date))return;
-        room--;
-        // a future occurrence is a slot to fill in, not a copy of what was
-        // measured last time — it starts empty, whatever the rows before it
-        // ended up holding
-        a.diary.push({type:first.type,date,time:first.time,endTime:first.endTime,
-          id:diaryOccId(sid,date),data:{},created:Date.now(),edited:null,
-          seriesId:sid,seriesRule:{...first.seriesRule}});
-        added++;
-      });
-    });
-  });
-  return added;
-}
 function diaryEntryById(id){
   for(const a of DB.animals){ const e=(a.diary||[]).find(x=>x.id===id); if(e)return {a,e}; }
   return null;
@@ -7996,110 +7748,20 @@ function planRunningAnimals(ex){
     .sort((x,y)=>String(planRunFor(ex,x.id).start).localeCompare(String(planRunFor(ex,y.id).start))
       ||String(x.name||"").localeCompare(String(y.name||""),undefined,{numeric:true}));
 }
-/* ---- a task that covers animals ----
-   Some tasks are one thing on the Timeline and many records underneath: a
-   feeding round, a weekly weigh-in, a batch of injections, a behavioural
-   session. The task says when it happens; each animal it covers gets its own
-   diary entry, of an entry type the user designed, with that type's own
-   fields. One chip above, one row per animal below.
-
-   Nothing here is specific to any kind of work. The task names an entry type
-   and the entry type carries the fields, so what gets recorded per animal is
-   whatever the user decided that type should record — including tables.
-
-   Which animals is a question per occurrence, not per task: the cohort
-   changes, and last week's record of who was actually covered must not be
-   rewritten by editing next week's list. So the roster is keyed by the
-   occurrence's own when-string, and an occurrence with no list of its own
-   inherits the most recent earlier one (failing that, the animals the task
-   links). Inheriting rather than copying means a cohort edited once carries
-   forward without having to write a row for every future date. */
-function taskCoverType(t){
-  const k=t&&t.coverType;
-  return diaryTypeExists(k)?k:null;
-}
+/* ---- 1.0 rounds, read only by migrateV2 ----
+   A 1.0 task could cover animals: a roster of animal ids per occurrence (keyed
+   by its when-string; an older shape is a bare array), each animal getting a
+   diary row. 2.0 retired them — feeding comes from restrictions — and these
+   are kept only so the migration can read what a 1.0 workspace still holds. */
 function taskRosterMap(t){ return (t&&t.roster&&typeof t.roster==="object")?t.roster:{}; }
-/* A round, stored. The map is keyed by the occurrence's own when-string, like
-   doneOccurrences and excludedDates are — but a when-string is not a stable
-   name for an occurrence: moving a repeating task shifts every one of them,
-   which is why the drag path re-keys those lists. So the round carries an id of
-   its own (`rid`) that the keys move around, and the animals' rows hang off
-   that rid rather than off a date. A series dragged to another day keeps its
-   rounds, with everything already recorded in them.
-   The rid is derived from the when-string it is first stored under, not minted
-   at random: two devices materialising the same round at the same moment then
-   agree on it, instead of each creating its own set of rows. */
-function rosterRidFor(when){ return "r_"+String(when).replace(/[^0-9]/g,"").slice(0,12); }
 function rosterSlot(t,when){
   const raw=taskRosterMap(t)[when];
-  if(Array.isArray(raw)) return {rid:rosterRidFor(when),ids:raw};  // an older shape
+  if(Array.isArray(raw)) return {rid:"r_"+String(when).replace(/[^0-9]/g,"").slice(0,12),ids:raw};
   return (raw&&typeof raw==="object")?raw:null;
-}
-// The animals this occurrence covers: its own list once it has been given one,
-// otherwise the last list set before it, otherwise the task's own animal links.
-function taskRosterFor(t,when){
-  const live=id=>DB.animals.some(a=>a.id===id);
-  const own=rosterSlot(t,when);
-  /* The stored list is one field on one record, so two people who each add an
-     animal to the same round while apart come back with one of the two lists —
-     the other person's addition is dropped by the last write, even though the
-     row they filled in survives as its own record and merges cleanly.
-     So the list is not the only evidence of who was in a round: a row that
-     exists and names this round is proof that somebody put that animal in it.
-     Membership is the union of the two, which makes the round converge without
-     the sync layer having to merge inside a field. Taking an animal out
-     deletes its row as well, so there is no evidence left to revive it. */
-  if(own) return [...new Set([...(own.ids||[]),...animalsHoldingRound(t,own.rid)])].filter(live);
-  const map=taskRosterMap(t);
-  const earlier=Object.keys(map).filter(k=>k<when).sort();
-  const seed=earlier.length ? (rosterSlot(t,earlier[earlier.length-1])||{}).ids
-    : (t.links||[]).filter(l=>l.kind==="animal").map(l=>l.id);
-  return (seed||[]).filter(live);
-}
-/* Writes the round down. Until this runs, an occurrence has no round of its
-   own — it shows the one it inherits, and nothing is stored for it. Working on
-   a round is what makes it a record: once there are rows, there has to be
-   something stable for them to belong to. */
-function setTaskRoster(t,when,ids){
-  if(!t||!when)return null;
-  t.roster=taskRosterMap(t);
-  const slot=rosterSlot(t,when)||{rid:rosterRidFor(when),ids:[]};
-  slot.ids=[...new Set(ids)];
-  t.roster[when]=slot;
-  return slot;
-}
-// Who actually holds a row for this round — see taskRosterFor.
-function animalsHoldingRound(t,rid){
-  if(!rid)return [];
-  const id=a=>taskOccDiaryId(t.id,rid,a.id);
-  return DB.animals.filter(a=>(a.diary||[]).some(e=>e.id===id(a))).map(a=>a.id);
-}
-function taskRosterRid(t,when){
-  const slot=rosterSlot(t,when);
-  return slot?slot.rid:null;
-}
-/* Derived, never minted: two devices opening the same round must end up with
-   one row per animal, not two. Keyed by the round's own id rather than its
-   date, so moving the task moves the rows' dates without changing which rows
-   they are — see rosterSlot. */
-function taskOccDiaryId(taskId,rid,animalId){
-  return "d_tk_"+String(taskId).replace(/^t_/,"")
-    +"_"+String(rid).replace(/^r_/,"")
-    +"_"+String(animalId).replace(/^a_/,"");
-}
-// An entry that exists because a task covers its animal. It is an ordinary
-// entry in the animal's own diary — the Timeline just shows the task instead
-// of showing every entry under it, which is the whole point of the grouping.
-// A row whose task has since been deleted is nobody's child and shows normally.
-function coveredByTask(e){ return !!(e&&e.fromTask&&taskOf(e.fromTask)); }
-function taskOccEntry(t,when,a){
-  const rid=taskRosterRid(t,when); if(!rid)return null;
-  const id=taskOccDiaryId(t.id,rid,a.id);
-  return (a.diary||[]).find(e=>e.id===id)||null;
 }
 // "has anything actually been written here" — an untouched row is one the app
 // created and nobody filled in, and it is the only kind allowed to vanish on
-// its own (see syncTaskOccEntries).
+// its own (see releaseScheduledEntries).
 function diaryRowHasContent(e){
   if(!e)return false;
   if(e.done)return true;
@@ -8112,73 +7774,6 @@ function diaryRowHasContent(e){
     return true;
   });
 }
-/* Makes the animals' rows match the round for one occurrence, materialising it
-   first (see setTaskRoster). Adding is unconditional; removing only ever takes
-   away a row nothing has been written into, so dropping an animal from a list
-   can never silently delete what was recorded about it — that row stays in its
-   diary, and becomes an ordinary entry once the task stops claiming it.
-   Idempotent by construction: every row it could add has the one id derived
-   above, so running it twice adds nothing, and two devices running it produce
-   the same rows rather than two sets. Safe to call on every open. */
-function syncTaskOccEntries(t,when){
-  const type=taskCoverType(t); if(!type||!when)return 0;
-  const ids=new Set(taskRosterFor(t,when));
-  const rid=(setTaskRoster(t,when,[...ids])||{}).rid; if(!rid)return 0;
-  const date=String(when).slice(0,10), time=hasTime(when)?String(when).slice(11,16):null;
-  let n=0;
-  DB.animals.forEach(a=>{
-    const have=taskOccEntry(t,when,a);
-    if(ids.has(a.id)){
-      if(have){
-        // the round itself was moved or retyped: its rows go with it
-        if(have.date!==date){ have.date=date; n++; }
-        if((have.time||null)!==time){ have.time=time; n++; }
-        if(have.type!==type){ have.type=type; n++; }
-        return;
-      }
-      a.diary=a.diary||[];
-      a.diary.push({id:taskOccDiaryId(t.id,rid,a.id),type,date,time,endTime:null,
-        data:{},created:Date.now(),edited:null,fromTask:t.id,fromOcc:rid});
-      n++;
-    } else if(have&&!diaryRowHasContent(have)){
-      // a shared row has to be deleted through the recorded path, or the next
-      // merge restores it — and a restored row would put the animal back in
-      // the round, because a row is what proves membership (taskRosterFor)
-      removeShared("diary",[have],a);
-      a.diary=(a.diary||[]).filter(e=>e!==have);
-      n++;
-    }
-  });
-  return n;
-}
-/* A dragged series shifts every occurrence's when-string, so the rounds have to
-   move with it — the keys change, the rids (and so the rows) do not. The rows'
-   own dates follow, because a row is dated to the round it belongs to. */
-function shiftTaskRoster(t,shiftKey){
-  if(!t||!t.roster)return;
-  const next={}, dateOf={};
-  Object.keys(t.roster).forEach(k=>{
-    const slot=rosterSlot(t,k); if(!slot)return;
-    const k2=shiftKey(k);
-    next[k2]=slot;
-    dateOf[slot.rid]=k2;
-  });
-  t.roster=next;
-  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(e.fromTask!==t.id||!e.fromOcc)return;
-    const w=dateOf[e.fromOcc]; if(!w)return;
-    e.date=String(w).slice(0,10);
-    e.time=hasTime(w)?String(w).slice(11,16):null;
-  }));
-}
-/* Entries the app wrote because something told it to — a task's round, an
-   experiment's plan — outlive the thing that asked for them unless somebody
-   says otherwise. An empty one had no reason to exist and goes; a filled one
-   is the animal's own record of work actually done and stays, released from
-   whatever scheduled it so it reads as an ordinary entry.
-   Written once for both: a task already did this correctly and deleting an
-   experiment did not, which is the whole shape of the problem — two places
-   meaning the same thing and only one of them right. */
 function releaseScheduledEntries(owns){
   DB.animals.forEach(a=>{
     if(!Array.isArray(a.diary))return;
@@ -8365,11 +7960,6 @@ function taskEditor(t,after,occWhen,occEndDate){
   // one-off task's own time. A repeating task opened without an occurrence (from
   // a project's list) has no single one to tick, so it gets no button.
   const doneKey=((!wasRecurring||occWhen!=null)&&t.when)?t.when:null;
-  // The roster belongs to one occurrence, so it needs the same single
-  // occurrence the tick does: a repeating task opened from a project's list,
-  // with no occurrence in hand, can set which type it records but not fill a
-  // round in — there is no round on screen to fill.
-  const occKey=doneKey;
   const doneLabel=on=>on?"✓ Done — tap to undo":(wasRecurring?"○ Mark this occurrence done":"○ Mark as done");
   modal(`<h3>${t.isEvent?"Event":"Task"}</h3>
     <div class="fld"><label>Name</label><input id="tk_name" value="${escAttr(t.title)}" autofocus></div>
@@ -8396,16 +7986,7 @@ function taskEditor(t,after,occWhen,occEndDate){
         ${colorBtnHTML(t.color||GCAL_COLORS[0][0],{attrs:'id="tk_color_pick"',size:30})}
       </div></div>
     <div class="fld"><label>Notes</label><textarea id="tk_notes" rows="3">${esc(t.notes||"")}</textarea></div>
-    ${t.isEvent?"":`<div class="fld"><label>Records per animal</label>
-      <select id="tk_cover">
-        <option value="">— nothing; this is just a task</option>
-        ${allDiaryTypeDefs().map(d=>`<option value="${escAttr(d.key)}" ${t.coverType===d.key?"selected":""}>${esc(d.icon||"🔖")} ${esc(d.label)}${d.fromShared?" (shared)":""}</option>`).join("")}
-      </select>
-      <div style="font-size:11px;color:var(--ink-faint);margin-top:5px;line-height:1.5">
-        Each animal in the round gets its own entry of that type, on this task's date,
-        with that type's own fields. The Timeline shows this one task, not an entry per animal.</div>
-      <div id="tk_roster"></div></div>
-    <div class="fld"><label>Part of</label>
+    ${t.isEvent?"":`<div class="fld"><label>Part of</label>
       <select id="tk_exp"><option value="">— not attached to anything</option>${opts}</select></div>`}
     ${shareRowHTML("schedule",t)}
     <div class="drow" style="margin-top:16px;gap:8px">
@@ -8414,132 +7995,6 @@ function taskEditor(t,after,occWhen,occEndDate){
     </div>
     <div class="actions"><button class="btn accent" id="tk_save">Done</button></div>`,{wide:true});
   wireShareRow(document.getElementById("modal"),t,null,"schedule");
-  /* ---- the round: which animals this occurrence covers, and what each one
-     records. Painted from the roster every time rather than held in a variable,
-     so adding or dropping an animal is one source of truth re-read, and the
-     rows that are on screen are exactly the entries that exist. Values typed
-     into the rows are read back before any repaint (and on save), because a
-     repaint rebuilds the inputs. ---- */
-  function rosterRowHTML(a,e,type){
-    const def=diaryTypeDef(type), on=!!(e&&e.done);
-    return `<div class="tkr-row" data-aid="${escAttr(a.id)}"
-      style="border:1px solid var(--line2);border-radius:9px;padding:9px 11px;margin-bottom:7px;background:var(--bg2)">
-      <div style="display:flex;align-items:center;gap:8px">
-        <button type="button" class="tkr-done" data-aid="${escAttr(a.id)}" title="Mark this animal's entry done"
-          style="flex:0 0 auto;border:1px solid var(--line2);background:${on?"var(--ok,#3c8a52)":"var(--panel2)"};color:${on?"#fff":"var(--ink-faint)"};border-radius:6px;padding:2px 9px;cursor:pointer;font-size:11px">${on?"✓":"○"}</button>
-        <span style="flex:1;min-width:0;font-weight:600;font-size:12.5px">${esc(a.name)}</span>
-        <button type="button" class="tkr-del" data-aid="${escAttr(a.id)}" title="Take this animal out of this round"
-          style="flex:0 0 auto;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
-      </div>
-      ${(def.fields||[]).length?`<div style="margin-top:7px">${renderTypeFields(type,(e&&e.data)||{},a)}</div>`:""}
-      <div class="fld" style="margin:6px 0 0">
-        <input class="tkr-note" value="${escAttr(diaryNoteOf((e&&e.data)||{}))}" placeholder="note…" style="font-size:12px">
-      </div></div>`;
-  }
-  // Read what is typed into the rows back onto the entries. Only writes an
-  // entry whose data actually differs, so repainting or saving an untouched
-  // round marks nothing as edited and gives sync nothing to carry.
-  function readRosterInto(){
-    const host=document.getElementById("tk_roster"); if(!host||!occKey)return;
-    const type=taskCoverType(t); if(!type)return;
-    let changed=false;
-    host.querySelectorAll(".tkr-row").forEach(row=>{
-      const a=DB.animals.find(x=>x.id===row.dataset.aid); if(!a)return;
-      const e=taskOccEntry(t,occKey,a); if(!e)return;
-      const data=readTypeData(row,type,a);
-      const note=row.querySelector(".tkr-note");
-      const noteVal=note?note.value.trim():"";
-      if(noteVal)data.note=noteVal;
-      if(JSON.stringify(data)!==JSON.stringify(e.data||{})){
-        e.data=data; e.edited=Date.now(); changed=true;
-      }
-    });
-    if(changed)persist();
-  }
-  /* A round is a record of what was done, not a scoped property of the series,
-     so it must survive revert() — the same reason the tick above writes itself
-     back into `before`. Without this, answering "only this occurrence" to the
-     save dialog silently undid every animal added or dropped in this sitting,
-     while their rows stayed on the animals.
-     The rows themselves live on the animals and were never at risk. */
-  const keepRoster=()=>{ before.roster=t.roster?JSON.parse(JSON.stringify(t.roster)):t.roster; };
-  function paintRoster(){
-    const host=document.getElementById("tk_roster"); if(!host)return;
-    const type=taskCoverType(t);
-    if(!type){ host.innerHTML=""; return; }
-    if(!occKey){
-      host.innerHTML=`<div style="font-size:11.5px;color:var(--ink-faint);margin-top:9px;line-height:1.5">
-        Open one occurrence of this task — from the Timeline or the calendar — to fill a round in.
-        Which animals it covers is set per occurrence, because the group changes, and editing
-        next week's list must not rewrite the record of who was covered last week.</div>`;
-      return;
-    }
-    /* Deliberately no persist() here: looking at a round is not a change, and
-       writing during the paint is what made the moved anchor above permanent.
-       Every row this creates has a derived id, so it is rebuilt identically
-       next time; the user's own edits below persist as they are made. */
-    syncTaskOccEntries(t,occKey); keepRoster();
-    const ids=taskRosterFor(t,occKey);
-    const rows=ids.map(id=>DB.animals.find(a=>a.id===id)).filter(Boolean)
-      .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true}))
-      .map(a=>rosterRowHTML(a,taskOccEntry(t,occKey,a),type)).join("");
-    // a dead animal is not offered for a new round, but one already in this
-    // round stays listed — a past round's record of it is not to be hidden
-    const rest=DB.animals.filter(a=>!ids.includes(a.id)&&a.alive!==false)
-      .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""),undefined,{numeric:true}));
-    host.innerHTML=`<div style="margin-top:10px">
-      ${rows||`<div style="font-size:11.5px;color:var(--ink-faint);margin-bottom:8px">No animals in this round yet.</div>`}
-      ${rest.length?`<select id="tk_addanimal" style="width:100%">
-        <option value="">＋ add an animal to this round…</option>
-        ${rest.map(a=>`<option value="${escAttr(a.id)}">${esc(a.name)}</option>`).join("")}
-      </select>`:`<div style="font-size:11px;color:var(--ink-faint)">Every living animal is already in this round.</div>`}
-      ${ids.length?`<div style="font-size:10.5px;color:var(--ink-faint);margin-top:6px">
-        ${ids.length} animal${ids.length===1?"":"s"} · later occurrences inherit this list until one of them is changed</div>`:""}
-    </div>`;
-    const add=document.getElementById("tk_addanimal");
-    if(add) add.addEventListener("change",ev=>{
-      const id=ev.target.value; if(!id)return;
-      readRosterInto();
-      setTaskRoster(t,occKey,[...taskRosterFor(t,occKey),id]);
-      keepRoster(); persist(); paintRoster();
-    });
-    host.querySelectorAll(".tkr-done").forEach(b=>b.addEventListener("click",()=>{
-      const a=DB.animals.find(x=>x.id===b.dataset.aid); if(!a)return;
-      const e=taskOccEntry(t,occKey,a); if(!e)return;
-      readRosterInto();
-      e.done=!e.done; e.edited=Date.now(); persist(); paintRoster();
-    }));
-    host.querySelectorAll(".tkr-del").forEach(b=>b.addEventListener("click",()=>{
-      const a=DB.animals.find(x=>x.id===b.dataset.aid); if(!a)return;
-      readRosterInto();
-      const e=taskOccEntry(t,occKey,a);
-      // dropping an animal whose row has something in it would throw that
-      // away, so it asks; an untouched row goes quietly
-      if(e&&diaryRowHasContent(e)&&
-         !confirm(`${a.name} has something recorded for this round. Take it out and delete that entry?`))return;
-      if(e){ removeShared("diary",[e],a); a.diary=(a.diary||[]).filter(x=>x!==e); }
-      setTaskRoster(t,occKey,taskRosterFor(t,occKey).filter(id=>id!==a.id));
-      keepRoster(); persist(); paintRoster();
-    }));
-    // an animal-anchored table's rows live on the animal, so each row is wired
-    // to its own — wiring the whole host at once would hand every table the
-    // same animal
-    host.querySelectorAll(".tkr-row").forEach(row=>{
-      const a=DB.animals.find(x=>x.id===row.dataset.aid); if(!a)return;
-      wireTableFields(row,type,a);
-    });
-  }
-  const tkCover=document.getElementById("tk_cover");
-  if(tkCover) tkCover.addEventListener("change",ev=>{
-    readRosterInto();
-    const next=ev.target.value||null;
-    // turning it off hands the rows back: the filled ones become ordinary
-    // entries in the animals' diaries, the untouched ones never meant anything
-    if(!next) releaseTaskCoverage(t);
-    t.coverType=next; before.coverType=next;
-    persist(); paintRoster();
-  });
-  paintRoster();
   // The end follows the start the way it does in a calendar: an end already set
   // keeps its length, and an empty one is suggested half an hour on. Repainting
   // by hand because the end's own button only relabels itself when picked.
@@ -8701,7 +8156,6 @@ function taskEditor(t,after,occWhen,occEndDate){
     }
     t.title=document.getElementById("tk_name").value;
     t.notes=document.getElementById("tk_notes").value.trim();
-    readRosterInto();
     persist();
     const finish=()=>{ committed=true; closeModal(); if(after)after(); };
     const fieldsOf=x=>JSON.stringify({title:x.title,when:x.when,endDate:x.endDate,color:x.color,projectId:x.projectId,experimentId:x.experimentId,repeat:x.repeat,notes:x.notes});
@@ -8714,8 +8168,6 @@ function taskEditor(t,after,occWhen,occEndDate){
         // so the whole pattern moves together rather than collapsing onto
         // one occurrence's date
         const deltaMin=(whenDate(t.when)-whenDate(occWhen))/60000;
-        // the rounds are keyed by when-string too, so they shift with the rest
-        if(deltaMin) shiftTaskRoster(t,w=>isoAddMinutes(w,deltaMin));
         t.when=deltaMin?isoAddMinutes(before.when,deltaMin):before.when;
         t.endDate=before.endDate?(deltaMin?isoAddMinutes(before.endDate,deltaMin):before.endDate):before.endDate;
         persist(); finish(); return;
@@ -12813,364 +12265,6 @@ function animalRowAdd(a,key){
 }
 // values an entry recorded against the animal's rows, keyed by row id
 function perRowValues(v){ return (v&&typeof v==="object"&&!Array.isArray(v))?v:{}; }
-// curated picker for diary-type icons — the free-text field next to it still
-// takes any character/emoji typed directly, this is just a quick-pick list
-// covering common lab/animal/medical symbols so most people never need to
-// hunt down an emoji elsewhere.
-const DIARY_ICON_CHOICES=["⚖️","🩹","🎓","💬","🔪","💉","🧫","🔬","🔭","🩺","💊","🧪","🧬","🩸","🦴","🧠","❤️","🫀","🫁","🐭","🐁","📋","📌","📝","📅","⏰","✅","⚠️","🔥","❄️","🧊","🌡️","🔦","📷","🧴","🧯","🔖","⭐","✨","🎯","💧","🧻","🚨","🔋","🧹"];
-/* Entry types are the shape of the animal diary, not a material — they sat in
-   Materials because that is where the other editable lists were, and that one
-   tab is what made the section read as a drawer. Lives on the Animals page
-   now, beside Tags; the renderer takes its host so it can live in a modal. */
-function renderDiaryTypesLib(hostEl){
-  const host = hostEl; host.innerHTML = "";
-  const IST = "background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
-
-  const hdr = document.createElement("div");
-  hdr.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap";
-  hdr.innerHTML = `<span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">
-      Define the animal diary's entry types — each gets its own icon, color, custom fields, and whether it shows on the global Timeline.</span>
-    <button id="dtlib_add" class="btn accent" style="margin-left:auto;font-size:12px;flex:0 0 auto">＋ New type</button>`;
-  /* An entry type that arrived with a shared project can be read on their
-     animals already; this is how it becomes usable on your own. Written at the
-     same time as the sections' version and then, like it, left unwired. */
-  const offerHost=document.createElement("div");
-  const paintOffer=()=>{
-    offerHost.innerHTML=offerHTML(sharedOffered("type"),"type");
-    offerHost.querySelectorAll(".af-take").forEach(b=>b.onclick=()=>{
-      const row=sharedOffered("type").find(r=>DEF_KINDS.type.idOf(r.obj)===b.dataset.id); if(!row)return;
-      adoptShared("type",row.obj);
-      toast(`"${row.type.label||row.type.key}" is yours to use now`);
-      paintOffer(); paintDTRows();
-    });
-  };
-  host.appendChild(hdr);
-
-  const wrap = document.createElement("div"); wrap.id = "dtlib_rows"; host.appendChild(wrap);
-  /* Aftercare, per type: "when a surgery is logged, also schedule two post-op
-     checks, one a day, at 09:00". Each row is one rule; the entries it creates
-     are ordinary diary entries (see scheduleRelatedEntries). */
-  const BTNS="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer";
-  function relPreview(r){
-    const count=Math.max(1,+r.count||1), every=Math.max(1,+r.every||1), after=+r.after||0;
-    const at=r.time?` ${r.time}`:"";
-    const days=[]; for(let k=0;k<Math.min(count,4);k++) days.push(fmtDMY(addDaysISO(todayDateStr(),after+k*every))+at);
-    return `logged today → ${days.join(", ")}${count>4?` … (${count} in all)`:""}`;
-  }
-  function relatedHTML(t,i){
-    const opts=sel=>allDiaryTypeDefs().map(x=>`<option value="${escAttr(x.key)}" ${x.key===sel?"selected":""}>${esc(x.icon||"")} ${esc(x.label||"(unnamed)")}</option>`).join("");
-    // Spelled out rather than crammed into labels: the row says what it does,
-    // and the line under it shows the actual dates the rule would book for an
-    // entry logged today — which is the only thing that settles "every 1 day,
-    // 2 times" for good.
-    const rows=(t.related||[]).map((r,ri)=>`
-      <div style="margin-bottom:8px">
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11.5px;color:var(--ink-dim)">
-        <select class="ldr_type" data-ti="${i}" data-ri="${ri}" style="${IST};flex:0 0 auto">${opts(r.type)}</select>
-        <span>— first one</span>
-        <input type="number" class="ldr_after" data-ti="${i}" data-ri="${ri}" min="0" step="1" value="${r.after??1}" style="width:46px;${IST};padding:5px 6px">
-        <span>day(s) after, then one more every</span>
-        <input type="number" class="ldr_every" data-ti="${i}" data-ri="${ri}" min="1" step="1" value="${r.every??1}" style="width:46px;${IST};padding:5px 6px">
-        <span>day(s), until there are</span>
-        <input type="number" class="ldr_count" data-ti="${i}" data-ri="${ri}" min="1" step="1" value="${r.count??1}" style="width:46px;${IST};padding:5px 6px">
-        <span>in all, at</span>
-        <button type="button" class="datebtn datebtn-sm ldr_timebtn${r.time?"":" datebtn-empty"}" data-ti="${i}" data-ri="${ri}"
-          title="Pick a time — or clear it to use the same time as the entry itself"><span style="opacity:.55;margin-right:6px">🕐</span>${r.time||"same time as the entry"}</button>
-        <button class="ldr_del" data-ti="${i}" data-ri="${ri}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
-      </div>
-      <div class="ldr_preview" style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:3px 0 0 4px">${esc(relPreview(r))}</div>
-      </div>`).join("");
-    return `<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:9px">
-      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:6px">When one is logged, also schedule</div>
-      ${rows||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">nothing — entries of this type schedule nothing else</div>`}
-      <button class="ldt_addrel" data-ti="${i}" style="${BTNS}">＋ add follow-up</button>
-    </div>`;
-  }
-  function paintDTRows(){
-    const dt = diaryTypeDefs(); // sorted for display; data-ti below still points at the real DB.config.diaryTypes index
-    wrap.innerHTML = dt.length ? dt.map(t => { const i=DB.config.diaryTypes.indexOf(t); return `
-      <div style="background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px">
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:9px;flex-wrap:wrap">
-          ${colorBtnHTML(t.color,{cls:"ldt_color",attrs:`data-ti="${i}"`,size:30,scope:"diary",title:"Colour for this entry type"})}
-          <button type="button" class="emoji-btn ldt_iconbtn" data-ti="${i}" title="pick an icon">${esc(t.icon||"🔖")}</button>
-          <input class="ldt_label" data-ti="${i}" value="${escAttr(t.label)}" placeholder="Type name (e.g. Cage change)" style="flex:1;min-width:140px;${IST}">
-          <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto" title="How long an entry of this type runs on the Timeline when it has no explicit end time">
-            <input type="number" class="ldt_duration" data-ti="${i}" min="0" step="5" value="${t.defaultDuration||""}" placeholder="30" style="width:52px;${IST};padding:5px 6px"> min default</label>
-          <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);flex:0 0 auto"><input type="checkbox" class="ldt_timeline" data-ti="${i}" style="width:auto" ${t.timeline?"checked":""}> shows on Timeline</label>
-          ${(t.core||roleOfType(t.key))?"":`<button class="ldt_del" data-ti="${i}"
-            style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ type</button>`}
-        </div>
-        <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:6px">Custom fields (every entry also always has a free-text Note, in addition to these)</div>
-        ${t.key==="training" ? `
-        <div style="font-size:11px;color:var(--ink-faint);margin-bottom:8px">Training logs vary by task/paradigm — each behavioral task below defines its own fields, shown on the training entry form once that task is picked.</div>
-        <div class="dtlib-tasks">
-        ${(DB.config.taskLib||[]).map((tk,tki)=>`
-          <div style="background:var(--bg2);border:1px solid var(--line2);border-radius:9px;padding:10px 12px;margin-bottom:8px">
-            <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
-              <input class="lt2_name" data-tki="${tki}" value="${escAttr(tk.name)}" placeholder="Task / paradigm name (e.g. 2AFC lick)" style="flex:1;min-width:140px;${IST}">
-              <button class="lt2_del" data-tki="${tki}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--overdue);border-radius:6px;padding:3px 9px;cursor:pointer;font-size:12px">✕ task</button>
-            </div>
-            ${(tk.params||[]).map((p,pi)=>`
-              <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
-                <input class="lp2_label" data-tki="${tki}" data-pi="${pi}" value="${escAttr(p.label)}" placeholder="Field name (e.g. Trials)" style="flex:1;min-width:120px;${IST}">
-                <select class="lp2_type" data-tki="${tki}" data-pi="${pi}" style="${IST};flex:0 0 auto">
-                  ${DIARY_FIELD_TYPES.map(ft=>`<option value="${ft}" ${p.type===ft?"selected":""}>${ft}</option>`).join("")}
-                </select>
-                ${p.type==="text"?`<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)"><input type="checkbox" class="lp2_multiline" data-tki="${tki}" data-pi="${pi}" style="width:auto" ${p.multiline?"checked":""}> multi-line</label>`:""}
-                ${p.type==="select"?`<input class="lp2_options" data-tki="${tki}" data-pi="${pi}" value="${escAttr((p.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:160px;${IST}">`:""}
-                <button class="lp2_del" data-tki="${tki}" data-pi="${pi}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
-              </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">no fields yet — just Note will show for this task</div>`}
-            <button class="lt2_addparam" data-tki="${tki}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add field</button>
-          </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">No tasks yet — add one below.</div>`}
-        </div>
-        <button id="dtlib_addtask" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add task</button>
-        ` : `
-        ${(t.fields||[]).map((f,fi)=>`
-          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
-            <input class="ldf_label" data-ti="${i}" data-fi="${fi}" value="${escAttr(f.label)}" placeholder="Field name (e.g. Severity)" style="flex:1;min-width:120px;${IST}">
-            <select class="ldf_type" data-ti="${i}" data-fi="${fi}" style="${IST};flex:0 0 auto">
-              ${DIARY_FIELD_TYPES.map(ft=>`<option value="${ft}" ${f.type===ft?"selected":""}>${ft}</option>`).join("")}
-            </select>
-            ${f.type==="text"?`<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)"><input type="checkbox" class="ldf_multiline" data-ti="${i}" data-fi="${fi}" style="width:auto" ${f.multiline?"checked":""}> multi-line</label>`:""}
-            ${f.type==="select"?`<input class="ldf_options" data-ti="${i}" data-fi="${fi}" value="${escAttr((f.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:160px;${IST}">`:""}
-            ${f.type==="table"?`<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ink-faint);flex-basis:100%;margin:3px 0 0">
-                <input type="checkbox" class="ldf_anchor" data-ti="${i}" data-fi="${fi}" style="width:auto" ${tableAnchor(f)==="animal"?"checked":""}>
-                rows belong to the animal, not to the entry
-                <span style="opacity:.75">— the same rows every time, so one can be followed across entries</span>
-              </label>
-              <span style="font-size:11px;color:var(--ink-faint);flex-basis:100%;margin:2px 0 0">
-              ${tableAnchor(f)==="animal"?"Describes the row — typed once, then shown already filled in every entry (e.g. FOV, Depth)":"Columns — each entry holds as many rows of these as it needs"}</span>
-              ${tableAnchor(f)==="animal"&&!(f.fields||[]).length?`<span style="font-size:11px;color:var(--warn,#d08a3a);flex-basis:100%;margin:1px 0 0">add at least one column here — usually a name — or the rows will have nothing to tell them apart</span>`:""}
-              <div style="flex-basis:100%;padding-left:14px;border-left:2px solid var(--line2);margin:2px 0 4px">
-              ${(f.fields||[]).map((sf,si)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
-                <input class="ldsf_label" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr(sf.label||"")}" placeholder="Column name" style="flex:1;min-width:100px;${IST}">
-                <select class="ldsf_type" data-ti="${i}" data-fi="${fi}" data-si="${si}" style="${IST};flex:0 0 auto">
-                  ${SUB_FIELD_TYPES.map(ft=>`<option value="${ft}" ${sf.type===ft?"selected":""}>${ft}</option>`).join("")}
-                </select>
-                ${sf.type==="select"?`<input class="ldsf_options" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr((sf.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:140px;${IST}">`:""}
-                <button class="ldsf_del" data-ti="${i}" data-fi="${fi}" data-si="${si}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 7px;cursor:pointer;font-size:11px">✕</button>
-              </div>`).join("")||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">no columns yet</div>`}
-              <button class="ldsf_add" data-ti="${i}" data-fi="${fi}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:2px 8px;font-size:11px;cursor:pointer">＋ add column</button>
-              </div>
-              ${tableAnchor(f)==="animal"?`<span style="font-size:11px;color:var(--ink-faint);flex-basis:100%;margin:2px 0 0">
-                Recorded each time — blank in every new entry, filled in against each row (e.g. Cells)</span>
-                <div style="flex-basis:100%;padding-left:14px;border-left:2px solid var(--gcamp);margin:2px 0 4px">
-                ${(f.per||[]).map((sf,si)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
-                  <input class="ldpf_label" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr(sf.label||"")}" placeholder="Column name" style="flex:1;min-width:100px;${IST}">
-                  <select class="ldpf_type" data-ti="${i}" data-fi="${fi}" data-si="${si}" style="${IST};flex:0 0 auto">
-                    ${SUB_FIELD_TYPES.map(ft=>`<option value="${ft}" ${sf.type===ft?"selected":""}>${ft}</option>`).join("")}
-                  </select>
-                  ${sf.type==="select"?`<input class="ldpf_options" data-ti="${i}" data-fi="${fi}" data-si="${si}" value="${escAttr((sf.options||[]).join(", "))}" placeholder="options, comma, separated" style="flex:1;min-width:140px;${IST}">`:""}
-                  <button class="ldpf_del" data-ti="${i}" data-fi="${fi}" data-si="${si}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 7px;cursor:pointer;font-size:11px">✕</button>
-                </div>`).join("")||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:4px">nothing recorded per entry yet</div>`}
-                <button class="ldpf_add" data-ti="${i}" data-fi="${fi}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:2px 8px;font-size:11px;cursor:pointer">＋ add column</button>
-                </div>`:""}`:""}
-            <button class="ldf_del" data-ti="${i}" data-fi="${fi}"
-              style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:11px">✕</button>
-          </div>`).join("") || `<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">no custom fields — just the free-text Note will show</div>`}
-        <button class="ldt_addfield" data-ti="${i}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer">＋ add field</button>
-        `}
-        ${relatedHTML(t,i)}
-      </div>`; }).join("")
-    : `<div class="empty-box">No entry types yet — add one above.</div>`;
-  }
-  host.appendChild(offerHost); paintOffer();
-  paintDTRows();
-
-  host.querySelector("#dtlib_add").onclick = () => {
-    (DB.config.diaryTypes=DB.config.diaryTypes||[]).push({key:uid("dt_"),label:"",icon:"🔖",color:"#54e08a",timeline:false,fields:[]});
-    persist(); paintDTRows();
-    const rows = wrap.querySelectorAll(".ldt_label"); if(rows.length) rows[rows.length-1].focus();
-  };
-  wrap.addEventListener("input", e => {
-    if(e.target.classList.contains("lt2_name")) {
-      const tk=(DB.config.taskLib||[])[+e.target.dataset.tki]; if(tk){ tk.name=e.target.value; persist(); } return;
-    }
-    if(e.target.classList.contains("lp2_label")) {
-      const tk=(DB.config.taskLib||[])[+e.target.dataset.tki]; const p=tk&&(tk.params||[])[+e.target.dataset.pi];
-      if(p){ p.label=e.target.value; persist(); } return;
-    }
-    if(e.target.classList.contains("lp2_options")) {
-      const tk=(DB.config.taskLib||[])[+e.target.dataset.tki]; const p=tk&&(tk.params||[])[+e.target.dataset.pi];
-      if(p){ p.options=e.target.value.split(",").map(s=>s.trim()).filter(Boolean); persist(); } return;
-    }
-    const ti = +e.target.dataset.ti; const t = (DB.config.diaryTypes||[])[ti]; if(!t) return;
-    if(e.target.classList.contains("ldt_label")) { t.label = e.target.value; persist(); return; }
-    if(e.target.classList.contains("ldt_duration")) { t.defaultDuration = e.target.value?+e.target.value:null; persist(); return; }
-    if(e.target.classList.contains("ldf_label")) {
-      const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.label = e.target.value; persist(); }
-    }
-    if(/^ldr_(after|count|every|time)$/.test([...e.target.classList].find(c=>c.startsWith("ldr_"))||"")) {
-      const r=(t.related||[])[+e.target.dataset.ri]; if(!r)return;
-      const k=[...e.target.classList].find(c=>c.startsWith("ldr_")).slice(4);
-      r[k]=k==="time"?e.target.value:Math.max(k==="after"?0:1,+e.target.value||0);
-      persist();
-      // the worked example under the row follows what was just typed; written
-      // in place rather than repainted, which would take focus off the field
-      const ex=e.target.closest("div").parentElement.querySelector(".ldr_preview");
-      if(ex) ex.textContent=relPreview(r);
-      return;
-    }
-    if(e.target.classList.contains("ldf_options")) {
-      const f = (t.fields||[])[+e.target.dataset.fi];
-      if(f){ f.options = e.target.value.split(",").map(s=>s.trim()).filter(Boolean); persist(); }
-    }
-    if(e.target.classList.contains("ldsf_label")) {
-      const sf = subFieldAt(t,e.target.dataset); if(sf){ sf.label = e.target.value; persist(); }
-    }
-    if(e.target.classList.contains("ldsf_options")) {
-      const sf = subFieldAt(t,e.target.dataset);
-      if(sf){ sf.options = e.target.value.split(",").map(x=>x.trim()).filter(Boolean); persist(); }
-    }
-    if(e.target.classList.contains("ldpf_label")) {
-      const sf = perFieldAt(t,e.target.dataset); if(sf){ sf.label = e.target.value; persist(); }
-    }
-    if(e.target.classList.contains("ldpf_options")) {
-      const sf = perFieldAt(t,e.target.dataset);
-      if(sf){ sf.options = e.target.value.split(",").map(x=>x.trim()).filter(Boolean); persist(); }
-    }
-  });
-  wrap.addEventListener("change", e => {
-    if(e.target.classList.contains("lp2_type")) {
-      const tk=(DB.config.taskLib||[])[+e.target.dataset.tki]; const p=tk&&(tk.params||[])[+e.target.dataset.pi];
-      if(p){ p.type=e.target.value; persist(); paintDTRows(); } return;
-    }
-    if(e.target.classList.contains("lp2_multiline")) {
-      const tk=(DB.config.taskLib||[])[+e.target.dataset.tki]; const p=tk&&(tk.params||[])[+e.target.dataset.pi];
-      if(p){ p.multiline=e.target.checked; persist(); } return;
-    }
-    const ti = +e.target.dataset.ti; const t = (DB.config.diaryTypes||[])[ti]; if(!t) return;
-    if(e.target.classList.contains("ldt_color"))    { t.color = e.target.value; persist(); return; }
-    if(e.target.classList.contains("ldt_timeline")) { t.timeline = e.target.checked; persist(); return; }
-    if(e.target.classList.contains("ldf_type")) {
-      const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.type = e.target.value; persist(); paintDTRows(); }
-    }
-    if(e.target.classList.contains("ldf_multiline")) {
-      const f = (t.fields||[])[+e.target.dataset.fi]; if(f){ f.multiline = e.target.checked; persist(); }
-    }
-    if(e.target.classList.contains("ldsf_type")) {
-      const sf = subFieldAt(t,e.target.dataset); if(sf){ sf.type = e.target.value; persist(); paintDTRows(); }
-    }
-    if(e.target.classList.contains("ldpf_type")) {
-      const sf = perFieldAt(t,e.target.dataset); if(sf){ sf.type = e.target.value; persist(); paintDTRows(); }
-    }
-    if(e.target.classList.contains("ldf_anchor")) {
-      const f=(t.fields||[])[+e.target.dataset.fi];
-      if(f){ f.anchor = e.target.checked?"animal":"entry";
-        if(f.anchor==="animal"&&!(f.per||[]).length) f.per=[{key:uid("pf_"),label:"",type:"number"}];
-        persist(); paintDTRows(); }
-    }
-    if(e.target.classList.contains("ldr_type")) {
-      const r=(t.related||[])[+e.target.dataset.ri]; if(r){ r.type=e.target.value; persist(); }
-    }
-
-  });
-  wrap.addEventListener("click", e => {
-    const addTask = e.target.closest("#dtlib_addtask"), delTask = e.target.closest(".lt2_del"),
-          addTParam = e.target.closest(".lt2_addparam"), delTParam = e.target.closest(".lp2_del");
-    if(addTask){
-      (DB.config.taskLib=DB.config.taskLib||[]).push({name:"",params:[]});
-      persist(); paintDTRows();
-      const rows=wrap.querySelectorAll(".lt2_name"); if(rows.length) rows[rows.length-1].focus();
-      return;
-    }
-    if(delTask){
-      if(confirm("Delete this task? Already-logged training entries keep their data, but it'll show unlabeled without this definition.")){
-        (DB.config.taskLib||[]).splice(+delTask.dataset.tki,1); persist(); paintDTRows();
-      }
-      return;
-    }
-    if(addTParam){
-      const tk=(DB.config.taskLib||[])[+addTParam.dataset.tki]; if(!tk)return;
-      (tk.params=tk.params||[]).push({key:uid("p_"),label:"",type:"number"});
-      persist(); paintDTRows();
-      const rows=wrap.querySelectorAll(`.lp2_label[data-tki="${addTParam.dataset.tki}"]`); if(rows.length) rows[rows.length-1].focus();
-      return;
-    }
-    if(delTParam){
-      const tk=(DB.config.taskLib||[])[+delTParam.dataset.tki]; if(!tk)return;
-      tk.params.splice(+delTParam.dataset.pi,1); persist(); paintDTRows();
-      return;
-    }
-    const delT = e.target.closest(".ldt_del"), addF = e.target.closest(".ldt_addfield"), delF = e.target.closest(".ldf_del"),
-          iconBtn = e.target.closest(".ldt_iconbtn");
-    if(iconBtn){
-      const t=(DB.config.diaryTypes||[])[+iconBtn.dataset.ti]; if(!t)return;
-      openEmojiPicker(iconBtn, DIARY_ICON_CHOICES, t.icon, emoji => { t.icon=emoji; persist(); paintDTRows(); });
-      return;
-    }
-    if(delT){
-      const t=(DB.config.diaryTypes||[])[+delT.dataset.ti];
-      if(t&&(t.core||roleOfType(t.key))){
-        toast(roleOfType(t.key)?`Arbor relies on what ${t.label||"this type"} means — rename it or change its fields, but it can't be deleted`
-                               :"Built-in type — can't be deleted");
-        return; }
-      if(confirm("Delete this entry type? Already-logged entries keep their data, but it'll show without labels/colors without this definition.")){
-        (DB.config.diaryTypes||[]).splice(+delT.dataset.ti,1); persist(); paintDTRows();
-      }
-    } else if(addF){
-      const t = (DB.config.diaryTypes||[])[+addF.dataset.ti]; if(!t) return;
-      (t.fields=t.fields||[]).push({key:uid("f_"),label:"",type:"text"});
-      persist(); paintDTRows();
-      const rows = wrap.querySelectorAll(`.ldf_label[data-ti="${addF.dataset.ti}"]`); if(rows.length) rows[rows.length-1].focus();
-    } else if(delF){
-      const t = (DB.config.diaryTypes||[])[+delF.dataset.ti]; if(!t) return;
-      t.fields.splice(+delF.dataset.fi,1); persist(); paintDTRows();
-    }
-    const addSF=e.target.closest(".ldsf_add"), delSF=e.target.closest(".ldsf_del");
-    if(addSF){
-      const t=(DB.config.diaryTypes||[])[+addSF.dataset.ti];
-      const f=t&&(t.fields||[])[+addSF.dataset.fi]; if(!f)return;
-      (f.fields=f.fields||[]).push({key:uid("sf_"),label:"",type:"text"});
-      persist(); paintDTRows();
-      const cols=wrap.querySelectorAll(`.ldsf_label[data-ti="${addSF.dataset.ti}"][data-fi="${addSF.dataset.fi}"]`);
-      if(cols.length) cols[cols.length-1].focus();
-      return;
-    }
-    if(delSF){
-      const t=(DB.config.diaryTypes||[])[+delSF.dataset.ti];
-      const f=t&&(t.fields||[])[+delSF.dataset.fi]; if(!f)return;
-      (f.fields||[]).splice(+delSF.dataset.si,1); persist(); paintDTRows();
-      return;
-    }
-    const addPF=e.target.closest(".ldpf_add"), delPF=e.target.closest(".ldpf_del");
-    if(addPF){
-      const t=(DB.config.diaryTypes||[])[+addPF.dataset.ti];
-      const f=t&&(t.fields||[])[+addPF.dataset.fi]; if(!f)return;
-      (f.per=f.per||[]).push({key:uid("pf_"),label:"",type:"number"});
-      persist(); paintDTRows();
-      const cols=wrap.querySelectorAll(`.ldpf_label[data-ti="${addPF.dataset.ti}"][data-fi="${addPF.dataset.fi}"]`);
-      if(cols.length) cols[cols.length-1].focus();
-      return;
-    }
-    if(delPF){
-      const t=(DB.config.diaryTypes||[])[+delPF.dataset.ti];
-      const f=t&&(t.fields||[])[+delPF.dataset.fi]; if(!f)return;
-      (f.per||[]).splice(+delPF.dataset.si,1); persist(); paintDTRows();
-      return;
-    }
-    // the same drum picker every other time in the app is set with, rather
-    // than a field that could only be typed into
-    const relTime=e.target.closest(".ldr_timebtn");
-    if(relTime){
-      const t=(DB.config.diaryTypes||[])[+relTime.dataset.ti]; if(!t)return;
-      const r=(t.related||[])[+relTime.dataset.ri]; if(!r)return;
-      openTimePicker(relTime, r.time||null, v=>{ r.time=v||""; persist(); paintDTRows(); }, 5, "Same time as the entry");
-      return;
-    }
-    const addRel=e.target.closest(".ldt_addrel"), delRel=e.target.closest(".ldr_del");
-    if(addRel){
-      const t=(DB.config.diaryTypes||[])[+addRel.dataset.ti]; if(!t)return;
-      const first=(diaryTypeDefs()[0]||{}).key; if(!first)return;
-      (t.related=t.related||[]).push({type:first,after:1,count:1,every:1,time:""});
-      persist(); paintDTRows();
-    } else if(delRel){
-      const t=(DB.config.diaryTypes||[])[+delRel.dataset.ti]; if(!t)return;
-      (t.related||[]).splice(+delRel.dataset.ri,1); persist(); paintDTRows();
-    }
-  });
-}
-
 // Event categories (named colours) are managed inline from the event editor's
 // own Colour field now — see taskEditor's tk_cat_* wiring — not from a
 // separate settings tab.
@@ -14553,7 +13647,6 @@ function allDiaryTypeDefs(){ return RECORD_KINDS.slice(); }
    a second copy would have drifted the moment a third kind appeared. */
 function diaryBelongsTo(e){
   if(!e) return "";
-  if(coveredByTask(e)) return (taskOf(e.fromTask)||{}).title||"";
   if(e.fromPlan){
     const ex=(DB.experiments||[]).find(x=>x.id===e.fromPlan);
     if(!ex) return "";
@@ -14568,7 +13661,7 @@ function diaryBelongsTo(e){
   return "";
 }
 function diaryDrawsOnTimeline(e){
-  return !!(e && diaryTypeDef(e.type).timeline && !coveredByTask(e));
+  return !!(e && diaryTypeDef(e.type).timeline);
 }
 // Searching is not drawing: a round's entries are hidden from the Timeline
 // because their task stands in for them, but they must still be findable.
@@ -15594,55 +14687,6 @@ function hasProcEntry(a,ptype,onlyPast){
   const today=todayDateStr();
   return (a.diary||[]).some(e=>e.type===ptype && (!onlyPast || e.date<=today));
 }
-// each behavioral task defines its own flexible parameter list in
-// DB.config.taskLib (2AFC and open-field sessions have nothing in common) —
-// look it up by task name to know how to label a logged training entry's
-// metrics object (which is keyed by opaque param ids, not the label text).
-function trainingParamDefs(taskName){
-  const t=(DB.config.taskLib||[]).find(x=>x.name===taskName);
-  return t?(t.params||[]):[];
-}
-// renders the training entry form's metric inputs for whichever task is
-// currently typed/selected — re-invoked live as the task field changes, so
-// picking a different task swaps in that task's own parameter set.
-function renderMetricsFields(taskName,metrics){
-  metrics=metrics||{};
-  const defs=trainingParamDefs(taskName);
-  if(!defs.length){
-    return taskName
-      ? `<div style="font-size:11px;color:var(--ink-faint)">no fields defined for "${esc(taskName)}" yet — add some in Animals → Entry types → training, or just use Note below</div>`
-      : "";
-  }
-  return `<div class="dg-metrics-grid">${defs.map(p=>`
-    <div><label>${esc(p.label||"(unnamed)")}</label>${renderTypeField(p,metrics[p.key],"dg-metric-field")}</div>`).join("")}</div>`;
-}
-// returns ["Label: value", ...] for display (summary/detail views), handling
-// both the current shape (metrics keyed by param.key, looked up via the task's
-// library definition) and the older fixed-field shape from before tasks had
-// flexible parameters (trials/correct/accuracy/rewardUl/sessionMin), so
-// entries logged before this change keep displaying correctly.
-function trainingMetricsDisplay(e){
-  const d=e.data||{}, m=d.metrics||{};
-  const defs=trainingParamDefs(d.task);
-  const out=defs.filter(p=>m[p.key]!=null&&m[p.key]!=="").map(p=>({label:p.label,val:p.type==="yesno"?(m[p.key]?"Yes":"No"):m[p.key]}));
-  const usedKeys=new Set(out.map(x=>x.label.trim().toLowerCase()));
-  const trials=defs.find(p=>p.label.trim().toLowerCase()==="trials"), correct=defs.find(p=>p.label.trim().toLowerCase()==="correct");
-  if(trials&&correct&&m[trials.key]&&m[correct.key]!=null){
-    out.push({label:"Accuracy", val:Math.round((m[correct.key]/m[trials.key])*100)+"%"});
-    usedKeys.add("accuracy");
-  }
-  // legacy fixed-shape fallback — always checked too (not just when this task
-  // has no library definition), so an entry logged before this task had
-  // params defined (or before flexible params existed at all) keeps
-  // displaying its data instead of going dark once new-shape params exist
-  // under the same task name.
-  if(m.trials!=null     && !usedKeys.has("trials"))   out.push({label:"Trials",   val:m.trials});
-  if(m.correct!=null    && !usedKeys.has("correct"))  out.push({label:"Correct",  val:m.correct});
-  if(m.accuracy!=null   && !usedKeys.has("accuracy")) out.push({label:"Accuracy", val:Math.round(m.accuracy*100)+"%"});
-  if(m.rewardUl!=null   && !usedKeys.has("reward"))   out.push({label:"Reward",   val:m.rewardUl+" µL"});
-  if(m.sessionMin!=null && !usedKeys.has("session"))  out.push({label:"Session",  val:m.sessionMin+" min"});
-  return out;
-}
 // a type's custom fields (number/text/yesno/select) render generically; the
 // universal Note is always present in addition, on every type including ones
 // with zero custom fields (comment/surgery/perfusion/histology/microscopy are
@@ -15785,18 +14829,6 @@ function readFieldValue(el,f,missing){
   return t===""?missing:t;
 }
 const FIELD_ABSENT=Symbol("absent");
-/* A training entry's metrics come from the behavioural task's own parameter
-   list rather than from an entry type's fields, so they carry their type on the
-   element instead of in a definition — but they are read by the very same
-   ladder, and had the very same copy of it in two places. */
-function readMetricFields(host){
-  const out={};
-  host.querySelectorAll(".dg-metric-field").forEach(el=>{
-    const v=readFieldValue(el,{type:el.dataset.type},FIELD_ABSENT);
-    if(v!==FIELD_ABSENT) out[el.dataset.key]=v;
-  });
-  return out;
-}
 function readTypeData(host,type,animal){
   const out={}, def=diaryTypeDef(type);
   (def.fields||[]).forEach(f=>{
@@ -15907,15 +14939,15 @@ function diaryEntrySummary(e,a){
 function diaryEntryDetailHTML(e,a){
   const d=e.data||{};
   const rows=[arow("Time", e.time?e.time+(e.endTime?" – "+e.endTime:""):null)];
-  if(e.type==="training"){
-    rows.push(arow("Task", d.task));
-    if(d.stage)rows.push(arow("Stage", d.stage));
-    trainingMetricsDisplay(e).forEach(x=>rows.push(arow(x.label, x.val)));
-  } else {
+  if(e.type==="training") rows.push(arow("Task", d.task));
+  {
     diaryTypeDef(e.type).fields.forEach(f=>{
       const v=d[f.key];
       rows.push(arow(f.label, v==null||v===""?null:(f.type==="yesno"?(v?"Yes":"No"):v)));
     });
+    // a behaviour session's task settings, labelled the way its task names them
+    if(e.type==="training") behaviourSettingsDef(d.task).forEach(f=>{
+      const v=(d.settings||{})[f.key]; if(v!=null&&v!=="") rows.push(arow(f.label,v)); });
     if(entryHasRole(e,"weight")&&a){
       const wc=weightChangeInfo(a,e);
       const b=baselineAt(a,e.date);
@@ -16831,11 +15863,6 @@ function paintDiary(container,a,opts){
         if(!ex){ toast("That experiment is gone"); return; }
         closeModal(); experimentModal(ex,()=>render()); return;
       }
-      const t=taskOf(entry.fromTask); if(!t){ toast("That task is gone"); return; }
-      // the occurrence this row belongs to, found by the round id its key holds
-      const when=Object.keys(taskRosterMap(t)).find(k=>(rosterSlot(t,k)||{}).rid===entry.fromOcc);
-      closeModal();
-      taskEditor(t,()=>render(),when||t.when,t.endDate);
       return;
     }
     const viewBtn=e.target.closest(".dg-view"), editBtn=e.target.closest(".dg-edit"), delBtn=e.target.closest(".dg-del");
