@@ -245,8 +245,9 @@
   /* each kind's own part of the form */
   .kf-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:5px 0}
   .kf-row label{margin:0}
-  .kf-check{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--ink-dim)}
-  .kf-check input{width:auto}
+  .kf-check,.dg-form .kf-check{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-dim);margin:6px 0}
+  .kf-check input,.dg-form .kf-check input{width:auto;flex:0 0 auto;margin:0}
+  .dg-solo .dg-typebar,.dg-solo .dg-navrow,.dg-solo .wt-cal,.dg-solo .dg-dayrow{display:none!important}
   .kf-note{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:4px 0}
   .kf-warn{color:var(--amber);font-size:11.5px;margin:3px 0}
   .kf-imaging{border-left:2px solid var(--line2);padding-left:9px;margin:6px 0}
@@ -13370,10 +13371,26 @@ const KIND_FORMS={
     }
   }
 };
+/* What a new record starts with, so the usual case needs no typing: who did
+   it is you, slicing is coronal at the last thickness used, an imaging
+   session starts from the animal's last laser and channels. All editable. */
+function lastRecordData(type,a){
+  const list=(a?(a.diary||[]):(DB.animals||[]).flatMap(x=>x.diary||[])).filter(e=>e.type===type&&e.data)
+    .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+  return (list.pop()||{}).data||{};
+}
+const KIND_DEFAULTS={
+  surgery:()=>({operator:(DB.me&&DB.me.name)||""}),
+  perfusion:()=>({operator:(DB.me&&DB.me.name)||""}),
+  histo:()=>({operator:(DB.me&&DB.me.name)||""}),
+  histology:()=>{ const l=lastRecordData("histology");
+    return {operator:(DB.me&&DB.me.name)||"",plane:l.plane||"coronal",thickness:l.thickness||"",storage:l.storage||""}; },
+  microscopy:a=>{ const l=lastRecordData("microscopy",a); return {laser:l.laser||"",channels:l.channels||""}; }
+};
 function slideRowHTML(sl){
   return `<div class="kf-slide kf-row"><span class="kf-note" style="flex:0 0 52px">Slide ${sl.n}</span>
     <input class="kf-aps" value="${escAttr((sl.aps||[]).join(", "))}" placeholder="AP of each slice, top first" style="flex:1;${IN}">
-    <input class="kf-n" type="number" min="1" max="12" value="${(sl.aps||[]).length||6}" title="slices on this slide" style="width:48px;${IN}">
+    <input class="kf-n" type="number" min="1" max="12" value="${(sl.aps||[]).length||6}" title="slices on this slide" style="width:48px;${IN}"><span class="kf-note">slices</span>
     <button type="button" class="ov-btn kf-fill" title="fill down by the thickness">↧</button>
     <button type="button" class="ov-btn kf-delslide">✕</button></div>`;
 }
@@ -15479,15 +15496,19 @@ function paintDiary(container,a,opts){
   }
   function renderForm(type,d,entryDate,entryTime,entryEndTime){
     d=d||{};
+    if(!editingId&&KIND_DEFAULTS[type]) d=Object.assign(KIND_DEFAULTS[type](a),d);
     // 2.0: the kind's plain fields, then whatever is particular to it
     const kf=KIND_FORMS[type];
     const kctx={a,e:editingId?a.diary.find(x=>x.id===editingId):null,d,date:entryDate||selDate};
     const fieldsHTML=(type==="training"?"":renderTypeFields(type,d,a))+(kf&&kf.html?kf.html(kctx):"")
       +(type==="training"?renderTypeFields(type,d,a):"");
     const dtVal=(entryDate||selDate)+(entryTime?"T"+entryTime:"");
-    const isDone=editingId?!!(a.diary.find(e=>e.id===editingId)||{}).done:false;
+    const cur=editingId?a.diary.find(e=>e.id===editingId)||null:null, isDone=!!(cur&&cur.done);
+    // "done" means something only for a record a plan put on the calendar
+    // ahead of time; one being written down has happened
+    const scheduled=!!(cur&&(cur.fromPlan||cur.fromTask));
     return `<div class="dg-form">
-      <button type="button" class="done-toggle dg-f-done${isDone?" on":""}">${isDone?"✓ Done":"○ Mark as done"}</button>
+      ${scheduled?`<button type="button" class="done-toggle dg-f-done${isDone?" on":""}">${isDone?"✓ Done":"○ Mark as done"}</button>`:""}
       <div class="dg-row">
         <div><label>Date &amp; start time</label>
           <button type="button" class="datebtn dg-f-datetime ${dtVal?"":"datebtn-empty"}"><span style="opacity:.55;margin-right:6px">📅</span>${dtVal?fmtWhenFull(dtVal):"set date"}</button>
@@ -15544,7 +15565,8 @@ function paintDiary(container,a,opts){
       let data=readTypeData(host,type,a);
       { const kf=KIND_FORMS[type]; if(kf&&kf.read) kf.read(host,{a,e:editing||null,date:entryDate},data); }
       data.note=host.querySelector(".dg-f-note").value.trim();
-      const doneVal=!!host.querySelector(".dg-f-done")?.classList.contains("on");
+      const dt=host.querySelector(".dg-f-done");
+      const doneVal=dt?dt.classList.contains("on"):!!(editing&&editing.done);
       // everything after the edit is applied, in one place, so the paths that
       // have to stop and ask a question first can all end the same way
       const finishSave=()=>{
@@ -15613,15 +15635,17 @@ function paintDiary(container,a,opts){
     const monthRows=a.diary.filter(e=>String(e.date).slice(0,7)===monthKey&&visibleTypes.has(e.type))
       .sort((x,y)=>String(x.date).localeCompare(String(y.date))||String(x.time||"").localeCompare(String(y.time||"")));
 
+    // opened for one record (from the Timeline): the form alone, no calendar
+    container.classList.toggle("dg-solo",!!(opts.closeOnDone&&formType));
     container.innerHTML=`
       <div class="dg-typebar">${typebar}</div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div class="dg-navrow" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <button type="button" class="wt-nav" data-nav="-1" title="previous month">‹</button>
         <b style="font-family:var(--disp);font-size:12px;color:var(--ink)">${new Date(viewY,viewM,1).toLocaleDateString("en-GB",{month:"long",year:"numeric"})}</b>
         <button type="button" class="wt-nav" data-nav="1" title="next month">›</button>
       </div>
       <div class="wt-cal">${WD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 6px">
+      <div class="dg-dayrow" style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 6px">
         <b style="font-size:11.5px">${selDate?fmtWhenFull(selDate):"—"}</b>
         ${formType?"":`<select class="dg-addpick" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:3px 7px;font-size:11px">
           <option value="">＋ record…</option>
