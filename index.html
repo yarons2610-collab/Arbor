@@ -225,7 +225,9 @@
   .ch-sum td{color:var(--ink-dim);border-top:1px solid var(--line2)}
   /* feeding */
   .cal-feed{background:color-mix(in srgb,var(--amber) 18%,var(--panel));border-left:3px solid var(--amber);color:var(--ink);cursor:pointer}
-  .cal-feed-done:not(.cal-feed-warn){opacity:.6}   /* a warning never fades with the rest */
+  .cal-feed-done:not(.cal-feed-warn){opacity:.6}
+  .cal-ag-postop{border-left-color:#ff5f6d;background:color-mix(in srgb,#ff5f6d 14%,var(--panel))}
+  .cal-ag-brain{border-left-color:#7db4ff;background:color-mix(in srgb,#7db4ff 14%,var(--panel))}   /* a warning never fades with the rest */
   .cal-feed-warn{border-left-color:var(--overdue);background:color-mix(in srgb,var(--overdue) 16%,var(--panel))}
   .cal-feed-warn b{color:var(--overdue)}
   /* each kind's own part of the form */
@@ -10343,7 +10345,7 @@ function calVisibleRange(){
 function calFilterOn(k){ const f=DB.config.calFilters; return !f||f[k]!==false; }
 function calFilterSegHTML(){
   return `<div class="seg cal-filter" id="cal_filter" title="Show/hide categories">`
-    +[["tasks","Tasks"],["events","Events"],["diary","Diary"]].map(([k,l])=>
+    +[["tasks","Tasks"],["events","Events"],["diary","Animal work"]].map(([k,l])=>
       `<button type="button" data-f="${k}" class="${calFilterOn(k)?"on":""}">${l}</button>`).join("")
     +`</div>`;
 }
@@ -10539,6 +10541,11 @@ function renderMonthView(host){
     const d=whenDate(e.date); d.setHours(0,0,0,0);
     place(Math.round((d-gridStart)/864e5),1,{kind:"diary",a,e});
   }));
+  // the agenda (feeding, post-op, brains) on each day of the month
+  if(calFilterOn("diary")) for(let i=0;i<42;i++){
+    const day=new Date(gridStart); day.setDate(gridStart.getDate()+i);
+    agendaOn(dkey(day)).forEach(ag=>place(i,1,{kind:"agenda",ag}));
+  }
   const monthItems=[
     ...allSteps().filter(x=>x.deadline)
       .map(x=>({kind:"exp",title:x.title,deadline:x.deadline,endDate:x.endDate,src:x})),
@@ -10601,6 +10608,13 @@ function renderMonthView(host){
         // chips (one per week, see place() above), each still reading/writing
         // the one shared task/experiment record.
         makeAllDayDraggable(chip,st,".month-cell");
+      } else if(it.kind==="agenda"){
+        const ag=it.ag;
+        chip=document.createElement("div");
+        chip.className="cal-evt cal-feed cal-ag-"+ag.kind+(ag.warn?" cal-feed-warn":"")+(ag.done?" cal-feed-done":"");
+        chip.innerHTML=ag.chip.replace(/<div class="es">[\s\S]*$/,"");   // one line in a month cell
+        chip.title=ag.title;
+        chip.onclick=e=>{ e.stopPropagation(); ag.open(); };
       } else {
         const {a,e}=it, def=diaryTypeDef(e.type), dc=diaryColors(a,def);
         chip=document.createElement("div"); chip.className="cal-evt";
@@ -10902,15 +10916,16 @@ function renderTimeline(){
   // against everything else occupying it.
   const timedLayout=new Map(); // task-occurrence id / diary-entry id -> {col,totalCols}
   calTimedIndex={days:[],startISO:isoOf(ws)};
-  /* The daily feeding is not stored anywhere: it exists on a day because
-     somebody is on restriction that day. Collected here so it is packed with
-     everything else and never drawn over another event. */
-  const feedDays=[];
-  for(let d=0;d<NCOL;d++){
+  /* The agenda — feeding, post-op checks, the brain's steps — is not stored
+     anywhere: each exists on a day because of what is true about the animals
+     that day. Collected here so it is packed with everything else and never
+     drawn over another event. */
+  const agendaDays=[];
+  if(calFilterOn("diary")) for(let d=0;d<NCOL;d++){
     const day=new Date(ws); day.setDate(ws.getDate()+d);
-    const f=feedingOn(isoOf(day)); if(f) feedDays.push({dayIdx:d,f});
+    agendaOn(isoOf(day)).forEach(it=>agendaDays.push({dayIdx:d,it}));
   }
-  const feedMin=t=>{ const [h,m]=String(t||FEEDING_TIME).split(":").map(Number); return h*60+(m||0); };
+  const agMin=t=>{ const [h,m]=String(t||FEEDING_TIME).split(":").map(Number); return h*60+(m||0); };
   for(let d=0;d<NCOL;d++){
     const day=new Date(ws); day.setDate(ws.getDate()+d); day.setHours(0,0,0,0);
     // each day sees only the part of an event that falls on it, so a box
@@ -10927,8 +10942,8 @@ function renderTimeline(){
     });
     // a task-occurrence id and a diary-entry id can never collide (tk_…@when
     // vs d_…), so one map keyed by id serves both renderers below
-    const feedEvents=feedDays.filter(x=>x.dayIdx===d).map(x=>({key:"feed:"+x.f.date,startMin:feedMin(x.f.time),endMin:feedMin(x.f.time)+45}));
-    const dayEvents=[...taskEvents,...diaryEvents,...feedEvents];
+    const agEvents=agendaDays.filter(x=>x.dayIdx===d).map(x=>({key:x.it.key,startMin:agMin(x.it.time),endMin:agMin(x.it.time)+45}));
+    const dayEvents=[...taskEvents,...diaryEvents,...agEvents];
     calTimedIndex.days.push(dayEvents);
     packColumns(dayEvents).forEach((v,k)=>timedLayout.set(k,v));
   }
@@ -11052,17 +11067,16 @@ function renderTimeline(){
       });
       hourCells[dayIdx].cell.appendChild(evt);
     });
-    feedDays.forEach(({dayIdx,f})=>{
-      const start=feedMin(f.time); if(Math.floor(start/60)!==h) return;
-      const{col:colIdx,totalCols,span:colSpan=1}=timedLayout.get("feed:"+f.date)||{col:0,totalCols:1};
+    agendaDays.forEach(({dayIdx,it})=>{
+      const start=agMin(it.time); if(Math.floor(start/60)!==h) return;
+      const{col:colIdx,totalCols,span:colSpan=1}=timedLayout.get(it.key)||{col:0,totalCols:1};
       const colPct=100/totalCols;
       const evt=document.createElement("div");
-      evt.className="cal-evt-timed cal-feed"+(f.belowFloor.length?" cal-feed-warn":"")+(f.done===f.rows.length&&f.date<=todayDateStr()?" cal-feed-done":"");
+      evt.className="cal-evt-timed cal-feed cal-ag-"+it.kind+(it.warn?" cal-feed-warn":"")+(it.done?" cal-feed-done":"");
       evt.style.cssText=`top:${(start%60)/60*100}%;height:75%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);z-index:2`;
-      evt.innerHTML=feedingChipHTML(f);
-      evt.title=feedingTitle(f);
+      evt.innerHTML=it.chip; evt.title=it.title;
       evt.addEventListener("pointerdown",ev=>ev.stopPropagation());
-      evt.addEventListener("click",ev=>{ ev.stopPropagation(); openFeedingModal(f.date); });
+      evt.addEventListener("click",ev=>{ ev.stopPropagation(); it.open(); });
       hourCells[dayIdx].cell.appendChild(evt);
     });
     // click-to-create on hour cells; drag-to-create sets a duration first
@@ -14686,6 +14700,137 @@ function restrictionStatus(a,date){
    האכלות tasks: nobody manages a roster — starting a restriction adds the
    animal, ending it removes it — and done means every animal was weighed and
    fed, not that a box was ticked. */
+/* ═══════════════════════════ ARBOR 2.0: THE AGENDA ═══════════════════════════
+   What Arbor puts on a day because of what is true about the animals — never
+   typed in, never a task. Feeding (anyone on restriction), post-op checks (the
+   72 hours after a surgery), and the brain's steps after perfusion (PFA → PBS
+   two days later, then ready to slice). The timeline, the warnings and the
+   bell all read this one list. */
+const POSTOP_TIME="10:00", BRAIN_TIME="10:00", POSTOP_DAYS=3, PBS_AFTER=2;
+
+/* ---- post-op: three daily checks after every surgery that happened ---- */
+function postopId(a,s,n){ return "d_po_"+String(s.id).replace(/^d_/,"")+"_"+n; }
+function postopRecord(a,s,n){ return (a.diary||[]).find(e=>e.id===postopId(a,s,n))||null; }
+function postopDone(r){ return !!(r&&r.data&&r.data.given===true&&r.data.condition); }
+function postopDueOn(date){
+  const d=String(date).slice(0,10), out=[];
+  (DB.animals||[]).forEach(a=>{
+    if(a.alive===false&&a.sacrificed&&a.sacrificed<=d) return;
+    entriesWithRole(a,"surgery").filter(entryHappened).forEach(s=>{
+      const n=calDayDelta(String(s.date).slice(0,10),d);
+      if(n>=1&&n<=POSTOP_DAYS) out.push({a,s,n,rec:postopRecord(a,s,n)});
+    });
+  });
+  return out.sort((x,y)=>String(x.a.name||"").localeCompare(String(y.a.name||""),undefined,{numeric:true}));
+}
+function recordPostop(a,s,n,given,condition,note){
+  let r=postopRecord(a,s,n);
+  if(!r){
+    const date=addDaysISO(String(s.date).slice(0,10),n).slice(0,10);
+    r={id:postopId(a,s,n),type:"postop",date,time:null,data:{},created:Date.now(),edited:null,fromSurgery:s.id,day:n};
+    a.diary=a.diary||[]; a.diary.push(r);
+  }
+  r.data.given=!!given; if(condition) r.data.condition=condition; else delete r.data.condition;
+  if(note!=null) r.data.note=note;
+  r.done=postopDone(r); r.edited=Date.now();
+  return r;
+}
+
+/* ---- the brain after perfusion ---- */
+function brainOf(a){
+  const p=entriesWithRole(a,"endOfLife").filter(entryHappened)[0]; if(!p) return null;
+  const pd=String(p.date).slice(0,10), d=p.data||{};
+  const sliced=(a.diary||[]).some(e=>e.type==="histology"&&String(e.date).slice(0,10)>=pd&&entryHappened(e));
+  const state=d.notProcessed?"not processed":sliced?"sliced":d.pbs?"in PBS":"in PFA";
+  return {p,perfused:pd,pbsDue:addDaysISO(pd,PBS_AFTER).slice(0,10),pbs:d.pbs||null,sliced,state,notProcessed:!!d.notProcessed,
+    sliceFrom:d.pbs?addDaysISO(d.pbs,1).slice(0,10):null};
+}
+function brainStepsOn(date){
+  const d=String(date).slice(0,10), pbs=[], slice=[];
+  (DB.animals||[]).forEach(a=>{
+    const b=brainOf(a); if(!b||b.notProcessed||b.sliced) return;
+    if(!b.pbs&&b.pbsDue===d) pbs.push({a,b});
+    if(b.pbs&&b.sliceFrom===d) slice.push({a,b});
+  });
+  return {pbs,slice};
+}
+
+/* ---- the agenda for one day ---- */
+function agendaOn(date){
+  const d=String(date).slice(0,10), today=todayDateStr(), items=[];
+  const f=feedingOn(d);
+  if(f) items.push({key:"feed:"+d,kind:"feeding",time:f.time,
+    done:d<=today&&f.done===f.rows.length, warn:f.belowFloor.length>0,
+    chip:feedingChipHTML(f), title:feedingTitle(f), open:()=>openFeedingModal(d)});
+  const po=postopDueOn(d);
+  if(po.length){
+    const done=po.filter(x=>postopDone(x.rec)).length, missed=d<today&&done<po.length;
+    items.push({key:"postop:"+d,kind:"postop",time:POSTOP_TIME,done:done===po.length,warn:missed,
+      chip:`<div class="et">🩹 Post-op ${done}/${po.length}${missed?" <b>⚠</b>":""}</div><div class="es">${po.map(x=>esc(x.a.name)+" d"+x.n).join(", ")}</div>`,
+      title:`Post-op checks ${fmtDMY(d)} — `+po.map(x=>x.a.name+" day "+x.n+(postopDone(x.rec)?" ✓":"")).join(", "),
+      open:()=>openPostopModal(d)});
+  }
+  const br=brainStepsOn(d);
+  if(br.pbs.length) items.push({key:"pbs:"+d,kind:"brain",time:BRAIN_TIME,done:false,warn:false,
+    chip:`<div class="et">🧠 PFA → PBS · ${br.pbs.length}</div><div class="es">${br.pbs.map(x=>esc(x.a.name)).join(", ")}</div>`,
+    title:"Move to PBS: "+br.pbs.map(x=>x.a.name).join(", "), open:()=>openBrainModal(d)});
+  if(br.slice.length) items.push({key:"slice:"+d,kind:"brain",time:BRAIN_TIME,done:false,warn:false,
+    chip:`<div class="et">🎞 Ready to slice · ${br.slice.length}</div><div class="es">${br.slice.map(x=>esc(x.a.name)).join(", ")}</div>`,
+    title:"Ready to slice: "+br.slice.map(x=>x.a.name).join(", "), open:()=>openBrainModal(d)});
+  return items;
+}
+
+/* ---- their forms ---- */
+function openPostopModal(date){
+  const rows=postopDueOn(date);
+  if(!rows.length){ toast("No post-op checks that day"); return; }
+  modal(`<h3>🩹 Post-op checks — ${esc(fmtDMY(date))}</h3>
+    <div class="ov-dim" style="font-size:12px;margin:-4px 0 10px">The ${POSTOP_DAYS} days after each surgery. A check is done when post-op was given and the condition noted.</div>
+    <div class="pg-wrap"><table class="pg-tbl fd-tbl"><thead><tr><th>Animal</th><th>Day</th><th>Given</th><th>Condition</th><th>Note</th></tr></thead><tbody>
+    ${rows.map(({a,s,n,rec})=>{ const d=(rec&&rec.data)||{};
+      return `<tr class="po-row" data-a="${escAttr(a.id)}" data-s="${escAttr(s.id)}" data-n="${n}">
+        <td><button type="button" class="ov-link fd-open" data-a="${escAttr(a.id)}">${esc(a.name)}</button></td>
+        <td class="fd-num">${n}/${POSTOP_DAYS}</td>
+        <td><input type="checkbox" class="po-given" style="width:auto" ${d.given?"checked":""}></td>
+        <td><select class="po-cond">${["","good","watch","poor"].map(v=>`<option value="${v}" ${d.condition===v?"selected":""}>${v||"—"}</option>`).join("")}</select></td>
+        <td><input class="po-note" value="${escAttr(d.note||"")}" style="width:160px"></td></tr>`; }).join("")}
+    </tbody></table></div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="po_save">Save</button></div>`,{wide:true});
+  const root=document.getElementById("modal");
+  root.querySelectorAll(".fd-open").forEach(b=>b.onclick=()=>{ closeModal(); animalModal(b.dataset.a); });
+  document.getElementById("po_save").onclick=()=>{
+    let n=0;
+    root.querySelectorAll(".po-row").forEach(tr=>{
+      const a=DB.animals.find(x=>x.id===tr.dataset.a); if(!a)return;
+      const s=(a.diary||[]).find(e=>e.id===tr.dataset.s); if(!s)return;
+      const given=tr.querySelector(".po-given").checked, cond=tr.querySelector(".po-cond").value, note=tr.querySelector(".po-note").value.trim();
+      const had=postopRecord(a,s,+tr.dataset.n);
+      if(!had&&!given&&!cond&&!note) return;          // untouched: nothing to record
+      recordPostop(a,s,+tr.dataset.n,given,cond,note); n++;
+    });
+    persist(); closeModal(); render(); toast(n?`Post-op saved for ${n}`:"Nothing entered");
+  };
+}
+function openBrainModal(date){
+  const br=brainStepsOn(date), list=br.pbs.concat(br.slice);
+  if(!list.length){ toast("Nothing to do with brains that day"); return; }
+  modal(`<h3>🧠 Brains — ${esc(fmtDMY(date))}</h3>
+    ${br.pbs.length?`<div class="ov-sub">Move from PFA to PBS</div>${br.pbs.map(({a,b})=>`<div class="kf-row">
+      <span style="flex:1">${esc(a.name)} <span class="ov-dim">perfused ${esc(fmtDMY(b.perfused))}</span></span>
+      <button type="button" class="btn ghost br-pbs" data-a="${escAttr(a.id)}" style="font-size:12px">Moved to PBS today</button></div>`).join("")}`:""}
+    ${br.slice.length?`<div class="ov-sub">Ready to slice</div>${br.slice.map(({a,b})=>`<div class="kf-row">
+      <span style="flex:1">${esc(a.name)} <span class="ov-dim">in PBS since ${esc(fmtDMY(b.pbs))}</span></span>
+      <button type="button" class="btn ghost br-slice" data-a="${escAttr(a.id)}" style="font-size:12px">Log slicing…</button></div>`).join("")}`:""}
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
+  const root=document.getElementById("modal");
+  root.querySelectorAll(".br-pbs").forEach(btn=>btn.onclick=()=>{
+    const a=DB.animals.find(x=>x.id===btn.dataset.a), b=a&&brainOf(a); if(!b)return;
+    b.p.data=b.p.data||{}; b.p.data.pbs=todayDateStr(); b.p.edited=Date.now();
+    persist(); render(); btn.replaceWith(Object.assign(document.createElement("span"),{textContent:"✓ in PBS",className:"fd-st"}));
+  });
+  root.querySelectorAll(".br-slice").forEach(btn=>btn.onclick=()=>{ closeModal(); animalModal(btn.dataset.a,null,{tab:"diary"}); });
+}
+
 /* The day's feeding, for everyone at once — the form the feeding item opens.
    One line per animal: today's weight and the ration given, with what you
    need to choose the ration beside it (where it is against baseline, which
