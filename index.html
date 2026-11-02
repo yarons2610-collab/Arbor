@@ -1617,28 +1617,6 @@ const DEFAULT_CONFIG={ frontierCap:5, cadence:"monthly", staleDays:45,
   // unlike diaryTypes there's no natural seed list, so this starts as
   // whatever the user actually names.
   eventTypes:[],
-  // seeded diary entry types - fully user-editable afterward (label/icon/color/
-  // fields/timeline flag), not a locked-in schema. "timeline:true" means entries
-  // of that type surface on the global Timeline (procedures - the "big things
-  // happening" view). "core:true" marks the ones that can't be deleted (weight/
-  // training/surgery specifically, by explicit request) — everything else
-  // seeded stays just as deletable as a type a user adds themselves.
-  diaryTypes:[
-    {key:"weight",   label:"Weight",    icon:"⚖",  color:"#54e08a", timeline:false, core:true, fields:[
-      {key:"grams",label:"Weight (g)",type:"number"}]},
-    {key:"postop",   label:"Post-op",   icon:"🩹", color:"#ff5f6d", timeline:false, fields:[
-      {key:"daysPost",label:"Days post-op",type:"number"},
-      {key:"bodyCondition",label:"Body condition (1-5)",type:"select",options:["1","2","3","4","5"]},
-      {key:"woundOk",label:"Wound OK?",type:"yesno"},
-      {key:"severity",label:"Severity",type:"select",options:["none","mild","moderate","severe"]},
-      {key:"analgesia",label:"Analgesia",type:"text"}]},
-    {key:"training", label:"Training",  icon:"🎓", color:"#a98cff", timeline:true,  core:true, fields:[]},
-    {key:"comment",  label:"Comment",   icon:"💬", color:"#3fd0d6", timeline:false, fields:[]},
-    {key:"surgery",  label:"Surgery",   icon:"🔪", color:"#f2b756", timeline:true,  core:true, fields:[]},
-    {key:"perfusion",label:"Perfusion", icon:"💉", color:"#ff8a6b", timeline:true,  fields:[]},
-    {key:"histology",label:"Histology", icon:"🧫", color:"#7db4ff", timeline:true,  fields:[]},
-    {key:"microscopy",label:"Microscopy",icon:"🔬",color:"#e0d454", timeline:true,  fields:[]}
-  ],
   keywords:[], // was hardcoded to a specific project's reading-list topics; the Reading view that used this was dropped from this fork, left empty for a clean shared build
   siteLib:[
     {name:"M1 forelimb (MOs/MOp)", ap:0.8,  ml:1.5,  dv:-1.0},
@@ -4656,35 +4634,8 @@ function migrate(){                       // backfill fields added in later vers
     // tasks log different metrics — a 2AFC session and an open-field session
     // have nothing in common). Convert any leftover strings in place.
     DB.config.taskLib=(DB.config.taskLib||[]).map(t=>typeof t==="string"?{name:t,params:[]}:t);
-    if(!DB.config.diaryTypes) DB.config.diaryTypes=DEFAULT_CONFIG.diaryTypes.map(t=>({...t,fields:t.fields.map(f=>({...f}))}));
-    // sync the core flag on any pre-existing seeded type (matched by key) to
-    // whatever DEFAULT_CONFIG currently says — authoritative both ways, not
-    // just additive, so narrowing which types are core (as happened once
-    // already) actually un-cores the ones dropped from that list instead of
-    // leaving them stuck non-deletable from an earlier save. A type a user
-    // added themselves (no key match in the seeded set) is left untouched.
-    else{ const coreByKey=new Map(DEFAULT_CONFIG.diaryTypes.map(t=>[t.key,!!t.core]));
-      DB.config.diaryTypes.forEach(t=>{ if(coreByKey.has(t.key))t.core=coreByKey.get(t.key); });
-      // Restore any CORE seeded type that isn't in the saved list. The code
-      // references these by key directly (weight drives the whole weight chart,
-      // the calendar readout and the % change), and diaryTypeDef()'s fallback
-      // quietly hands back fields:[] instead — which is how a weight entry ended
-      // up with no grams field to type into. Only core types are restored: a
-      // non-core seeded type the user deleted on purpose stays deleted.
-      const have=new Set(DB.config.diaryTypes.map(t=>t.key));
-      DEFAULT_CONFIG.diaryTypes.forEach(t=>{
-        if(t.core&&!have.has(t.key))
-          DB.config.diaryTypes.push({...t,fields:t.fields.map(f=>({...f}))});
-      });
-      // A core type that survived but lost its fields is equally unusable —
-      // give the seeded fields back when it has none of its own. Core only:
-      // this ran for every seeded type once, so emptying Post-op's fields on
-      // purpose had them all back on the next load or sync, every time.
-      DB.config.diaryTypes.forEach(t=>{
-        const seed=DEFAULT_CONFIG.diaryTypes.find(x=>x.key===t.key);
-        if(seed&&seed.core&&seed.fields.length&&!(t.fields||[]).length)
-          t.fields=seed.fields.map(f=>({...f}));
-      }); }
+    // 2.0: record kinds are defined in code (RECORD_KINDS); the 1.0 entry-type
+    // list in config is no longer kept up — what is stored there is left alone
   }
   // pull the persisted animal filter selections into the live module-level state —
   // runs on boot and after every JSON import so filters travel with the workspace
@@ -4694,7 +4645,6 @@ function migrate(){                       // backfill fields added in later vers
   animalExperiment=DB.config.animalFilters.experiment||"all";
   animalGroup=DB.config.animalFilters.group||"all";
   animalCage=DB.config.animalFilters.cage||"all";
-  // Entry Types left Materials; a device still remembering that tab lands on the first real one
   // a sub-tab that no longer exists (entry types, plans) opens on sites
   matSubTab=["inventory","viruses","sites","procedures"].includes(DB.config.matSubTab)?DB.config.matSubTab:"sites";
   animalProject=DB.config.animalFilters.project||"all";
@@ -6223,7 +6173,6 @@ function colorUsage(){
   // Only the colours that are a label for something. A virus's colour, its
   // box colour and an injection marker stand for a real thing rather than a
   // category, so listing them said nothing and buried the ones that matter.
-  (DB.config.diaryTypes||[]).forEach(x=>add(x.color,"Entry type",x.label));
   (DB.config.eventTypes||[]).forEach(x=>add(x.color,"Event category",x.name));
   (DB.experiments||[]).forEach(x=>add(x.color,"Experiment",x.title));
   (DB.projects||[]).forEach(x=>add(x.color,"Project",x.name));
@@ -14791,7 +14740,10 @@ function diaryEntrySummaryShort(e,a){
    78%" rather than a row of "field value" pairs. A kind with nothing special
    to say falls through to its plain fields. */
 const KIND_SUMMARY={
-  weight:(d,e,a)=>[d.grams!=null&&d.grams!==""?d.grams+"g":"", rationOf(e)!=null?"fed "+rationOf(e)+"g":""],
+  weight:(d,e,a)=>{ const g=d.grams!=null&&d.grams!=="", r=rationOf(e);
+    // a 1.0 feeding round ticked without numbers: it happened, nothing was typed
+    if(!g&&r==null) return [e.done?"no weight written":""];
+    return [g?d.grams+"g":"", r!=null?"fed "+r+"g":""]; },
   training:d=>[d.task, d.stage, d.trials!=null&&d.trials!==""?d.trials+" trials":"", d.success!=null&&d.success!==""?d.success+"%":"",
     d.length?d.length+" min":"", d.settings&&d.settings.angle!=null?"angle "+d.settings.angle:"", d.imaged?"imaged":""],
   microscopy:d=>[d.purpose, (d.fovs||[]).length?(d.fovs.length+" FOV"+(d.fovs.length===1?"":"s")):"", d.status&&d.status!=="raw"?d.status:""],
@@ -14934,7 +14886,7 @@ function renderAnimals(){
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         <button class="btn ghost${animalActiveFilterCount()?" filt-on":""}" id="a_filters">⚙ Filter${
           animalActiveFilterCount()?` <span class="filt-n">${animalActiveFilterCount()}</span>`:""}</button>
-        <button class="btn ghost" id="a_eventlog">📋 Event log</button>
+        <button class="btn ghost" id="a_eventlog">📋 Log</button>
         <button class="btn accent" id="a_add">＋ Animal</button>
       </div>
     </div>
@@ -15241,7 +15193,7 @@ function animalCard(a){
         .map(f=>`<span style="font-family:var(--mono);font-size:9.5px;color:${f.color};border:1px solid ${f.color}33;background:${f.color}14;border-radius:5px;padding:1px 6px">${esc(f.label)}</span>`).join("")}
       ${animalSummaryHTML(a)}
       <span style="margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:100%;justify-content:flex-end">
-        <button class="a-log" data-id="${a.id}" title="Chronological event log" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">📋</button>
+        <button class="a-log" data-id="${a.id}" title="This animal's log" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">📋</button>
         <button class="a-edit" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:12px">✎</button>
         <button class="a-exp" data-id="${a.id}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 8px;font-size:12px">${expanded?"▴":"▾"}</button>
       </span>
@@ -15303,51 +15255,35 @@ function animalCard(a){
 
   return card;
 }
-// Chronological, date-by-date view of every diary entry — for one animal (the
-// card's 📋 button) or any combination (the Animals toolbar's 📋 Event log
-// button, which opens with every animal selected and lets you narrow down).
-// Exportable as plain text or as an Excel workbook.
+/* An animal's history, date by date — for one animal (the card's 📋) or any
+   set of them (the Animals toolbar's 📋 Log). Records and the notes written
+   about the animal, in one line each, read the way the animal's window reads
+   them. It stops at today unless what is planned is asked for. Exportable as
+   text or as a sheet. */
 function openEventLogModal(presetIds){
-  const allAnimals=[...DB.animals].sort((x,y)=>x.name.localeCompare(y.name));
+  const allAnimals=[...DB.animals].sort((x,y)=>String(x.name).localeCompare(String(y.name),undefined,{numeric:true}));
   let selected=new Set(presetIds&&presetIds.length?presetIds:allAnimals.map(a=>a.id));
-  /* A log is a record of what happened, so it stops at today by default. That
-     used to make no difference — every entry was something already done — but
-     a repeat with no end date materialises a year of occurrences ahead, and
-     without this the log for one such animal is fifty-odd empty future rows
-     with the actual history buried underneath them. What is coming is still
-     worth seeing on purpose, so it is a toggle rather than a hard cut. */
-  let withUpcoming=false;
+  let withUpcoming=false, kind="";
+  const noteItems=a=>(DB.notes||[]).filter(n=>(n.links||[]).some(l=>l.kind==="animal"&&l.id===a.id)).map(n=>{
+    const date=n.date?String(n.date).slice(0,10):todayDateStrOf(new Date(n.created||n.updated||Date.now()));
+    return {a,date,time:"",end:"",kind:"__note",icon:"📝",color:"var(--ink-faint)",label:"Note",
+      summary:(()=>{ const t=(n.title||"").trim(), b=noteBodyPreview(n).trim();
+        return (!t?b:!b||b.startsWith(t)?(b||t):t+" — "+b).slice(0,240); })(),planned:false};
+  });
+  const recordItem=(a,e)=>{ const def=diaryTypeDef(e.type);
+    return {a,date:String(e.date).slice(0,10),time:e.time||"",end:e.endTime||"",kind:e.type,icon:def.icon,color:def.color,label:def.label,
+      summary:diaryEntrySummary(Object.assign({},e,{time:null,endTime:null}),a).replace(/^—$/,""),planned:!entryHappened(e)}; };
+  function items(future){
+    const today=todayDateStr(), out=[];
+    allAnimals.forEach(a=>{ if(!selected.has(a.id)) return;
+      (a.diary||[]).forEach(e=>out.push(recordItem(a,e)));
+      noteItems(a).forEach(x=>out.push(x)); });
+    return out.filter(x=>(!kind||x.kind===kind)&&(future?x.date>today:(withUpcoming||x.date<=today)))
+      .sort((x,y)=>x.date.localeCompare(y.date)||x.time.localeCompare(y.time)||String(x.a.name).localeCompare(String(y.a.name),undefined,{numeric:true}));
+  }
+  const lineFor=x=>`${x.icon} ${x.time?x.time+(x.end?"–"+x.end:"")+" · ":""}${x.a.name} — ${x.label}${x.summary?": "+x.summary:""}${x.planned?" (planned)":""}`;
 
-  function events(){
-    const out=[], today=todayDateStr();
-    allAnimals.forEach(a=>{ if(selected.has(a.id)) (a.diary||[]).forEach(e=>{
-      if(!withUpcoming&&e.date>today)return;
-      out.push({a,e}); }); });
-    out.sort((x,y)=> x.e.date<y.e.date?-1:x.e.date>y.e.date?1:(x.e.time||"").localeCompare(y.e.time||""));
-    return out;
-  }
-  function upcomingCount(){
-    const today=todayDateStr(); let n=0;
-    allAnimals.forEach(a=>{ if(selected.has(a.id)) (a.diary||[]).forEach(e=>{ if(e.date>today)n++; }); });
-    return n;
-  }
-  // diaryEntrySummary already prefixes "HH:MM–HH:MM · " when a time is set —
-  // reused here rather than re-derived, minus that prefix since time gets its
-  // own column/label wherever this is shown.
-  function summaryNoTime(e,a){
-    const s=diaryEntrySummary(e,a); if(!e.time) return s;
-    const prefix=`${e.time}${e.endTime?"–"+e.endTime:""} · `;
-    return s.startsWith(prefix)?s.slice(prefix.length):s;
-  }
-  // the tick leads the line: with repeats in play, which occurrences actually
-  // happened is the first thing anyone reads a log for
-  function lineFor(a,e){
-    const def=diaryTypeDef(e.type);
-    const time=e.time?`${e.time}${e.endTime?"–"+e.endTime:""} · `:"";
-    return `${e.done?"✓":"○"} ${def.icon} ${time}${a.name} — ${def.label}: ${summaryNoTime(e,a)}`;
-  }
-
-  modal(`<h3>Event log</h3>
+  modal(`<h3>Log</h3>
     <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
       <div style="flex:0 0 200px">
         <div style="display:flex;gap:6px;margin-bottom:6px">
@@ -15358,9 +15294,11 @@ function openEventLogModal(presetIds){
       </div>
       <div style="flex:1;min-width:280px">
         <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
-          <button class="btn ghost" id="el_txt" style="font-size:12px">↓ Export .txt</button>
-          <button class="btn ghost" id="el_xlsx" style="font-size:12px">↓ Export .xlsx</button>
+          <select id="el_kind" style="width:auto;font-size:12px"><option value="">Everything</option>${allDiaryTypeDefs().map(t=>`<option value="${t.key}">${t.icon} ${esc(t.label)}</option>`).join("")}<option value="__note">📝 Notes</option></select>
           <button type="button" class="btn ghost" id="el_future" style="font-size:12px"></button>
+          <span style="margin-left:auto"></span>
+          <button class="btn ghost" id="el_txt" style="font-size:12px">↓ .txt</button>
+          <button class="btn ghost" id="el_xlsx" style="font-size:12px">↓ Excel</button>
         </div>
         <div id="el_list" style="max-height:400px;overflow:auto;font-size:12.5px;line-height:1.6"></div>
       </div>
@@ -15374,53 +15312,50 @@ function openEventLogModal(presetIds){
       || `<div style="font-size:11px;color:var(--ink-faint)">no animals yet</div>`;
   }
   function paintList(){
-    const evs=events();
-    const host=document.getElementById("el_list");
-    if(!evs.length){ host.innerHTML=`<div style="font-size:11px;color:var(--ink-faint)">no events for the selected animal(s)</div>`; return; }
+    const evs=items(false), host=document.getElementById("el_list");
+    if(!evs.length){ host.innerHTML=`<div style="font-size:11px;color:var(--ink-faint)">nothing recorded for the selected animals</div>`; return; }
     let lastDate=null, html="";
-    evs.forEach(({a,e})=>{
-      if(e.date!==lastDate){ lastDate=e.date; html+=`<div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.05em;margin:12px 0 4px">${e.date}</div>`; }
-      html+=`<div style="border-left:3px solid ${diaryTypeDef(e.type).color};padding-left:8px;margin-bottom:4px">${esc(lineFor(a,e))}</div>`;
+    evs.forEach(x=>{
+      if(x.date!==lastDate){ lastDate=x.date; html+=`<div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);letter-spacing:.05em;margin:12px 0 4px">${esc(fmtWhenFull(x.date))}</div>`; }
+      html+=`<div style="border-left:3px solid ${x.color};padding-left:8px;margin-bottom:4px;${x.planned?"opacity:.6":""}">${esc(lineFor(x))}</div>`;
     });
     host.innerHTML=html;
   }
   function paintFutureBtn(){
     const b=document.getElementById("el_future"); if(!b)return;
-    const n=upcomingCount();
-    b.textContent=withUpcoming?`hide ${n} upcoming`:`＋ show ${n} upcoming`;
+    const n=items(true).length;
+    b.textContent=withUpcoming?`hide ${n} planned`:`＋ show ${n} planned`;
     b.style.display=n?"":"none";
     b.classList.toggle("accent",withUpcoming);
   }
-  paintAnimalList(); paintList(); paintFutureBtn();
-  document.getElementById("el_future").onclick=()=>{ withUpcoming=!withUpcoming; paintList(); paintFutureBtn(); };
-
+  const repaint=()=>{ paintList(); paintFutureBtn(); };
+  paintAnimalList(); repaint();
+  document.getElementById("el_future").onclick=()=>{ withUpcoming=!withUpcoming; repaint(); };
+  document.getElementById("el_kind").onchange=e=>{ kind=e.target.value; repaint(); };
   animalsHost.addEventListener("change",e=>{
     const cb=e.target.closest(".el_a"); if(!cb)return;
     if(cb.checked)selected.add(cb.dataset.id); else selected.delete(cb.dataset.id);
-    paintList(); paintFutureBtn();
+    repaint();
   });
-  document.getElementById("el_all").onclick=()=>{ selected=new Set(allAnimals.map(a=>a.id)); paintAnimalList(); paintList(); paintFutureBtn(); };
-  document.getElementById("el_none").onclick=()=>{ selected=new Set(); paintAnimalList(); paintList(); paintFutureBtn(); };
+  document.getElementById("el_all").onclick=()=>{ selected=new Set(allAnimals.map(a=>a.id)); paintAnimalList(); repaint(); };
+  document.getElementById("el_none").onclick=()=>{ selected=new Set(); paintAnimalList(); repaint(); };
 
   document.getElementById("el_txt").onclick=()=>{
-    const evs=events(); if(!evs.length){ toast("Nothing to export"); return; }
-    let lastDate=null, txt=`Arbor event log — exported ${fmtStamp(Date.now())}\r\n`;
-    evs.forEach(({a,e})=>{
-      if(e.date!==lastDate){ lastDate=e.date; txt+=`\r\n${e.date}\r\n${"-".repeat(e.date.length)}\r\n`; }
-      txt+=`  ${lineFor(a,e)}\r\n`;
+    const evs=items(false); if(!evs.length){ toast("Nothing to export"); return; }
+    let lastDate=null, txt=`Arbor log — exported ${fmtStamp(Date.now())}\r\n`;
+    evs.forEach(x=>{
+      if(x.date!==lastDate){ lastDate=x.date; const h=fmtWhenFull(x.date); txt+=`\r\n${h}\r\n${"-".repeat(h.length)}\r\n`; }
+      txt+=`  ${lineFor(x)}\r\n`;
     });
-    download("arbor_event_log.txt",txt,"text/plain");
-    toast(`Exported ${evs.length} events`);
+    download("arbor_log.txt",txt,"text/plain");
+    toast(`Exported ${evs.length} lines`);
   };
   document.getElementById("el_xlsx").onclick=()=>{
-    const evs=events(); if(!evs.length){ toast("Nothing to export"); return; }
-    const rows=[["Date","Time","End time","Animal","Tag","Type","Details","Done"]];
-    evs.forEach(({a,e})=>{
-      const def=diaryTypeDef(e.type);
-      rows.push([e.date, e.time||"", e.endTime||"", a.name, def.label, summaryNoTime(e,a), e.done?"Yes":""]);
-    });
-    downloadExcel("arbor_event_log.xls",[{name:"Events",rows}]);
-    toast(`Exported ${evs.length} events`);
+    const evs=items(false); if(!evs.length){ toast("Nothing to export"); return; }
+    const rows=[["Date","Time","End time","Animal","Kind","Details","Planned"]];
+    evs.forEach(x=>rows.push([fmtDMY(x.date),x.time,x.end,x.a.name,x.label,x.summary,x.planned?"Yes":""]));
+    downloadExcel("arbor_log.xls",[{name:"Log",rows}]);
+    toast(`Exported ${evs.length} lines`);
   };
 }
 function arow(label,val){ return val?`<div><span style="display:inline-block;width:78px;color:var(--ink-faint);font-family:var(--mono);font-size:10px">${label}</span>${esc(String(val))}</div>`:""; }

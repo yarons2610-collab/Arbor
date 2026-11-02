@@ -490,7 +490,11 @@ class Workspace:
         n = lambda v: f"{v:g}" if isinstance(v, float) else str(v)
         if k == "weight":
             r = ration_of(d)
-            parts = [n(d["grams"]) + "g" if has(d.get("grams")) else "", f"fed {n(r)}g" if r != "" else ""]
+            if not has(d.get("grams")) and r == "":
+                # a 1.0 feeding round ticked without numbers
+                parts = ["no weight written" if e.get("done") else ""]
+            else:
+                parts = [n(d["grams"]) + "g" if has(d.get("grams")) else "", f"fed {n(r)}g" if r != "" else ""]
         elif k == "training":
             st = d.get("settings") or {}
             parts = [d.get("task"), d.get("stage"), f"{n(d['trials'])} trials" if has(d.get("trials")) else "",
