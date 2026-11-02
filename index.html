@@ -1148,6 +1148,11 @@
   .aq .aq-tg{border:0;background:none;color:inherit;font:inherit;padding:0;cursor:pointer}
   .aq select,.aq input{background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;font-size:11px;padding:1px 4px}
   .aq-days{width:3.2em;text-align:center}
+  .dg-mrow{display:flex;gap:10px;align-items:baseline;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);
+    background:none;color:var(--ink-dim);font-size:11.5px;padding:5px 2px;cursor:pointer}
+  .dg-mrow:hover,.dg-mrow.on{color:var(--ink);background:var(--panel2)}
+  .dg-mrow .dg-mdate{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);flex:0 0 78px}
+  .dg-mrow .dg-esum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .aq-pick{max-width:14em;text-overflow:ellipsis}
   .acond{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line2);
     border-radius:20px;padding:3px 6px 3px 11px;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
@@ -6025,8 +6030,14 @@ function dueClass(s,st,endDate){ if(!s||st==="done")return"";
   const evalDate=endDate||s;
   const d=daysTo(evalDate); if(d<0)return"overdue"; if(d<=3&&!endDate)return"soon"; return""; }
 function fmtDue(s){ const d=daysTo(s); if(d===null)return""; let base; if(d<0)base=`${-d}d over`; else if(d===0)base="today"; else if(d===1)base="tmrw"; else base=`${d}d`;
-  if(hasTime(s))base+=" "+whenDate(s).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); return base; }
-function fmtWhenFull(s){ if(!s)return""; const d=whenDate(s); let x=d.toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"}); if(hasTime(s))x+=" · "+d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); return x; }
+  if(hasTime(s))base+=" "+fmtHM(whenDate(s)); return base; }
+/* One way of writing a moment, everywhere: day/month/year and a 24-hour
+   clock. The browser's own formats changed with the computer's language —
+   "Nov 3, 2026 · 02:00 PM" here, "3.11.2026" elsewhere — and a lab record
+   should read the same on every machine. Month and weekday names are English. */
+function fmtHM(d){ const p=n=>String(n).padStart(2,"0"); return `${p(d.getHours())}:${p(d.getMinutes())}`; }
+function fmtWhenFull(s){ if(!s)return""; const d=whenDate(s);
+  let x=`${d.toLocaleDateString("en-GB",{weekday:"short"})} ${fmtStamp(d,false)}`; if(hasTime(s))x+=" · "+fmtHM(d); return x; }
 
 // scroll-to-select: the drum snaps items to center on scroll (scroll-snap-type), so
 // treat the item resting at center as selected once scrolling settles — not just clicks.
@@ -6091,7 +6102,7 @@ function openCalendar(anchor, value, onPick, minuteStep, dateOnly){
     const hours=Array.from({length:24},(_,h)=>`<div class="drum-item${h===selH?" sel":""}" data-v="${h}">${String(h).padStart(2,"0")}</div>`).join("");
     const mins=Array.from({length:Math.ceil(60/minuteStep)},(_,i)=>i*minuteStep).map(m=>`<div class="drum-item${m===selM?" sel":""}" data-v="${m}">${String(m).padStart(2,"0")}</div>`).join("");
     pop.innerHTML=`<div class="cal-h"><button class="cal-nav" data-nav="-1">‹</button>
-        <b>${new Date(vy,vm,1).toLocaleDateString(undefined,{month:"long",year:"numeric"})}</b>
+        <b>${new Date(vy,vm,1).toLocaleDateString("en-GB",{month:"long",year:"numeric"})}</b>
         <button class="cal-nav" data-nav="1">›</button></div>
       <div class="cal-grid">${WD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
       ${dateOnly?"":`<div class="cal-foot" style="display:flex;align-items:center;gap:8px">
@@ -8455,7 +8466,7 @@ function experimentModal(st,after){
     if(!rows.length) return `<div style="font-size:11.5px;color:var(--ink-faint)">Nothing scheduled yet — start an animal and its stages appear here.</div>`;
     const keyOf=d=>mode==="month"?d.slice(0,7):weekStartISO(d);
     const label=k=>mode==="month"
-      ? new Date(k+"-01T00:00:00").toLocaleDateString(undefined,{month:"long",year:"numeric"})
+      ? new Date(k+"-01T00:00:00").toLocaleDateString("en-GB",{month:"long",year:"numeric"})
       : `Week of ${fmtDMY(k)}`;
     const buckets=new Map();
     rows.sort((x,y)=>x.p.date.localeCompare(y.p.date)||String(x.a.name||"").localeCompare(String(y.a.name||""),undefined,{numeric:true}));
@@ -10169,7 +10180,7 @@ function renderMonthView(host){
   nav.innerHTML=`<button class="cal-nav-btn" id="cal_prev">‹</button>
     <button class="cal-nav-btn today" id="cal_today">Today</button>
     <button class="cal-nav-btn" id="cal_next">›</button>
-    <h2 class="cal-title" id="cal_title" title="Jump to a date">${base.toLocaleDateString(undefined,{month:"long",year:"numeric"})}</h2>
+    <h2 class="cal-title" id="cal_title" title="Jump to a date">${base.toLocaleDateString("en-GB",{month:"long",year:"numeric"})}</h2>
     ${calModeSegHTML()}${calFilterSegHTML()}
     ${calNavExtrasHTML()}`;
   nav.querySelector("#cal_prev").onclick=()=>{calWeekOffset--;renderTimeline();};
@@ -10354,12 +10365,12 @@ function renderTimeline(){
   // ── Nav bar ────────────────────────────────────────────────────────────────
   const outer=document.createElement("div"); outer.className="cal-outer"; host.appendChild(outer);
   const nav=document.createElement("div"); nav.className="cal-nav-bar"; outer.appendChild(nav);
-  const fmt=d=>d.toLocaleDateString(undefined,{month:"short",day:"numeric"});
-  const fmtY=d=>d.toLocaleDateString(undefined,{month:"long",year:"numeric"});
+  const fmt=d=>d.toLocaleDateString("en-GB",{month:"short",day:"numeric"});
+  const fmtY=d=>d.toLocaleDateString("en-GB",{month:"long",year:"numeric"});
   nav.innerHTML=`<button class="cal-nav-btn" id="cal_prev">‹</button>
     <button class="cal-nav-btn today" id="cal_today">Today</button>
     <button class="cal-nav-btn" id="cal_next">›</button>
-    <h2 class="cal-title" id="cal_title" title="Jump to a date">${NCOL===1?ws.toLocaleDateString(undefined,{weekday:"long",month:"short",day:"numeric",year:"numeric"})
+    <h2 class="cal-title" id="cal_title" title="Jump to a date">${NCOL===1?ws.toLocaleDateString("en-GB",{weekday:"long",month:"short",day:"numeric",year:"numeric"})
                   :`${fmt(ws)} – ${fmt(we)}, ${fmtY(we)}`}</h2>
     ${calModeSegHTML()}${calFilterSegHTML()}
     ${calNavExtrasHTML()}`;
@@ -10621,7 +10632,7 @@ function renderTimeline(){
   for(let h=0;h<24;h++){
     const label=document.createElement("div"); label.className="cal-hour-gutter";
     label.dataset.hour=h;
-    label.textContent=h===0?"":h<12?`${h} am`:h===12?"12 pm":`${h-12} pm`;
+    label.textContent=h===0?"":`${String(h).padStart(2,"0")}:00`;
     grid.appendChild(label);
     wireGutterScroll(label,wrap);
     const hourCells=[];
@@ -10656,9 +10667,9 @@ function renderTimeline(){
         if(calDragKey===layKey) evt.classList.add("cal-evt-ghost");
         if(calFlashKey&&calFlashKey===t.id) evt.classList.add("cal-evt-found");
         evt.style.cssText=`top:${topPct}%;height:${Math.max(heightPct,14)}%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);${chipSkinTimed(calIsEvent(t),col,overdue,authorEdge(t.src||t))}z-index:2`;
-        const clock=m=>{ const d=new Date(sg.date+"T00:00:00"); d.setMinutes(m); return d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); };
+        const clock=m=>{ const d=new Date(sg.date+"T00:00:00"); d.setMinutes(m); return fmtHM(d); };
         const timeStr=sg.i?`… until ${clock(sg.endMin)}`
-          :dt.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})+(sg.totalMin!==60?` (${sg.totalMin}m)`:"");
+          :fmtHM(dt)+(sg.totalMin!==60?` (${sg.totalMin}m)`:"");
         const ckHTML=(t.kind==="task"&&!sg.i)
           ?`<button type="button" class="cal-evt-ck${calDone(t)?" on":""}" title="${calDone(t)?"Done — click to undo":"Mark done"}"></button>`:"";
         evt.innerHTML=`${sg.i?"":`<div class="cal-evt-resize cal-evt-resize-top"></div>`}<div class="et">${ckHTML}${sg.i?"↳ ":""}${eventIconHTML(t.src)}${esc(t.title)}</div><div class="es">${timeStr}</div>${sg.i?"":`<div class="cal-evt-resize cal-evt-resize-bottom"></div>`}`;
@@ -11085,7 +11096,7 @@ function beginTimedEventDrag(mode,t,evtEl,downEvent,gridWrap){
   const origMinOfDay=origStart.getHours()*60+origStart.getMinutes();
   function clockAt(dateISO,mins){
     const d=new Date(dateISO+"T00:00:00"); d.setMinutes(mins);
-    return d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+    return fmtHM(d);
   }
   // Sits above the chip, or below it when the chip is near the top of the
   // window, and is kept clear of both side edges — a drop near any border of
@@ -15589,28 +15600,31 @@ function paintDiary(container,a,opts){
       const dots=otherTypes.map(t=>`<span class="dg-dot" style="background:${diaryTypeDef(t).color}" title="${diaryTypeDef(t).label}"></span>`).join("");
       const wg=wEntry&&wEntry.data?wEntry.data.grams:null;
       const wv=(wEntry&&visibleTypes.has(WK)&&wg!=null&&wg!=="")?`<span class="wv">${wg}${trend}</span>`:"";
-      cells+=`<div class="${cls.join(" ")}" data-date="${ds}" title="${dayEntries.length?dayEntries.length+" entr"+(dayEntries.length===1?"y":"ies"):"click to add an entry"}">
+      cells+=`<div class="${cls.join(" ")}" data-date="${ds}" title="${dayEntries.length?dayEntries.length+" record"+(dayEntries.length===1?"":"s"):"click to record something"}">
         <span class="dn">${d}</span>${wv}${dots?`<span class="dg-dots">${dots}</span>`:""}</div>`;
     }
 
     const typebar=`<button type="button" class="dg-typebtn" data-all="1">✓ All</button>`+allDiaryTypeDefs().map(t=>
       `<button type="button" class="dg-typebtn ${visibleTypes.has(t.key)?"on":""}" data-t="${t.key}"><span style="width:6px;height:6px;border-radius:50%;background:${t.color};display:inline-block"></span>${t.icon} ${t.label}</button>`
     ).join("");
-    const dayEntries=a.diary.filter(e=>e.date===selDate).sort((x,y)=>x.created-y.created);
+    const dayEntries=a.diary.filter(e=>e.date===selDate).sort((x,y)=>String(x.time||"").localeCompare(String(y.time||""))||x.created-y.created);
+    // the month at a glance, so what happened is readable without clicking day by day
+    const monthKey=`${viewY}-${pad(viewM+1)}`;
+    const monthRows=a.diary.filter(e=>String(e.date).slice(0,7)===monthKey&&visibleTypes.has(e.type))
+      .sort((x,y)=>String(x.date).localeCompare(String(y.date))||String(x.time||"").localeCompare(String(y.time||"")));
 
     container.innerHTML=`
-      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:6px">📔 Diary</div>
       <div class="dg-typebar">${typebar}</div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <button type="button" class="wt-nav" data-nav="-1" title="previous month">‹</button>
-        <b style="font-family:var(--disp);font-size:12px;color:var(--ink)">${new Date(viewY,viewM,1).toLocaleDateString(undefined,{month:"long",year:"numeric"})}</b>
+        <b style="font-family:var(--disp);font-size:12px;color:var(--ink)">${new Date(viewY,viewM,1).toLocaleDateString("en-GB",{month:"long",year:"numeric"})}</b>
         <button type="button" class="wt-nav" data-nav="1" title="next month">›</button>
       </div>
       <div class="wt-cal">${WD.map(w=>`<div class="wd">${w}</div>`).join("")}${cells}</div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin:10px 0 6px">
-        <b style="font-size:11.5px">${selDate||"—"}</b>
+        <b style="font-size:11.5px">${selDate?fmtWhenFull(selDate):"—"}</b>
         ${formType?"":`<select class="dg-addpick" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:3px 7px;font-size:11px">
-          <option value="">＋ add entry…</option>
+          <option value="">＋ record…</option>
           ${allDiaryTypeDefs().map(t=>`<option value="${t.key}">${t.icon} ${t.label}</option>`).join("")}
         </select>`}
       </div>
@@ -15635,9 +15649,15 @@ function paintDiary(container,a,opts){
               <button class="dg-del" data-id="${e.id}">✕</button>
             </div>
             ${open?diaryEntryDetailHTML(e,a):""}
-          </div>`;}).join("") : `<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">no entries this day</div>`)}
+          </div>`;}).join("") : `<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint)">nothing recorded this day</div>`)}
         <div class="dg-formhost"></div>
-      </div>`;
+      </div>
+      ${formType||!monthRows.length?"":`<div class="ov-sub" style="margin-top:14px">This month</div>
+        ${monthRows.map(e=>`<button type="button" class="dg-mrow${e.date===selDate?" on":""}" data-date="${escAttr(e.date)}">
+          <span class="dg-mdate">${esc(fmtDMY(e.date).slice(0,5))}${e.time?" "+esc(e.time):""}</span>
+          <span>${diaryTypeDef(e.type).icon} ${esc(diaryTypeDef(e.type).label)}</span>
+          <span class="dg-esum">${esc(diaryEntrySummaryShort(Object.assign({},e,{time:null,endTime:null}),a).replace(/^—$/,""))}</span>${entryHappened(e)?"":`<span class="ov-dim">planned</span>`}</button>`).join("")}`}`;
+    container.querySelectorAll(".dg-mrow").forEach(b=>b.onclick=()=>{ selDate=b.dataset.date; formType=null; editingId=null; draw(); });
 
     container.querySelectorAll(".dg-typebtn").forEach(b=>b.onclick=()=>{
       if(b.dataset.all){ allDiaryTypeDefs().forEach(t=>visibleTypes.add(t.key)); draw(); return; }
@@ -16304,7 +16324,7 @@ function procedureSectionHTML(p){
       <input id="${p}_winml" placeholder="ML" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
       <input id="${p}_windiam" placeholder="⌀ mm" style="flex:0 0 auto;width:64px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
     </div>
-    <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:6px 0 6px">Injections (0+, any combination)</div>
+    <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:6px 0 6px">Injections</div>
     <div id="${p}_injs"></div>
     <button class="btn ghost" id="${p}_addinj" style="margin-top:6px;font-size:12px">＋ Add injection</button>
     <div style="margin-top:12px"><div id="${p}_brainview"></div></div>`;
@@ -16643,7 +16663,6 @@ function animalModal(id,draft,opts){
     <div class="am-sec am-proc" data-sec="${PROC_SEC}" ${sectionShownFor(a,PROC_SEC)?"":"hidden"}><div style="border:0;padding:0">
       <div class="am-sec-head">Procedure<button type="button" class="am-sec-x" data-sec="${PROC_SEC}" title="Hide for this animal">✕</button></div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-        <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint)">Procedure</div>
         <select id="am_proctpl" style="margin-left:auto;flex:0 0 auto;background:var(--bg2);border:1px solid var(--line2);color:var(--ink-dim);border-radius:6px;padding:4px 7px;font-size:11px">
           <option value="">Apply saved procedure…</option>
           ${(DB.config.procedureLib||[]).map(pr=>`<option value="${pr.id}">${esc(pr.name)}</option>`).join("")}
@@ -16656,7 +16675,7 @@ function animalModal(id,draft,opts){
     <div id="am_sec_add" class="am-sec-add"></div>
     <div class="fld"><label>Notes</label><div id="am_comwrap"></div></div>
     </div>
-    <div class="actions">${id?`<button class="btn danger" id="am_del">Delete</button><button class="btn ghost" id="am_dup" style="margin-right:auto">⧉ Duplicate</button>`:""}<button class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
+    <div class="actions">${id?`<button class="btn danger" id="am_del">Delete</button><button class="btn ghost" id="am_dup" style="margin-right:auto">⧉ Duplicate</button>`:""}<button class="btn ghost" id="am_cancel" onclick="closeModal()">Cancel</button><button class="btn accent" id="am_save">Save</button></div>`,{wide:true});
 
   /* ---- the hub's tabs ----
      Overview and Diary write as they go, like the diary always did; Details is
@@ -16667,6 +16686,11 @@ function animalModal(id,draft,opts){
     let diaryPainted=false;
     const showTab=(name,diaryOpts)=>{
       root.querySelectorAll(".am-tab").forEach(b=>b.classList.toggle("on",b.dataset.pane===name));
+      // Overview and Diary save as they go; only the Details form has
+      // anything to save, delete or duplicate
+      const form=name==="details";
+      ["am_del","am_dup","am_save"].forEach(id=>{ const b=document.getElementById(id); if(b) b.hidden=!form; });
+      const cc=document.getElementById("am_cancel"); if(cc) cc.textContent=form?"Cancel":"Close";
       root.querySelectorAll(".am-pane").forEach(p=>p.classList.toggle("hidden",p.dataset.pane!==name));
       if(name==="overview") paintOverview();
       // the diary is painted when first looked at, and again whenever it is
