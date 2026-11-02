@@ -2132,7 +2132,7 @@ function applyLocalView(){
 }
 /* Loud on purpose. The whole failure this guards against was silent. */
 function reportMassRemoval(w){
-  const noun=w.key==="diary"?"diary entries":w.key.startsWith("cfg:")?w.key.slice(4)+" entries":w.key;
+  const noun=w.key==="diary"?"records":w.key.startsWith("cfg:")?w.key.slice(4)+" entries":w.key;
   console.warn("Arbor: one change removed most of a collection — not recorded as deletions",w);
   try{ toast(`${w.gone} ${noun} disappeared in a single change — not treated as deleted, so your synced copy keeps them. If you meant it, delete them again.`); }catch(e){}
 }
@@ -2818,7 +2818,7 @@ const LEAK_TEXT_RUN=24;
 // singular, for sentences about one record
 const SHARE_ONE={projects:"project",experiments:"experiment",schedule:"timeline item",
                  animals:"animal",notes:"note",readings:"paper",protocols:"protocol",
-                 other:"library record",diary:"diary entry"};
+                 other:"library record",diary:"record"};
 function leakCheck(file,pr){
   const problems=[];
   const sharedIds=new Set();
@@ -2835,7 +2835,7 @@ function leakCheck(file,pr){
     const live=(DB.animals||[]).find(y=>y.id===a.id);
     (a.diary||[]).forEach(e=>{ sharedIds.add(e.id);
       const r=resolveShare("diary",(live&&(live.diary||[]).find(y=>y.id===e.id))||e,live||a);
-      if(!r.shared||r.project!==pr.id) problems.push(`a diary entry on ${a.name||a.id} is private but is in the file`);
+      if(!r.shared||r.project!==pr.id) problems.push(`a record on ${a.name||a.id} is private but is in the file`);
     });
   });
   /* Every id in this workspace that is not in the file must not appear in it —
@@ -4001,7 +4001,7 @@ function resolveShare(coll,x,parentAnimal){
     if(amb.length) return SHARE_NO(`${a.name||"its animal"} is also in ${projName(amb[0])}, which isn't shared`);
     return projDefaults(projById(pa.project)).diary==="shared"
       ? {shared:true,project:pa.project,why:`on ${a.name||"a shared animal"}`}
-      : SHARE_NO("this project keeps diary entries private");
+      : SHARE_NO("this project keeps animal records private");
   }
   const P=projectsOfRecord(coll,x);
   if(!P.length) return SHARE_NO("not attached to a project");
@@ -5927,7 +5927,7 @@ function openQuickFind(){
   let hits=[], sel=0;
   function paint(){
     if(!hits.length){
-      list.innerHTML=`<div class="qf-hint" style="padding:10px 2px">${input.value.trim()?"Nothing matches that.":"Searches animals, their diary entries, tasks and events, notes, experiments, projects, the library and materials."}</div>`;
+      list.innerHTML=`<div class="qf-hint" style="padding:10px 2px">${input.value.trim()?"Nothing matches that.":"Searches animals, their records, tasks and events, notes, experiments, projects, the library and materials."}</div>`;
       return;
     }
     list.innerHTML=hits.map((h,i)=>`<button type="button" class="qf-row${i===sel?" on":""}" data-i="${i}">
@@ -6324,7 +6324,7 @@ const SCOPE_BANDS={
 const SCOPE_BAND_WORDS={
   project:    ["Projects","read darkest, being the widest thing on the Timeline"],
   experiment: ["Experiments","sit a step lighter than the project they belong to"],
-  diary:      ["Diary entries","are the lightest rung that still reads with white text on it"]
+  diary:      ["Records","are the lightest rung that still reads with white text on it"]
 };
 function colorGrid(){
   const rows=COLOR_SHADES.map(sh=>COLOR_HUES.map(h=>hslHex(h,sh.s,sh.l)));
@@ -8496,7 +8496,7 @@ function experimentModal(st,after){
     box.innerHTML=bar+(view==="animal"?blocks:planCalendarHTML(members))
       +`<div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-top:6px">
       ✓ done, ! overdue. Each arm runs its own plan — set it beside the arm under Groups.
-      Every stage writes a real diary entry, so it draws on the Timeline and exports like any other.</div>`;
+      Every stage writes a real record, so it draws on the Timeline and exports like any other.</div>`;
     box.querySelectorAll(".pg-tab").forEach(b=>b.addEventListener("click",()=>{
       DB.config.planSummaryView=b.dataset.v; persist(); paintPlan();
     }));
@@ -8672,7 +8672,7 @@ function projectModal(pr,after){
             <button type="button" data-v="shared" class="${projDefaults(pr).timeline==="shared"?"on":""}">Shared</button>
             <button type="button" data-v="private" class="${projDefaults(pr).timeline==="private"?"on":""}">Private</button>
           </div></div>
-        <div class="share-opt"><span>Diary entries on its animals</span>
+        <div class="share-opt"><span>Records on its animals</span>
           <div class="seg" id="pm_sd_diary">
             <button type="button" data-v="shared" class="${projDefaults(pr).diary==="shared"?"on":""}">Shared</button>
             <button type="button" data-v="private" class="${projDefaults(pr).diary==="private"?"on":""}">Private</button>
@@ -8750,10 +8750,10 @@ function projectModal(pr,after){
     if(!pr.shared){ shSum.textContent=""; return; }
     const rev=shareReview();
     const n=k=>(rev.shared[k]||[]).length;
-    const bits=[[n("experiments"),"experiment"],[n("animals"),"animal"],[n("diary"),"diary entry"],
+    const bits=[[n("experiments"),"experiment"],[n("animals"),"animal"],[n("diary"),"record"],
                 [n("schedule"),"timeline item"],[n("notes"),"note"],
                 [n("readings")+n("protocols")+n("other"),"library record"]]
-      .filter(([c])=>c).map(([c,w])=>`${c} ${w}${c===1?"":(w.endsWith("y")?"":"s")}`.replace("diary entrys","diary entries"));
+      .filter(([c])=>c).map(([c,w])=>`${c} ${w}${c===1?"":(w.endsWith("y")?"":"s")}`.replace("recordys","records"));
     const who=spaceConnected()&&spaceMembers().some(m=>m.id!==meId())?(" with "+audienceLabel(pr)):"";
     shSum.textContent=bits.length?("Would share "+bits.join(", ")+who+"."):"Nothing in this project would be shared yet.";
   }
@@ -9278,8 +9278,8 @@ function renderExperiments(){
       <span class="af-label" style="margin-left:8px">Group</span>
       <select id="ex_group" class="af-sel">
         <option value="none">None</option>
-        <option value="animal">By mouse</option>
-        <option value="type">By entry type</option>
+        <option value="animal">By animal</option>
+        <option value="type">By kind</option>
       </select>
       <label style="margin-left:8px;display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);cursor:pointer">
         <input type="checkbox" id="ex_hidedone" style="width:auto;margin:0">Hide completed</label>
@@ -14215,7 +14215,7 @@ const ANIMAL_FACT_BUILTINS=[
     get:a=>animalInjections(a).filter(i=>i.verified).map(i=>(i.siteRegion||"?")+" "+i.verified).join(", ")},
   {id:"warnings", group:"Attention", label:"Needs attention", type:"number",
     get:a=>animalWarnings(a).filter(w=>w.level!=="ok").length||null, text:v=>v?`⚠ ${v}`:""},
-  {id:"lastEntry", group:"Diary", label:"Last diary entry", type:"date",
+  {id:"lastEntry", group:"Diary", label:"Last record", type:"date",
     get:a=>lastDiaryDate(a)||null, text:v=>v?"last entry "+daysAgoText(v):""}
 ];
 /* Every entry type — yours as much as the built-in ones — says something about
@@ -17282,7 +17282,7 @@ function openTimelineCreateModal(prefillDeadline,prefillEnd){
       <div class="seg" id="tc_kind">
         <button type="button" data-v="task">Task</button>
         <button type="button" data-v="event">Event</button>
-        <button type="button" data-v="diary" ${animals.length?"":"disabled"}>Animal diary entry</button>
+        <button type="button" data-v="diary" ${animals.length?"":"disabled"}>Animal record</button>
       </div></div>
     <div id="tc_body" class="dg-form"></div>`,{wide:true});
   const body=document.getElementById("tc_body");
@@ -17526,7 +17526,7 @@ document.getElementById("expCal").addEventListener("click",()=>{
     ics+="END:VEVENT\r\n";
   });
   ics+="END:VCALENDAR\r\n"; download("arbor_schedule.ics",ics,"text/calendar");
-  toast(`Exported ${due.length} task${due.length!==1?"s":""}, ${diaryEvents.length} diary entr${diaryEvents.length!==1?"ies":"y"}`);
+  toast(`Exported ${due.length} task${due.length!==1?"s":""}, ${diaryEvents.length} record${diaryEvents.length!==1?"s":""}`);
 });
 
 /* ---------- HISTORY / RECOVERY ----------
@@ -18124,7 +18124,7 @@ function exportFullDatabaseExcel(){
     ["Animals",DB.animals.length],
     ["— alive",alive.length],
     ["— alive and in use",inUse.length],
-    ["Diary entries",diaryN],
+    ["Animal records",diaryN],
     ["Projects",(DB.projects||[]).length],
     ["Experiments",DB.experiments.length],
     ["Scheduled items",taskList().length],

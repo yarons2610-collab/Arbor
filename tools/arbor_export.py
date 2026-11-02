@@ -687,7 +687,7 @@ def write_overview(wb, w, sheets, source_label):
         ("Animals", len(w.animals)),
         ("— alive", len(alive)),
         ("— alive and in use", len(in_use)),
-        ("Diary entries", diary_n),
+        ("Animal records", diary_n),
         ("Projects", len(w.projects)),
         ("Experiments", len(w.experiments)),
         ("Scheduled items", len(w.schedule)),
@@ -1211,7 +1211,7 @@ def main():
 
     rows = sum(len(s.rows) for s in sheets)
     print(f"{path}  ·  {len(sheets)} sheets, {rows} rows  ·  "
-          f"{len(w.animals)} animals, {sum(len(a.get('diary') or []) for a in w.animals)} diary entries")
+          f"{len(w.animals)} animals, {sum(len(a.get('diary') or []) for a in w.animals)} animal records")
 
 
 def keep_recent(folder, keep):
