@@ -14098,9 +14098,10 @@ function restrictionCurveSVG(a,st){
 function openFeedingModal(date){
   const f=feedingOn(date);
   if(!f){ toast("Nobody is on restriction that day"); return; }
-  modal(`<h3>🍽 Feeding — ${esc(fmtDMY(date))}</h3>
+  modal(`<h3>🍽 Feeding — ${esc(fmtWhenFull(date))}
+      <span style="font-size:12px;font-weight:400;margin-left:8px">at <input id="fd_time" type="time" value="${escAttr(f.time)}" style="width:auto;display:inline-block;padding:2px 6px"></span></h3>
     <div class="ov-dim" style="font-size:12px;margin:-4px 0 10px">Target ${RESTRICTION_TARGET}% of baseline · floor ${RESTRICTION_FLOOR}%.
-      Type today's weight; the ration starts at the last one given.</div>
+      Type today's weight; the ration starts at the last one given. Changing the time moves this day's feeding only.</div>
     <div class="pg-wrap"><table class="pg-tbl fd-tbl">${feedingHeadHTML(false)}
       <tbody>${f.rows.map(({a,st})=>feedingRowHTML(a,st)).join("")}</tbody></table></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
@@ -14109,6 +14110,8 @@ function openFeedingModal(date){
   root.querySelectorAll(".fd-open").forEach(b=>b.onclick=()=>{ closeModal(); animalModal(b.dataset.a); });
   document.getElementById("fd_save").onclick=()=>{
     const n=saveFeedingRows(root,date); if(n==null) return;
+    const tm=document.getElementById("fd_time").value;
+    if(tm&&tm!==f.time){ setFeedingTime(date,tm); persist(); }
     closeModal(); render();
     toast(n?`Feeding saved for ${n} animal${n===1?"":"s"}`:"Nothing entered");
   };
@@ -14162,13 +14165,23 @@ function feedingChipHTML(f){
 function feedingTitle(f){
   return `Feeding ${fmtDMY(f.date)} — ${f.rows.map(x=>x.a.name+(x.st.todayDone?" ✓":"")+(x.st.belowFloor?" ⚠":"")).join(", ")}`;
 }
+/* Feeding is at 16:00 unless a day says otherwise — moved from the feeding
+   window, for that day only. */
+function feedingTimeOn(date){ return ((DB.config.feedingTimes||{})[String(date).slice(0,10)])||FEEDING_TIME; }
+function setFeedingTime(date,time){
+  const d=String(date).slice(0,10), m=DB.config.feedingTimes=Object.assign({},DB.config.feedingTimes||{});
+  if(!time||time===FEEDING_TIME) delete m[d]; else m[d]=time;
+  // only days still ahead or recent are worth keeping
+  const cut=addDaysISO(todayDateStr(),-60).slice(0,10);
+  Object.keys(m).forEach(k=>{ if(k<cut) delete m[k]; });
+}
 function feedingOn(date){
   const d=String(date).slice(0,10);
   const rows=(DB.animals||[]).filter(a=>a.alive!==false&&restrictionAt(a,d))
     .map(a=>({a,st:restrictionStatus(a,d)}))
     .sort((x,y)=>String(x.a.name||"").localeCompare(String(y.a.name||""),undefined,{numeric:true}));
   if(!rows.length) return null;
-  return {date:d,time:FEEDING_TIME,rows,
+  return {date:d,time:feedingTimeOn(d),rows,
     done:rows.filter(x=>x.st.todayDone).length,
     // only today and earlier: tomorrow's weight is not known yet, so painting
     // every future day red would only repeat today's warning
@@ -17021,7 +17034,7 @@ function goMaterials(sub){
 function openLinked(l){
   if(l.kind==="animal"){ closeDetail(); switchTo("animals"); animalModal(l.id); return; }
   if(l.kind==="template"){ closeDetail(); goMaterials("procedures"); return; }
-  if(l.kind==="task"){ closeDetail(); switchTo("animals"); return; }   // 2.0: no entry-type editor to open
+  if(l.kind==="task"){ closeDetail(); goMaterials("tasks"); return; }   // a behaviour task: its settings
   // A paper/protocol/other Library record — straight to its own link, the
   // same one the Library row's own ↗ button opens, instead of just landing
   // on the Library tab in general and leaving the actual click to find it.
