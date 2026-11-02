@@ -1052,6 +1052,9 @@
 
   .detail{position:absolute;top:0;right:0;bottom:0;width:360px;background:var(--panel);border-left:1px solid var(--line2);transform:translateX(100%);transition:transform .22s cubic-bezier(.4,0,.2,1);overflow:auto;z-index:20;box-shadow:-16px 0 40px -20px rgba(0,0,0,.7)}
   .detail.open{transform:translateX(0)}
+  /* closed means gone — on a phone the closed sheet sat just past the end of
+     the page and showed up, empty, at the bottom of any long list */
+  .detail:not(.open){visibility:hidden}
   .detail .dhead{position:sticky;top:0;background:var(--panel);padding:16px 18px 12px;border-bottom:1px solid var(--line);z-index:1}
   .detail .dhead .dom-tag{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);margin-bottom:8px}
   .detail .dhead .dom-tag .chip{width:8px;height:8px;border-radius:2px}
@@ -1158,6 +1161,21 @@
   .dg-mrow .dg-mdate{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);flex:0 0 78px}
   .dg-mrow .dg-esum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .aq-pick{max-width:14em;text-overflow:ellipsis}
+  .aq{white-space:nowrap;max-width:100%}
+  @media (max-width:600px){ .aq-row>.af-label{min-width:100%} .aq-pick{max-width:11em} }
+  /* a day's feeding on a phone: a card per animal, the two boxes to type in
+     side by side and in reach, instead of a table to scroll sideways */
+  @media (max-width:600px){
+    .fd-tbl thead{display:none}
+    .fd-tbl,.fd-tbl tbody{display:block}
+    .fd-tbl tr.fd-row{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;padding:10px 4px;border-bottom:1px solid var(--line)}
+    .fd-tbl tr.fd-row td{display:block;padding:0;border:0}
+    .fd-tbl td.fd-curve{grid-column:1/-1}
+    .fd-tbl td.fd-st{grid-column:1/-1}
+    .fd-tbl td[data-l]::before{content:attr(data-l);display:block;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:2px}
+    .fd-tbl input{width:100%;font-size:16px}
+    .pg-wrap:has(.fd-tbl){overflow-x:visible;border:0}
+  }
   .acond{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line2);
     border-radius:20px;padding:3px 6px 3px 11px;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
   .acond-x{border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:10px;padding:0 3px}
@@ -14054,8 +14072,8 @@ function feedingRowHTML(a,st,opts){
     ${opts.board?`<td class="fd-num">day ${st.daysOn}<div class="ov-dim">from ${esc(fmtDMY(st.r.start))}</div></td>`:""}
     <td class="fd-num"><b>${pctTxt}</b><div class="ov-dim">of ${st.baseline?st.baseline.grams+"g":"?"}${trend?" · "+esc(trend):""}</div></td>
     ${opts.board?`<td class="fd-curve">${restrictionCurveSVG(a,st)}</td>`:""}
-    <td><input class="fd-g" type="text" inputmode="decimal" value="${escAttr(String(g))}" placeholder="${st.lastWeighing?esc(String(st.lastWeighing.data.grams)):"g"}"></td>
-    <td><input class="fd-r" type="text" inputmode="decimal" value="${escAttr(r!=null?String(r):(st.lastRation!=null?String(st.lastRation):""))}"></td>
+    <td data-l="weight (g)"><input class="fd-g" type="text" inputmode="decimal" value="${escAttr(String(g))}" placeholder="${st.lastWeighing?esc(String(st.lastWeighing.data.grams)):"g"}"></td>
+    <td data-l="ration (g)"><input class="fd-r" type="text" inputmode="decimal" value="${escAttr(r!=null?String(r):(st.lastRation!=null?String(st.lastRation):""))}"></td>
     <td class="fd-st">${st.todayDone?"✓":""}${st.belowFloor?` <span class="fd-floor">⚠ below ${RESTRICTION_FLOOR}%</span>`:""}</td></tr>`;
 }
 function feedingHeadHTML(board){
@@ -15672,7 +15690,7 @@ function paintDiary(container,a,opts){
         ${formType?"":(dayEntries.length? dayEntries.map(e=>{const open=expandedIds.has(e.id);return`
           <div class="dg-entry${e.done?" done":""}" style="border-left:3px solid ${diaryTypeDef(e.type).color}">
             <div class="dg-erow">
-              <button type="button" class="step-dot dg-done${e.done?" on":""}" data-id="${e.id}" title="${e.done?"Done — click to undo":"Mark done"}">${e.done?"✓":""}</button>
+              ${e.fromPlan||e.fromTask?`<button type="button" class="step-dot dg-done${e.done?" on":""}" data-id="${e.id}" title="${e.done?"Done — click to undo":"Mark done"}">${e.done?"✓":""}</button>`:""}
               ${/* The row showed the type's icon and then whatever had been
                     filled in — so a scheduled entry nobody had touched read as
                     an icon and a dash, and which of ten types it was had to be
