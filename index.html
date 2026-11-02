@@ -19391,7 +19391,7 @@ function exportFullDatabaseExcel(){
   // one — on the Timeline that task stands in for all of them, so the sheet
   // is where the grouping is otherwise invisible
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>diary.push([a.name||"",e.date||"",e.time||"",e.endTime||"",
-    diaryTypeDef(e.type).label,noTime(e,a),yes(entryHappened(e)),stamp(e.created)])));
+    diaryTypeDef(e.type).label,(s=>s==="—"?"":s)(noTime(e,a)),yes(entryHappened(e)),diaryBelongsTo(e),stamp(e.created)])));
 
   const inj=[];
   DB.animals.forEach(a=>(a.surgeryDetail&&a.surgeryDetail.injections||[]).forEach((x,i)=>{
@@ -19509,7 +19509,7 @@ function exportFullDatabaseExcel(){
     sheet("Animals",["Name","Cage","Sex","Strain","Status","Practice","Excluded","Born","Age (weeks)","Sacrificed","Surgeries",
       "Days since last surgery","Latest weight (g)","Baseline (g)","% of baseline","Virus","Injection sites","Projection targets",
       "Head-post","Cranial window","Experiments (group)","Next plan stage","Comments"],animals,0),
-    sheet("All records",["Animal","Date","Time","End time","Kind","Details","Done","Logged"],diary,0,1,2),
+    sheet("All records",["Animal","Date","Time","End time","Kind","Details","Done","Part of","Logged"],diary,0,1,2),
     ...(customCols.length?[sheet("Animal fields",
       ["Animal",...customCols.map(([sec,f])=>`${sec.label||"Section"} · ${f.label||f.key}`)],
       DB.animals.map(a=>[a.name||"",...customCols.map(([,f])=>cellOf((a.custom||{})[f.key],f))])
