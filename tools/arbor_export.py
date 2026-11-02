@@ -166,6 +166,7 @@ RECORD_KINDS = {
 FOV_SETTINGS = [("depth", "Depth (µm)"), ("zoom", "Zoom"), ("planes", "Planes"),
                 ("frames", "Frames / plane"), ("res", "Resolution")]
 RESTRICTION_TARGET = 90
+BEHAVIOUR_TASKS = {"Lever": ["Threshold", "Sound frequency (Hz)", "Table angle"]}
 
 
 def ration_of(d):
@@ -1108,10 +1109,20 @@ def build_sheets(w):
              for s in (w.config.get("siteLib") or [])]
     sheets.append(Sheet("Injection sites", ["Name", "AP", "ML", "DV"], sites, sort=[0]))
 
-    tasks = [[t.get("name") or "",
-              ", ".join(p.get("label") or p.get("key") or "" for p in (t.get("params") or []))]
-             for t in (w.config.get("taskLib") or [])]
-    sheets.append(Sheet("Behavioural tasks", ["Task", "Parameters"], tasks,
+    # Lever's settings are designed into Arbor (BEHAVIOUR_TASKS in the app);
+    # any other task carries its own short list in the task library
+    lib = {t.get("name"): t for t in (w.config.get("taskLib") or []) if t.get("name")}
+    used = {e.get("data", {}).get("task") for a in w.animals for e in (a.get("diary") or [])
+            if e.get("type") == "training" and (e.get("data") or {}).get("task")}
+    names = sorted(set(BEHAVIOUR_TASKS) | set(lib) | used, key=natural_key)
+    tasks = []
+    for n in names:
+        sets = BEHAVIOUR_TASKS.get(n) or [p.get("label") or p.get("key") or "" for p in (lib.get(n, {}).get("params") or [])
+                                          if not re.match(r"(?i)^(time|trials|success)", p.get("label") or "")]
+        sessions = sum(1 for a in w.animals for e in (a.get("diary") or [])
+                       if e.get("type") == "training" and (e.get("data") or {}).get("task") == n)
+        tasks.append([n, ", ".join(sets), sessions])
+    sheets.append(Sheet("Behavioural tasks", ["Task", "Settings", "Sessions"], tasks,
                         sort=[0], wide=[1]))
 
     inv = [[k, (v or {}).get("status") or "", plain((v or {}).get("note"))]

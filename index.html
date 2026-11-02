@@ -1149,6 +1149,9 @@
   .aq .aq-tg{border:0;background:none;color:inherit;font:inherit;padding:0;cursor:pointer}
   .aq select,.aq input{background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;font-size:11px;padding:1px 4px}
   .aq-days{width:3.2em;text-align:center}
+  .tl-card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px}
+  .tl-sets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+  .tl-set{display:inline-flex;gap:4px;align-items:center}
   .dg-mrow{display:flex;gap:10px;align-items:baseline;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);
     background:none;color:var(--ink-dim);font-size:11.5px;padding:5px 2px;cursor:pointer}
   .dg-mrow:hover,.dg-mrow.on{color:var(--ink);background:var(--panel2)}
@@ -1439,11 +1442,13 @@
         <button class="mat-stab" data-ms="inventory">Inventory</button>
         <button class="mat-stab" data-ms="procedures">Procedures</button>
         <button class="mat-stab" data-ms="viruses">Viruses</button>
+        <button class="mat-stab" data-ms="tasks">Behaviour tasks</button>
       </div>
       <div class="wrap mat-subview" id="ms-sites"></div>
       <div class="wrap mat-subview hidden" id="ms-inventory"></div>
       <div class="wrap mat-subview hidden" id="ms-viruses"></div>
       <div class="wrap mat-subview hidden" id="ms-procedures"></div>
+      <div class="wrap mat-subview hidden" id="ms-tasks"></div>
 
     </div>
     <div class="view hidden wrap" id="library"></div>
@@ -4646,7 +4651,7 @@ function migrate(){                       // backfill fields added in later vers
   animalGroup=DB.config.animalFilters.group||"all";
   animalCage=DB.config.animalFilters.cage||"all";
   // a sub-tab that no longer exists (entry types, plans) opens on sites
-  matSubTab=["inventory","viruses","sites","procedures"].includes(DB.config.matSubTab)?DB.config.matSubTab:"sites";
+  matSubTab=["inventory","viruses","sites","procedures","tasks"].includes(DB.config.matSubTab)?DB.config.matSubTab:"sites";
   animalProject=DB.config.animalFilters.project||"all";
   calMode=DB.config.calMode||"week";
   animalGroupBy=DB.config.animalFilters.groupBy||"none";
@@ -11319,6 +11324,7 @@ function renderMatSubTab(){
   else if(matSubTab === "viruses")  renderVirusLib();
   else if(matSubTab === "sites")    renderSiteLib();
   else if(matSubTab === "procedures") renderProcedureLib();
+  else if(matSubTab === "tasks")      renderTaskLib();
 }
 
 /* ── PLANS (an experiment's pipeline, written once and run per animal) ──
@@ -11858,6 +11864,63 @@ function renderSiteLib(){
    shared mountProcedureEditor) to build one from scratch or tweak an existing
    one without needing an animal on hand. */
 let procSearch="";
+/* ── BEHAVIOUR TASKS ──
+   Every behaviour session shares the same skeleton (stage, trials, success,
+   length, data location); what differs is each task's own settings, carried
+   from the animal's last session of that task. Lever's are designed into
+   Arbor. Any other task keeps a short list of named settings here — the one
+   place 2.0 stays open-ended, because new paradigms arrive before anyone has
+   designed for them. */
+function renderTaskLib(){
+  const host=document.getElementById("ms-tasks"); if(!host) return;
+  const lib=()=>DB.config.taskLib=(DB.config.taskLib||[]);
+  const sessions=name=>(DB.animals||[]).reduce((n,a)=>n+(a.diary||[]).filter(e=>e.type==="training"&&e.data&&e.data.task===name).length,0);
+  const IN2="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
+  const draw=()=>{
+    const names=behaviourTaskNames();
+    host.innerHTML=`<div style="font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);margin-bottom:14px;line-height:1.6;max-width:72ch">
+        Every session records stage, trials, success, length and where the data is. A task's settings are what else
+        you set on the rig for it — each session starts from the animal's last ones.</div>
+      ${names.map(name=>{
+        const built=BEHAVIOUR_TASKS[name], t=lib().find(x=>x.name===name), n=sessions(name);
+        const sets=built?built.settings:((t&&t.params)||[]);
+        return `<div class="tl-card" data-name="${escAttr(name)}">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <b style="font-size:13px">${esc(name)}</b>
+            <span class="ov-dim" style="font-size:11px">${n} session${n===1?"":"s"}${built?" · designed in Arbor":""}</span>
+            ${!built&&!n?`<button type="button" class="ov-btn tl-del" style="margin-left:auto;color:var(--overdue)">✕ task</button>`:""}
+          </div>
+          <div class="tl-sets">${built
+            ? sets.map(f=>`<span class="aq">${esc(f.label)}</span>`).join(" ")
+            : sets.map((f,i)=>`<span class="tl-set"><input class="tl-label" data-i="${i}" value="${escAttr(f.label||"")}" placeholder="setting" style="${IN2};width:150px">
+                <select class="tl-type" data-i="${i}" style="${IN2};width:auto"><option value="number" ${f.type==="number"?"selected":""}>number</option><option value="text" ${f.type!=="number"?"selected":""}>text</option></select>
+                <button type="button" class="ov-btn tl-rm" data-i="${i}" title="remove">✕</button></span>`).join("")
+              +`<button type="button" class="ov-btn tl-add">＋ setting</button>`}</div>
+        </div>`; }).join("")||`<div class="empty-box">No tasks yet.</div>`}
+      <div style="display:flex;gap:8px;margin-top:12px"><input id="tl_new" placeholder="new task name" style="${IN2};flex:0 1 240px"><button class="btn ghost" id="tl_addtask">＋ Task</button></div>`;
+  };
+  const entry=card=>{ const name=card.dataset.name; let t=lib().find(x=>x.name===name);
+    if(!t){ t={name,params:[]}; lib().push(t); } t.params=t.params||[]; return t; };
+  draw();
+  if(host._wired) return; host._wired=true;
+  host.addEventListener("click",e=>{
+    const card=e.target.closest(".tl-card");
+    if(e.target.closest("#tl_addtask")){ const v=document.getElementById("tl_new").value.trim();
+      if(!v) return; if(behaviourTaskNames().includes(v)){ toast("That task exists"); return; }
+      lib().push({name:v,params:[]}); persist(); draw(); return; }
+    if(!card) return;
+    if(e.target.closest(".tl-add")){ entry(card).params.push({key:uid("tp_"),label:"",type:"number"}); persist(); draw(); return; }
+    const rm=e.target.closest(".tl-rm"); if(rm){ entry(card).params.splice(+rm.dataset.i,1); persist(); draw(); return; }
+    if(e.target.closest(".tl-del")){ DB.config.taskLib=lib().filter(x=>x.name!==card.dataset.name); persist(); draw(); }
+  });
+  host.addEventListener("change",e=>{
+    const card=e.target.closest(".tl-card"); if(!card) return;
+    const i=+e.target.dataset.i, p=entry(card).params[i]; if(!p) return;
+    if(e.target.classList.contains("tl-label")) p.label=e.target.value.trim();
+    if(e.target.classList.contains("tl-type")) p.type=e.target.value;
+    persist();
+  });
+}
 function renderProcedureLib(){
   const host = document.getElementById("ms-procedures"); host.innerHTML = "";
   const hdr = document.createElement("div");
@@ -18214,7 +18277,8 @@ function exportFullDatabaseExcel(){
       "Box colour","Box location","Need to order"],activeViruses().map(v=>[v.name,v.type||"",v.promoter||"",v.titer||"",
       v.source||"",v.note||"",v.backupTubes??"",v.aliquotTubes??"",v.boxNumber||"",v.boxColor||"",v.boxLocation||"",yes(v.needOrder)]),0),
     sheet("Injection sites",["Name","AP","ML","DV"],(DB.config.siteLib||[]).map(x=>[x.name,num(x.ap),num(x.ml),num(x.dv)]),0),
-    sheet("Behavioural tasks",["Task","Parameters"],(DB.config.taskLib||[]).map(t=>[t.name,(t.params||[]).map(p=>p.label).join(", ")]),0),
+    sheet("Behavioural tasks",["Task","Settings","Sessions"],behaviourTaskNames().map(n=>[n,behaviourSettingsDef(n).map(f=>f.label).join(", "),
+      DB.animals.reduce((c,a)=>c+(a.diary||[]).filter(e=>e.type==="training"&&e.data&&e.data.task===n).length,0)]),0),
     sheet("Stock",["Material","Status","Note"],Object.keys(DB.inventory||{}).map(k=>[k,(DB.inventory[k]||{}).status||"",(DB.inventory[k]||{}).note||""]),0),
     // the legacy outline, last — the Timeline above is the schedule
     sheet("Outline tasks",["Name","Soma","Status","Start","End","Notes"],DB.tasks.map(t=>[t.title||"",(domById(t.domainId)||{}).name||"",
