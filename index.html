@@ -3253,6 +3253,16 @@ function mergeBaselines(was,theirs,mine){
   });
   return [...out.values()].sort((x,y)=>String(x.date).localeCompare(String(y.date)));
 }
+// Restriction periods merge per period, by id — the same reasoning as
+// baselines: each side's additions survive, this side's removals and edits
+// against the agreed copy are honoured.
+function mergeById(was,theirs,mine){
+  const by=list=>{ const m=new Map(); (Array.isArray(list)?list:[]).forEach(x=>{ if(x&&x.id) m.set(x.id,x); }); return m; };
+  const W=by(was), T=by(theirs), M=by(mine), out=new Map(T);
+  W.forEach((x,id)=>{ if(!M.has(id)) out.delete(id); });
+  M.forEach((x,id)=>{ const w=W.get(id); if(!w||JSON.stringify(w)!==JSON.stringify(x)) out.set(id,x); });
+  return [...out.values()];
+}
 function mergeFields(theirs,mine,base,id,isDiary){
   const was=base&&((isDiary?base.diaryFull:base.recFull)||{})[id];
   // no agreed copy to compare against: this device decides, as before
@@ -3266,6 +3276,9 @@ function mergeFields(theirs,mine,base,id,isDiary){
        task on one side was undone by the other side editing its notes. */
     if(k==="baselines"){
       out[k]=mergeBaselines(was[k],theirs[k],mine[k]); return;
+    }
+    if(k==="restrictions"){
+      out[k]=mergeById(was[k],theirs[k],mine[k]); return;
     }
     if(k==="planRuns"){
       /* One entry per animal, each owned by whoever wrote it: merged per key
@@ -14254,6 +14267,117 @@ function reconcileAnimal(a){
     changed=true;
   }
   return changed;
+}
+
+/* ═══════════════════════════ ARBOR 2.0: FOOD RESTRICTION ═══════════════════════════
+   A restriction is a PERIOD on the animal, not an entry. It starts with one
+   weighing (which becomes the animal's baseline — the same one everything
+   else reads, never a copy), aims for 90% of it, and has two phases: reaching
+   the target, then maintaining it through behaviour. Below 85% is the floor.
+   Each day is one line per animal: a weighing and the ration given. The
+   weighing is an ordinary weight row — the single source of the animal's
+   weight — carrying the ration beside the grams.
+   Designed with Yaron 02/11/2026; see docs/arbor-2.0-design.md. */
+const RESTRICTION_TARGET=90, RESTRICTION_FLOOR=85, FEEDING_TIME="16:00";
+function animalRestrictions(a){
+  return (Array.isArray(a&&a.restrictions)?a.restrictions:[]).filter(r=>r&&r.id&&r.start)
+    .sort((x,y)=>String(x.start).localeCompare(String(y.start)));
+}
+// The restriction in force on a day, if any.
+function restrictionAt(a,date){
+  const d=String(date||todayDateStr()).slice(0,10);
+  const live=animalRestrictions(a).filter(r=>r.start<=d&&(!r.end||r.end>=d));
+  return live.length?live[live.length-1]:null;
+}
+/* Starting one sets the animal's baseline from the start weighing, so "% of
+   baseline" means the same thing on the restriction, the card, the cohort
+   table and the export. */
+function startRestriction(a,start,baselineGrams,ration){
+  if(!a||!start||!(+baselineGrams>0)) return null;
+  const d=String(start).slice(0,10);
+  if(restrictionAt(a,d)) return null;                       // already on one
+  setAnimalBaseline(a,d,+baselineGrams,"restriction start");
+  const r={id:uid("rs_"),start:d,target:RESTRICTION_TARGET,end:null,endReason:"",
+    ration:ration!=null&&ration!==""?+ration:null,at:Date.now(),by:meId()};
+  a.restrictions=animalRestrictions(a).concat([r]);
+  return r;
+}
+function endRestriction(a,id,date,reason){
+  const r=animalRestrictions(a).find(x=>x.id===id); if(!r) return null;
+  r.end=String(date||todayDateStr()).slice(0,10); r.endReason=reason||"";
+  return r;
+}
+// The day's weighing for an animal — the one row that holds that day's weight.
+function weighingOn(a,date){
+  const d=String(date).slice(0,10);
+  const rows=diaryWeightEntries(a).filter(e=>String(e.date).slice(0,10)===d);
+  return rows.find(e=>e.data&&e.data.grams!=null&&e.data.grams!=="")||rows[0]||null;
+}
+function rationOf(e){ const v=e&&e.data?(e.data.ration!=null?e.data.ration:e.data.f_a847sm):null; return v==null||v===""?null:+v; }
+/* Records a restriction day: the weighing (an ordinary weight row, created or
+   updated) and the ration. One row per animal per day — a second save on the
+   same day updates it rather than adding another. */
+function recordRestrictionDay(a,date,grams,ration){
+  const d=String(date).slice(0,10);
+  let e=weighingOn(a,d);
+  if(!e){
+    e={id:"d_wr_"+String(a.id).replace(/^a_/,"")+"_"+d.replace(/-/g,""),type:roleType("weight"),
+       date:d,time:null,data:{},created:Date.now(),edited:null};
+    a.diary=a.diary||[]; a.diary.push(e);
+  }
+  e.data=e.data||{};
+  if(grams!=null&&grams!=="") e.data.grams=+grams;
+  if(ration!=null&&ration!=="") e.data.ration=+ration;
+  e.edited=Date.now();
+  return e;
+}
+/* Where an animal stands on a restriction, on a day. Everything the hub, the
+   feeding item, the cohort table and the warnings show comes from here. */
+function restrictionStatus(a,date){
+  const d=String(date||todayDateStr()).slice(0,10);
+  const r=restrictionAt(a,d); if(!r) return null;
+  const base=baselineAt(a,r.start);
+  const days=diaryWeightEntries(a).filter(e=>e.date>=r.start&&e.date<=d&&e.data&&e.data.grams!=null&&e.data.grams!=="");
+  const pctOf=e=>base&&base.grams?+e.data.grams/base.grams*100:null;
+  const target=r.target||RESTRICTION_TARGET;
+  const reached=days.find(e=>pctOf(e)!=null&&pctOf(e)<=target);
+  const last=days[days.length-1]||null;
+  const pct=last?pctOf(last):null;
+  // rate of loss over the last few weighings, for an honest "about N days" —
+  // only while still reaching, and only when it is actually going down
+  let perDay=null, eta=null;
+  const recent=days.slice(-4);
+  if(recent.length>=2){
+    const span=calDayDelta(recent[0].date,recent[recent.length-1].date);
+    if(span>0) perDay=(+recent[recent.length-1].data.grams-+recent[0].data.grams)/span;
+  }
+  if(!reached&&last&&base&&perDay!=null&&perDay<0){
+    const targetG=base.grams*target/100;
+    eta=Math.max(0,Math.ceil((+last.data.grams-targetG)/-perDay));
+  }
+  const today=weighingOn(a,d);
+  // the ration defaults to the last one given, as it usually stays put
+  const lastRation=[...diaryWeightEntries(a)].reverse().map(rationOf).find(v=>v!=null&&v<10)??r.ration??null;
+  return {r,baseline:base,target,floor:RESTRICTION_FLOOR,
+    phase:reached?"maintaining":"reaching", readyDate:reached?reached.date:null,
+    lastWeighing:last, pct, belowFloor:pct!=null&&pct<RESTRICTION_FLOOR,
+    perDay, daysToTarget:eta, daysOn:calDayDelta(r.start,d)+1,
+    todayDone:!!(today&&today.data&&today.data.grams!=null&&today.data.grams!==""&&rationOf(today)!=null),
+    todayWeighing:today, lastRation};
+}
+/* The day's feeding, for everyone on restriction. This is what replaces the
+   האכלות tasks: nobody manages a roster — starting a restriction adds the
+   animal, ending it removes it — and done means every animal was weighed and
+   fed, not that a box was ticked. */
+function feedingOn(date){
+  const d=String(date).slice(0,10);
+  const rows=(DB.animals||[]).filter(a=>a.alive!==false&&restrictionAt(a,d))
+    .map(a=>({a,st:restrictionStatus(a,d)}))
+    .sort((x,y)=>String(x.a.name||"").localeCompare(String(y.a.name||""),undefined,{numeric:true}));
+  if(!rows.length) return null;
+  return {date:d,time:FEEDING_TIME,rows,
+    done:rows.filter(x=>x.st.todayDone).length,
+    belowFloor:rows.filter(x=>x.st.belowFloor)};
 }
 
 /* ---- what is true about an animal: the one vocabulary ----
