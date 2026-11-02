@@ -204,6 +204,91 @@ feeding lines) use deterministic ids, like rounds.
 Built on branch `arbor-2`; nothing deploys until all types are done and
 verified together.
 
+## Tasks and events stay
+
+The real workspace shows tasks and events are Yaron's **calendar and to-do
+system**, not mainly animal work: 206 events (categories: family, sport,
+courses, friends, hobbies…) and ~180 tasks (writing ×26, chores, lab meetings,
+project work, many attached to projects). Only 8 are animal rounds (האכלות).
+**Decision:** tasks and events remain as they are. Retired is only the *round*
+mechanism (tasks covering animals), replaced by feeding.
+
+## What the rebuild touches — every feature, and how it changes
+
+**Animals**
+- Animal hub (Overview / Diary / Details): Overview gains a section per record
+  kind (restriction, surgery & post-op, behaviour, imaging, brain/tissue); the
+  Diary tab becomes the animal's **history** — every record, filterable by
+  kind, each opening its own form; Details keeps profile, notes, status.
+- Animal card: summary line and chips read the new facts; restriction status
+  (%, ready, ⚠) and post-op day shown where relevant.
+- Animals page filters: conditions over 1.0 entry types → conditions over
+  record kinds and their real fields (e.g. behaviour stage, restriction phase).
+- Event log (📋): lists records by kind.
+- Animal sections (custom fields): kept for profile-level extras; the *Two
+  Photon → FOVs* table becomes the animal's imaging fields of view.
+- Facts registry (ANIMAL_FACTS): per-type generic facts → per-kind facts.
+
+**Records (replace generic diary entries)**
+- Kinds defined in code: weighing, restriction (period), surgery, post-op
+  check, behaviour session, imaging session, perfusion, brain/specimen steps,
+  slicing, histology, note (from Comment).
+- Existing 1.0 storage keys reused (weight, surgery, postop, training,
+  microscopy, perfusion, histology) so rows stay in place; data reshaped.
+- Retired: the entry-type editor (Materials → diary types), user-defined entry
+  fields, repeating diary series and their year-ahead top-up, follow-up rules
+  (surgery → post-op becomes the derived 72 h checks), rounds.
+
+**Behaviour tasks**: the task library (Lever, Droplet) becomes behaviour task
+definitions; Lever gets its designed settings (threshold, sound frequency,
+table angle) and measures (trials, success %, session length).
+
+**Experiments**
+- Plans → **protocols per arm**; a stage names a **record kind** (behaviour,
+  imaging, surgery, perfusion…) instead of a 1.0 type key; starting an animal
+  schedules them as before.
+- Experiment hub: arms, protocols, cohort table (facts by arm: % of baseline,
+  restriction phase, stage, next protocol step), outcome.
+
+**Projects**: cohort table by experiment; sharing boundary unchanged; the
+"diary" share default now governs records.
+
+**Timeline**
+- Draws: tasks and events (unchanged), protocol stages (record kinds), and
+  **derived items** — daily feeding, post-op checks, brain PFA→PBS / ready to
+  slice, booked surgeries.
+- Filters (Tasks / Events / Diary) → Tasks / Events / **Animal work**.
+- Search, upcoming list and .ics export include derived items.
+
+**Colour**
+- Hue = project identity, lightness = scope (project darkest → experiment →
+  animal work lightest) — kept.
+- Each record kind has a fixed icon and accent (defined in code, not chosen per
+  type); on the timeline animal work wears the project's lightest rung with the
+  kind's accent, as diary chips do now.
+- Warnings use one palette: amber = attention (approaching, overdue), red =
+  floor/danger (below 85%, missed post-op check).
+
+**Warnings & notifications**: one layer — below 85%, feeding not done today,
+missed post-op check, PBS transfer due, overdue protocol stage, ready for
+behaviour — feeding the hub, cards, timeline, cohort tables and 🔔.
+
+**Sharing**: records sync and share through the existing engine; record kinds
+need no definitions to travel (they are in code); restriction periods and the
+specimen merge per item; leak check covers them.
+
+**Exports (both)**: one sheet per record kind (weighings, restriction periods +
+daily log, surgeries, post-op checks, behaviour sessions, imaging sessions,
+slicing/slides, histology), plus the Animals sheet from facts; the python
+exporter mirrors each kind.
+
+**Notes & Library**: Comments become dated notes on the animal; notes linked to
+an animal, experiment or project show in that hub.
+
+**Unchanged**: tasks, events and their categories, projects/experiments
+records themselves, materials (viruses, sites, procedure templates), notes,
+library, the outline, sync, sharing.
+
 ## Build plan
 
 All types are built together, on shared foundations first.
