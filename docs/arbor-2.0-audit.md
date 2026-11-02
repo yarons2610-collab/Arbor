@@ -8,6 +8,16 @@ need the user; the rest follow from decisions already made.
 
 Status key: ✅ fine as is · 🔧 rework · 🗑 retire · ✨ new
 
+## Decisions (02/11/2026)
+
+- **Restriction board** — a view inside the Animals tab: *Show as: Restriction*.
+- **🔖 Fields (own sections/fields/tables on the animal)** — retired. Values
+  already recorded stay visible read-only until each is designed into the
+  animal model.
+- **Filters** — a fixed set of questions replaces the condition builder; the
+  list below is shown to the user before it is built.
+- **Plans library in Materials** — removed; plans live in their experiment.
+
 ---
 
 ## The Animals tab

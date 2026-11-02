@@ -224,6 +224,10 @@
   .ov-baseed{background:var(--bg2);border:1px solid var(--line2);border-radius:9px;padding:9px 11px;margin-top:-4px}
   .ov-brow{display:flex;align-items:center;gap:8px;margin-bottom:4px}
   .ov-bnew{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px}
+  .rb-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:4px 0 10px}
+  .fd-curve{padding:2px 6px}
+  .rb-hidden{margin:10px 0 0;font-size:12px;color:var(--amber);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+  .rb-ended{display:flex;gap:10px;align-items:baseline;padding:4px 0;border-bottom:1px solid var(--line)}
   /* hidden means hidden — a class that sets display must not bring it back */
   [hidden]{display:none!important}
   .ov-bnew input{background:var(--bg);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 7px;font-size:12px}
@@ -14229,49 +14233,120 @@ function openBrainModal(date){
    need to choose the ration beside it (where it is against baseline, which
    phase, how fast it is moving). The ration starts at the last one given, so
    most days only the weight is typed. Leaving a line empty records nothing. */
+/* One animal's line in a day's feeding: where it stands, and today's weight
+   and ration to type in. The 16:00 feeding window and the Animals tab's
+   restriction board draw the same line and save it the same way, so a weight
+   logged in either place means the same thing. */
+function feedingRowHTML(a,st,opts){
+  opts=opts||{};
+  const pctTxt=st.pct==null?"—":Math.round(st.pct)+"%";
+  const w=st.todayWeighing, g=w&&w.data&&w.data.grams!=null&&w.data.grams!==""?w.data.grams:"";
+  const r=w?rationOf(w):null;
+  const phase=st.phase==="maintaining"
+    ?`<span class="fd-ph fd-ready">ready · maintaining</span>`
+    :`<span class="fd-ph">reaching${st.daysToTarget!=null?` · ~${st.daysToTarget}d to go`:""}</span>`;
+  const trend=st.perDay!=null?`${st.perDay>0?"+":""}${(Math.round(st.perDay*100)/100)}g/day`:"";
+  return `<tr class="fd-row${st.belowFloor?" fd-warn":""}" data-a="${escAttr(a.id)}">
+    <td><button type="button" class="ov-link fd-open" data-a="${escAttr(a.id)}">${esc(a.name)}</button><div>${phase}</div></td>
+    ${opts.board?`<td class="fd-num">day ${st.daysOn}<div class="ov-dim">from ${esc(fmtDMY(st.r.start))}</div></td>`:""}
+    <td class="fd-num"><b>${pctTxt}</b><div class="ov-dim">of ${st.baseline?st.baseline.grams+"g":"?"}${trend?" · "+esc(trend):""}</div></td>
+    ${opts.board?`<td class="fd-curve">${restrictionCurveSVG(a,st)}</td>`:""}
+    <td><input class="fd-g" type="text" inputmode="decimal" value="${escAttr(String(g))}" placeholder="${st.lastWeighing?esc(String(st.lastWeighing.data.grams)):"g"}"></td>
+    <td><input class="fd-r" type="text" inputmode="decimal" value="${escAttr(r!=null?String(r):(st.lastRation!=null?String(st.lastRation):""))}"></td>
+    <td class="fd-st">${st.todayDone?"✓":""}${st.belowFloor?` <span class="fd-floor">⚠ below ${RESTRICTION_FLOOR}%</span>`:""}</td></tr>`;
+}
+function feedingHeadHTML(board){
+  return `<thead><tr><th>Animal</th>${board?"<th>Day</th>":""}<th>Now</th>${board?"<th>Last 3 weeks</th>":""}<th>Weight (g)</th><th>Ration (g)</th><th></th></tr></thead>`;
+}
+// Reads the typed lines back; returns how many were saved, or null if one
+// needs checking (said in a toast, and nothing is saved).
+function saveFeedingRows(root,date){
+  const todo=[], bad=[];
+  root.querySelectorAll(".fd-row").forEach(tr=>{
+    const a=DB.animals.find(x=>x.id===tr.dataset.a); if(!a)return;
+    const gs=tr.querySelector(".fd-g").value.trim().replace(",","."), rs=tr.querySelector(".fd-r").value.trim().replace(",",".");
+    if(!gs)return;                                   // an untouched line records nothing
+    const g=+gs, r=rs===""?null:+rs;
+    if(!(g>0)){ bad.push(a.name); return; }
+    // a "ration" the size of a mouse is a weight typed in the wrong box
+    if(r!=null&&(!(r>=0)||r>10)){ bad.push(a.name+" (ration "+rs+"g?)"); return; }
+    todo.push([a,g,r]);
+  });
+  if(bad.length){ toast("Check: "+bad.join(", ")); return null; }
+  todo.forEach(([a,g,r])=>recordRestrictionDay(a,date,g,r));
+  if(todo.length) persist();
+  return todo.length;
+}
+/* The weight over the last three weeks as a share of baseline, with the 90%
+   target and the 85% floor drawn across — enough to see "still going down",
+   "holding" or "dropping too fast" without opening the animal. */
+function restrictionCurveSVG(a,st){
+  const W=120,H=34, end=todayDateStr(), start=addDaysISO(end,-20).slice(0,10);
+  const b=st.baseline&&+st.baseline.grams; if(!b) return "";
+  const pts=diaryWeightEntries(a).filter(e=>e.date>=start&&e.date<=end&&e.data&&e.data.grams!=null&&e.data.grams!=="")
+    .map(e=>({d:calDayDelta(start,e.date),p:+e.data.grams/b*100}));
+  const lo=80, hi=105, y=p=>H-2-(Math.max(lo,Math.min(hi,p))-lo)/(hi-lo)*(H-4), x=d=>2+d/20*(W-4);
+  const line=(p,c,dash)=>`<line x1="2" x2="${W-2}" y1="${y(p).toFixed(1)}" y2="${y(p).toFixed(1)}" stroke="${c}" stroke-width="1" ${dash?'stroke-dasharray="3 3"':""}/>`;
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="weight, last 3 weeks">
+    ${line(RESTRICTION_TARGET,"var(--gcamp)",true)}${line(RESTRICTION_FLOOR,"var(--overdue)",true)}
+    ${pts.length>1?`<polyline fill="none" stroke="var(--ink)" stroke-width="1.5" points="${pts.map(q=>x(q.d).toFixed(1)+","+y(q.p).toFixed(1)).join(" ")}"/>`:""}
+    ${pts.map(q=>`<circle cx="${x(q.d).toFixed(1)}" cy="${y(q.p).toFixed(1)}" r="1.8" fill="${q.p<RESTRICTION_FLOOR?"var(--overdue)":"var(--ink)"}"/>`).join("")}</svg>`;
+}
 function openFeedingModal(date){
   const f=feedingOn(date);
   if(!f){ toast("Nobody is on restriction that day"); return; }
-  const pctTxt=st=>st.pct==null?"—":Math.round(st.pct)+"%";
-  const row=({a,st})=>{
-    const w=st.todayWeighing, g=w&&w.data&&w.data.grams!=null&&w.data.grams!==""?w.data.grams:"";
-    const r=w?rationOf(w):null;
-    const phase=st.phase==="maintaining"
-      ?`<span class="fd-ph fd-ready">ready · maintaining</span>`
-      :`<span class="fd-ph">reaching${st.daysToTarget!=null?` · ~${st.daysToTarget}d to go`:""}</span>`;
-    const trend=st.perDay!=null?`${st.perDay>0?"+":""}${(Math.round(st.perDay*100)/100)}g/day`:"";
-    return `<tr class="fd-row${st.belowFloor?" fd-warn":""}" data-a="${escAttr(a.id)}">
-      <td><button type="button" class="ov-link fd-open" data-a="${escAttr(a.id)}">${esc(a.name)}</button><div>${phase}</div></td>
-      <td class="fd-num"><b>${pctTxt(st)}</b><div class="ov-dim">of ${st.baseline?st.baseline.grams+"g":"?"}${trend?" · "+esc(trend):""}</div></td>
-      <td><input class="fd-g" type="text" inputmode="decimal" value="${escAttr(String(g))}" placeholder="${st.lastWeighing?esc(String(st.lastWeighing.data.grams)):"g"}"></td>
-      <td><input class="fd-r" type="text" inputmode="decimal" value="${escAttr(r!=null?String(r):(st.lastRation!=null?String(st.lastRation):""))}"></td>
-      <td class="fd-st">${st.todayDone?"✓":""}${st.belowFloor?` <span class="fd-floor">⚠ below ${RESTRICTION_FLOOR}%</span>`:""}</td></tr>`;
-  };
   modal(`<h3>🍽 Feeding — ${esc(fmtDMY(date))}</h3>
     <div class="ov-dim" style="font-size:12px;margin:-4px 0 10px">Target ${RESTRICTION_TARGET}% of baseline · floor ${RESTRICTION_FLOOR}%.
       Type today's weight; the ration starts at the last one given.</div>
-    <div class="pg-wrap"><table class="pg-tbl fd-tbl"><thead><tr><th>Animal</th><th>Now</th><th>Weight (g)</th><th>Ration (g)</th><th></th></tr></thead>
-      <tbody>${f.rows.map(row).join("")}</tbody></table></div>
+    <div class="pg-wrap"><table class="pg-tbl fd-tbl">${feedingHeadHTML(false)}
+      <tbody>${f.rows.map(({a,st})=>feedingRowHTML(a,st)).join("")}</tbody></table></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn accent" id="fd_save">Save</button></div>`,{wide:true});
   const root=document.getElementById("modal");
   root.querySelectorAll(".fd-open").forEach(b=>b.onclick=()=>{ closeModal(); animalModal(b.dataset.a); });
   document.getElementById("fd_save").onclick=()=>{
-    let n=0, bad=[];
-    root.querySelectorAll(".fd-row").forEach(tr=>{
-      const a=DB.animals.find(x=>x.id===tr.dataset.a); if(!a)return;
-      const gs=tr.querySelector(".fd-g").value.trim().replace(",","."), rs=tr.querySelector(".fd-r").value.trim().replace(",",".");
-      if(!gs)return;                                   // an untouched line records nothing
-      const g=+gs, r=rs===""?null:+rs;
-      if(!(g>0)){ bad.push(a.name); return; }
-      // a "ration" the size of a mouse is a weight typed in the wrong box
-      if(r!=null&&(!(r>=0)||r>10)){ bad.push(a.name+" (ration "+rs+"g?)"); return; }
-      recordRestrictionDay(a,date,g,r); n++;
-    });
-    if(bad.length){ toast("Check: "+bad.join(", ")); return; }
-    persist(); closeModal(); render();
+    const n=saveFeedingRows(root,date); if(n==null) return;
+    closeModal(); render();
     toast(n?`Feeding saved for ${n} animal${n===1?"":"s"}`:"Nothing entered");
   };
+}
+/* The Animals tab's "Show as: Restriction": everyone on restriction today, as
+   one table — where each stands, the last three weeks, and today's weight and
+   ration typed straight in. Ended restrictions follow, for a month, so a
+   period that just closed is still in view. Reads the same filters as the
+   list above it. */
+function restrictionBoardEl(list){
+  const today=todayDateStr(), monthAgo=addDaysISO(today,-30).slice(0,10);
+  const on=list.map(a=>({a,st:restrictionStatus(a,today)})).filter(x=>x.st)
+    .sort((x,y)=>(y.st.belowFloor-x.st.belowFloor)||String(x.a.name).localeCompare(String(y.a.name),undefined,{numeric:true}));
+  const ended=list.flatMap(a=>animalRestrictions(a).filter(r=>r.end&&r.end<today&&r.end>=monthAgo).map(r=>({a,r})))
+    .sort((x,y)=>y.r.end.localeCompare(x.r.end));
+  const el=document.createElement("div"); el.className="rb";
+  const fed=on.filter(x=>x.st.todayDone).length, low=on.filter(x=>x.st.belowFloor).length;
+  el.innerHTML=on.length?`
+    <div class="rb-head"><b>${on.length} on restriction</b>
+      <span class="ov-dim">fed today ${fed}/${on.length}${low?` · <span class="fd-floor">${low} below ${RESTRICTION_FLOOR}%</span>`:""} · target ${RESTRICTION_TARGET}% · floor ${RESTRICTION_FLOOR}%</span>
+      <button class="btn accent" id="rb_save" style="margin-left:auto">Save today</button></div>
+    <div class="pg-wrap"><table class="pg-tbl fd-tbl rb-tbl">${feedingHeadHTML(true)}
+      <tbody>${on.map(({a,st})=>feedingRowHTML(a,st,{board:true})).join("")}</tbody></table></div>`
+    :`<div class="ov-dim" style="margin:6px 0 14px">Nobody${list.length<DB.animals.length?" matching these filters":""} is on restriction. A restriction is started from the animal's window.</div>`;
+  // an animal on restriction still needs feeding when a filter hides it —
+  // excluded from the analysis is not excluded from the cage
+  const shown=new Set(list.map(a=>a.id));
+  const hidden=DB.animals.filter(a=>!shown.has(a.id)&&restrictionStatus(a,today));
+  if(hidden.length) el.insertAdjacentHTML("beforeend",`<div class="rb-hidden">Also on restriction, hidden by the filters:
+    ${hidden.map(a=>{ const st=restrictionStatus(a,today);
+      return `<button type="button" class="ov-link fd-open" data-a="${escAttr(a.id)}">${esc(a.name)}</button>${a.excluded?" (excluded)":a.practice?" (practice)":""}${st.todayDone?" ✓":" — not fed today"}`; }).join(", ")}
+    <button type="button" class="ov-btn" id="rb_clear">show everyone</button></div>`);
+  if(ended.length) el.insertAdjacentHTML("beforeend",`<div class="ov-sub" style="margin-top:18px">Ended in the last month</div>
+    ${ended.map(({a,r})=>`<div class="rb-ended"><button type="button" class="ov-link fd-open" data-a="${escAttr(a.id)}">${esc(a.name)}</button>
+      <span class="ov-dim">${esc(fmtDMY(r.start))} – ${esc(fmtDMY(r.end))}${r.endReason?" · "+esc(r.endReason):""}</span></div>`).join("")}`);
+  el.querySelectorAll(".fd-open").forEach(b=>b.onclick=()=>animalModal(b.dataset.a));
+  const cl=el.querySelector("#rb_clear"); if(cl) cl.onclick=()=>{ clearAnimalFilters(); };
+  const sv=el.querySelector("#rb_save");
+  if(sv) sv.onclick=()=>{ const n=saveFeedingRows(el,today); if(n==null) return;
+    renderAnimals(); toast(n?`Saved for ${n} animal${n===1?"":"s"}`:"Nothing entered"); };
+  return el;
 }
 // The count and any warning lead, because the calendar's compact chips show
 // only their first line.
@@ -15077,7 +15152,7 @@ function renderAnimals(){
       <input type="text" id="a_search" value="${escAttr(animalSearch)}" placeholder="Search"
         style="flex:1 1 160px;max-width:340px;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:7px 11px;color:var(--ink);font-size:13px">
       <div class="af-sortbar"><span class="af-label af-sort">▦<span class="af-word"> Show as</span></span>
-        <select id="a_groupby" class="af-sel af-sort">${[["none","List"],["cage","Cages"]]
+        <select id="a_groupby" class="af-sel af-sort">${[["none","List"],["cage","Cages"],["restriction","Restriction"]]
           .map(o=>`<option value="${o[0]}" ${animalGroupBy===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select>
         <button id="a_summary" class="af-sel af-sort" title="Which facts appear in the grey line beside each animal"
           style="cursor:pointer;text-align:left">☰<span class="af-word"> Summary</span></button>
@@ -15302,6 +15377,8 @@ function renderAnimals(){
       : emptyBox("No animals yet.","＋ Animal",()=>animalModal(null)));
   } else if(animalGroupBy==="none"){
     list.forEach(a=>host.appendChild(animalCard(a)));
+  } else if(animalGroupBy==="restriction"){
+    host.appendChild(restrictionBoardEl(list));
   } else {
     // A summary, not the full list re-sectioned: one small tile per cage that
     // can be taken in at a glance, several across the screen at once, so the
