@@ -228,6 +228,14 @@
   .cal-feed-done:not(.cal-feed-warn){opacity:.6}   /* a warning never fades with the rest */
   .cal-feed-warn{border-left-color:var(--overdue);background:color-mix(in srgb,var(--overdue) 16%,var(--panel))}
   .cal-feed-warn b{color:var(--overdue)}
+  /* each kind's own part of the form */
+  .kf-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:5px 0}
+  .kf-row label{margin:0}
+  .kf-check{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--ink-dim)}
+  .kf-check input{width:auto}
+  .kf-note{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:4px 0}
+  .kf-warn{color:var(--amber);font-size:11.5px;margin:3px 0}
+  .kf-imaging{border-left:2px solid var(--line2);padding-left:9px;margin:6px 0}
   .fd-tbl input{width:72px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 7px;font-size:12.5px}
   .fd-num{font-family:var(--mono);font-size:11px}
   .fd-ph{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
@@ -14069,7 +14077,286 @@ function daysSinceDate(a,iso){
 // entry" dropdown, the Entry Types materials tab) — a sorted copy, not an
 // in-place sort, so nothing that stores an index into the raw
 // DB.config.diaryTypes array (see paintDTRows) gets its indices scrambled.
-function diaryTypeDefs(){ return [...(DB.config.diaryTypes||[])].sort((a,b)=>(a.label||"").localeCompare(b.label||"")); }
+/* ═══════════════════════════ ARBOR 2.0: RECORD KINDS ═══════════════════════════
+   What can be recorded about an animal is no longer a list the user edits.
+   Each kind is designed for one real activity (see docs/arbor-2.0-design.md),
+   with its own fields, its own form and its own meaning, defined here in code.
+   The 1.0 storage keys are kept (weight, surgery, postop, training, microscopy,
+   perfusion, histology) so existing rows stay where they are and keep syncing
+   through the same engine; the migration reshapes their data.
+   `fields` are the plain values every kind has — they still drive the export
+   and the generic conditions — and a kind with more to it (behaviour settings,
+   imaging fields of view, slides, verification) adds its own form part. */
+const RECORD_KINDS=[
+  {key:"weight", label:"Weighing", icon:"⚖", color:"#54e08a", timeline:false, core:true,
+    fields:[{key:"grams",label:"Weight (g)",type:"number"},{key:"ration",label:"Ration (g)",type:"number"}]},
+  {key:"surgery", label:"Surgery", icon:"🔪", color:"#f2b756", timeline:true, core:true, defaultDuration:120,
+    fields:[{key:"duration",label:"Duration (min)",type:"number"},{key:"operator",label:"Operator",type:"text"},
+            {key:"complications",label:"Complications",type:"text"}]},
+  {key:"postop", label:"Post-op check", icon:"🩹", color:"#ff5f6d", timeline:false, core:true,
+    fields:[{key:"given",label:"Post-op given",type:"yesno"},
+            {key:"condition",label:"Condition",type:"select",options:["good","watch","poor"]}]},
+  {key:"training", label:"Behaviour session", icon:"🎓", color:"#a98cff", timeline:true, core:true, defaultDuration:60,
+    fields:[{key:"stage",label:"Stage",type:"select",options:["beginner","middle","expert"]},
+            {key:"trials",label:"Trials",type:"number"},{key:"success",label:"Success %",type:"number"},
+            {key:"length",label:"Session length (min)",type:"number"},{key:"dataAt",label:"Data location",type:"text"}]},
+  {key:"microscopy", label:"Imaging session", icon:"🔬", color:"#e0d454", timeline:true, core:true, defaultDuration:90,
+    fields:[{key:"purpose",label:"Purpose",type:"select",options:["structural","functional"]},
+            {key:"laser",label:"Laser power",type:"text"},{key:"channels",label:"Channels",type:"text"},
+            {key:"dataAt",label:"Data location",type:"text"},
+            {key:"status",label:"Analysis",type:"select",options:["raw","processed","analysed"]}]},
+  {key:"perfusion", label:"Perfusion", icon:"💉", color:"#ff8a6b", timeline:true, core:true, defaultDuration:60,
+    fields:[{key:"operator",label:"Done by",type:"text"}]},
+  {key:"histology", label:"Slicing", icon:"🎞", color:"#7db4ff", timeline:true, core:true, defaultDuration:120,
+    fields:[{key:"operator",label:"Sliced by",type:"text"},
+            {key:"plane",label:"Plane",type:"select",options:["coronal","sagittal"]},
+            {key:"thickness",label:"Thickness (µm)",type:"number"},{key:"storage",label:"Stored at",type:"text"}]},
+  {key:"histo", label:"Histology", icon:"🧫", color:"#5fa8d3", timeline:true, core:true, defaultDuration:120,
+    fields:[{key:"operator",label:"Done by",type:"text"},{key:"dataAt",label:"Scans at",type:"text"}]}
+];
+function diaryTypeDefs(){ return RECORD_KINDS.slice(); }
+/* ---- behaviour tasks ----
+   Every task shares the session skeleton (stage, trials, success %, length,
+   data location — RECORD_KINDS.training). What differs is each task's own
+   settings. Lever's are designed; a task Arbor knows less about keeps a short
+   list of named settings in the task library until it gets a design of its
+   own. Settings carry from the animal's last session of the same task. */
+const BEHAVIOUR_TASKS={
+  Lever:{settings:[{key:"threshold",label:"Threshold",type:"number"},
+                   {key:"freq",label:"Sound frequency (Hz)",type:"number"},
+                   {key:"angle",label:"Table angle",type:"number"}]}
+};
+function behaviourTaskNames(){
+  const used=(DB.animals||[]).flatMap(a=>(a.diary||[]).filter(e=>e.type==="training").map(e=>e.data&&e.data.task)).filter(Boolean);
+  return [...new Set(Object.keys(BEHAVIOUR_TASKS).concat((DB.config.taskLib||[]).map(t=>t.name).filter(Boolean)).concat(used))];
+}
+function behaviourSettingsDef(task){
+  if(BEHAVIOUR_TASKS[task]) return BEHAVIOUR_TASKS[task].settings;
+  const lib=(DB.config.taskLib||[]).find(t=>t.name===task);
+  // the generic Time / Trials / Success params are session fields now
+  return ((lib&&lib.params)||[]).filter(p=>!/^(time|trials|success)/i.test(p.label||""))
+    .map(p=>({key:p.key,label:p.label,type:p.type==="number"?"number":"text"}));
+}
+function lastBehaviourSession(a,task,excludeId){
+  return (a.diary||[]).filter(e=>e.type==="training"&&e.id!==excludeId&&e.data&&e.data.task===task&&e.data.settings)
+    .sort((x,y)=>String(y.date).localeCompare(String(x.date)))[0]||null;
+}
+// The table angle is kept the same within an animal; a different one is
+// almost always a slip worth a second look.
+function angleDiffers(a,angle,excludeId){
+  if(angle==null||angle==="") return null;
+  const prev=(a.diary||[]).filter(e=>e.type==="training"&&e.id!==excludeId&&e.data&&e.data.settings&&e.data.settings.angle!=null&&e.data.settings.angle!=="")
+    .sort((x,y)=>String(y.date).localeCompare(String(x.date)))[0];
+  return prev&&+prev.data.settings.angle!==+angle?prev.data.settings.angle:null;
+}
+
+/* ---- fields of view belong to the animal ----
+   Imaging returns to the same fields across days, so each animal keeps its
+   own list; a session says which it imaged, and each field's settings carry
+   from the last session that imaged it. Dendrites (and whether each has been
+   reconstructed) live on their field of view. */
+function animalFovs(a){ return Array.isArray(a&&a.fovs)?a.fovs.filter(f=>f&&f.id):[]; }
+const FOV_SETTINGS=[{key:"depth",label:"Depth (µm)"},{key:"zoom",label:"Zoom"},{key:"planes",label:"Planes"},
+  {key:"frames",label:"Frames / plane"},{key:"res",label:"Resolution"}];
+
+/* ---- each kind's own part of the form ----
+   html(ctx) adds to the plain fields, read(host,ctx,data) folds what it holds
+   into the record's data, wire(host,ctx) makes it live. ctx = {a, e (the
+   record being edited, if any), d (its data), date}. */
+const IN="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 7px;font-size:12px";
+const KIND_FORMS={
+  weight:{
+    html:({a,date})=>{
+      const st=restrictionStatus(a,date), ctx=weighingContext(a,date);
+      return `<div class="kf-note">${esc(ctx)}${st?` · restriction day ${st.daysOn}, target ${RESTRICTION_TARGET}% of ${st.baseline?st.baseline.grams+"g":"?"}`:""}</div>`;
+    }
+  },
+  training:{
+    html:({a,e,d})=>{
+      const task=d.task||"Lever";
+      return `<div class="kf-row"><label>Task</label>
+          <select class="kf-task" style="${IN}">${behaviourTaskNames().map(n=>`<option ${n===task?"selected":""}>${esc(n)}</option>`).join("")}<option value="__new">＋ another task…</option></select>
+          <input class="kf-newtask" placeholder="task name" hidden style="${IN}"></div>
+        <div class="kf-settings"></div>
+        <label class="kf-check"><input type="checkbox" class="kf-imaged" ${d.imaged?"checked":""}> imaged during this session</label>
+        <div class="kf-imaging" ${d.imaged?"":"hidden"}></div>
+        <div class="kf-stagehint"></div>`;
+    },
+    wire:(host,{a,e,d})=>{
+      const sel=host.querySelector(".kf-task"), nt=host.querySelector(".kf-newtask");
+      const paintSettings=()=>{
+        const task=sel.value==="__new"?nt.value.trim():sel.value;
+        const defs=behaviourSettingsDef(task);
+        const cur=(d.task===task&&d.settings)?d.settings:((lastBehaviourSession(a,task,e&&e.id)||{data:{}}).data.settings||{});
+        host.querySelector(".kf-settings").innerHTML=defs.length?`<div class="dg-metrics-grid">${defs.map(f=>
+          `<div><label>${esc(f.label)}</label><input class="kf-set" data-key="${escAttr(f.key)}" value="${escAttr(cur[f.key]!=null?String(cur[f.key]):"")}" inputmode="${f.type==="number"?"decimal":"text"}" style="${IN}"></div>`).join("")}</div>
+          <div class="kf-note">Settings start from ${esc(a.name)}'s last ${esc(task)} session.</div><div class="kf-warn kf-anglewarn"></div>`:"";
+        const ang=host.querySelector('.kf-set[data-key="angle"]');
+        const check=()=>{ const w=host.querySelector(".kf-anglewarn"); if(!w||!ang)return;
+          const prev=angleDiffers(a,ang.value.trim(),e&&e.id);
+          w.textContent=prev!=null?`⚠ ${a.name}'s table angle has been ${prev} — check this one`:""; };
+        if(ang){ ang.addEventListener("input",check); check(); }
+        // the evidence for moving stage — Arbor shows it, you decide
+        const sessions=(a.diary||[]).filter(x=>x.type==="training"&&x.data&&x.data.task===task&&x.id!==(e&&e.id)&&entryHappened(x))
+          .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+        const stage=(sessions.length?sessions[sessions.length-1].data.stage:null)||"beginner";
+        const atStage=sessions.filter(x=>(x.data.stage||"beginner")===stage).length;
+        const recent=sessions.slice(-3).map(x=>x.data.success).filter(v=>v!=null&&v!=="");
+        host.querySelector(".kf-stagehint").innerHTML=sessions.length
+          ?`<div class="kf-note">Currently <b>${esc(stage)}</b> · ${atStage} session${atStage===1?"":"s"} at this stage${recent.length?` · last success ${recent.join("%, ")}%`:""}</div>`:"";
+      };
+      sel.addEventListener("change",()=>{ nt.hidden=sel.value!=="__new"; paintSettings(); });
+      nt.addEventListener("input",paintSettings);
+      paintSettings();
+      const im=host.querySelector(".kf-imaged"), box=host.querySelector(".kf-imaging");
+      const paintImg=()=>{ box.innerHTML=imagingPartHTML(a,d); };
+      im.addEventListener("change",()=>{ box.hidden=!im.checked; if(im.checked)paintImg(); });
+      if(im.checked) paintImg();
+    },
+    read:(host,{a},data)=>{
+      const sel=host.querySelector(".kf-task");
+      const task=sel.value==="__new"?host.querySelector(".kf-newtask").value.trim():sel.value;
+      data.task=task;
+      if(task&&!behaviourTaskNames().includes(task)) (DB.config.taskLib=DB.config.taskLib||[]).push({name:task,params:[]});
+      const set={}; host.querySelectorAll(".kf-set").forEach(i=>{ const v=i.value.trim(); if(v!=="") set[i.dataset.key]=isNaN(+v)?v:+v; });
+      data.settings=set;
+      data.imaged=!!host.querySelector(".kf-imaged").checked;
+      if(data.imaged) Object.assign(data,readImagingPart(host,a)); else delete data.fovs;
+    }
+  },
+  microscopy:{
+    html:({a,d})=>`<div class="kf-imaging">${imagingPartHTML(a,d)}</div>`,
+    read:(host,{a},data)=>Object.assign(data,readImagingPart(host,a))
+  },
+  surgery:{
+    html:({a,e,d})=>{
+      const injs=e?injectionsOfSurgery(a,e):[];
+      return `<div class="kf-row">
+          <label class="kf-check"><input type="checkbox" class="kf-hp" ${d.headpost?"checked":""}> head-post fitted</label>
+          <label class="kf-check"><input type="checkbox" class="kf-win" ${d.window?"checked":""}> window fitted</label></div>
+        <div class="kf-note">${injs.length?"Injections in this surgery: "+injs.map(i=>esc((i.virus||"?")+(i.siteRegion?" → "+i.siteRegion:""))).join(" · "):"No injections recorded against this surgery yet"} — injections are edited in the animal's Details.</div>
+        <datalist id="kf_people">${labPeople().map(n=>`<option value="${escAttr(n)}">`).join("")}</datalist>`;
+    },
+    wire:host=>{ host.querySelectorAll('.dg-field[data-key="operator"]').forEach(i=>i.setAttribute("list","kf_people")); },
+    read:(host,ctx,data)=>{ data.headpost=!!host.querySelector(".kf-hp").checked; data.window=!!host.querySelector(".kf-win").checked; }
+  },
+  perfusion:{
+    html:({d})=>`<div class="kf-row">
+        <label>Moved to PBS on</label><input type="date" class="kf-pbs" value="${escAttr(d.pbs||"")}" style="${IN}">
+        <label class="kf-check"><input type="checkbox" class="kf-np" ${d.notProcessed?"checked":""}> brain will not be processed</label></div>
+      <datalist id="kf_people">${labPeople().map(n=>`<option value="${escAttr(n)}">`).join("")}</datalist>`,
+    wire:host=>{ host.querySelectorAll('.dg-field[data-key="operator"]').forEach(i=>i.setAttribute("list","kf_people")); },
+    read:(host,ctx,data)=>{ const v=host.querySelector(".kf-pbs").value; if(v)data.pbs=v; else delete data.pbs;
+      data.notProcessed=!!host.querySelector(".kf-np").checked; }
+  },
+  histology:{
+    html:({d})=>`<div class="kf-slides">${(d.slides&&d.slides.length?d.slides:[{n:1,aps:[]}]).map(slideRowHTML).join("")}</div>
+      <button type="button" class="ov-btn kf-addslide">＋ slide</button>
+      <div class="kf-note">Uppermost slice is the most anterior. Type the first AP and press ↧ to fill the rest by the thickness — then adjust any that differ.</div>`,
+    wire:host=>{
+      host.addEventListener("click",ev=>{
+        if(ev.target.closest(".kf-addslide")){ const box=host.querySelector(".kf-slides");
+          box.insertAdjacentHTML("beforeend",slideRowHTML({n:box.children.length+1,aps:[]})); return; }
+        const fill=ev.target.closest(".kf-fill"); if(fill){
+          const row=fill.closest(".kf-slide"), aps=row.querySelector(".kf-aps");
+          const first=parseFloat((aps.value.split(/[,\s]+/)[0]||"").replace(",","."));
+          const th=+((host.querySelector('.dg-field[data-key="thickness"]')||{}).value)||50;
+          const n=+row.querySelector(".kf-n").value||6;
+          if(isNaN(first)){ toast("Type the first slice's AP"); return; }
+          aps.value=Array.from({length:n},(_,i)=>(first-i*th/1000).toFixed(2)).join(", "); return; }
+        const del=ev.target.closest(".kf-delslide"); if(del) del.closest(".kf-slide").remove();
+      });
+    },
+    read:(host,ctx,data)=>{
+      data.slides=[...host.querySelectorAll(".kf-slide")].map((r,i)=>({n:i+1,
+        aps:r.querySelector(".kf-aps").value.split(/[,\s]+/).map(x=>x.trim().replace(/^\+/,"")).filter(Boolean).map(Number).filter(x=>!isNaN(x))}))
+        .filter(sl=>sl.aps.length);
+    }
+  },
+  histo:{
+    html:({a,d})=>{
+      const injs=animalInjections(a);
+      return `${injs.length?`<label>Verifying the procedure</label>${injs.map((i,ix)=>`<div class="kf-row">
+          <span style="flex:1">${esc((i.virus||"?")+(i.siteRegion?" → "+i.siteRegion:""))}</span>
+          <select class="kf-verif" data-ix="${ix}" style="${IN}">${["","confirmed","off-target","not expressed"].map(v=>`<option value="${v}" ${(i.verified||"")===v?"selected":""}>${v||"—"}</option>`).join("")}</select></div>`).join("")}`:""}
+        <label style="margin-top:6px">Findings</label>
+        <div class="kf-finds">${(d.findings&&d.findings.length?d.findings:[{}]).map(findingRowHTML).join("")}</div>
+        <button type="button" class="ov-btn kf-addfind">＋ finding</button>`;
+    },
+    wire:host=>host.addEventListener("click",ev=>{
+      if(ev.target.closest(".kf-addfind")) host.querySelector(".kf-finds").insertAdjacentHTML("beforeend",findingRowHTML({}));
+      const del=ev.target.closest(".kf-delfind"); if(del) del.closest(".kf-find").remove();
+    }),
+    read:(host,{a},data)=>{
+      // verification is a fact about the injection, so it is written there —
+      // the animal's procedure then says what histology found
+      const injs=animalInjections(a);
+      host.querySelectorAll(".kf-verif").forEach(sel=>{ const inj=injs[+sel.dataset.ix]; if(inj){ if(sel.value) inj.verified=sel.value; else delete inj.verified; } });
+      data.findings=[...host.querySelectorAll(".kf-find")].map(r=>({region:r.querySelector(".kf-freg").value.trim(),
+        dir:r.querySelector(".kf-fdir").value, note:r.querySelector(".kf-fnote").value.trim(), slides:r.querySelector(".kf-fsl").value.trim()}))
+        .filter(f=>f.region||f.note);
+    }
+  }
+};
+function slideRowHTML(sl){
+  return `<div class="kf-slide kf-row"><span class="kf-note" style="flex:0 0 52px">Slide ${sl.n}</span>
+    <input class="kf-aps" value="${escAttr((sl.aps||[]).join(", "))}" placeholder="AP of each slice, top first" style="flex:1;${IN}">
+    <input class="kf-n" type="number" min="1" max="12" value="${(sl.aps||[]).length||6}" title="slices on this slide" style="width:48px;${IN}">
+    <button type="button" class="ov-btn kf-fill" title="fill down by the thickness">↧</button>
+    <button type="button" class="ov-btn kf-delslide">✕</button></div>`;
+}
+function findingRowHTML(f){
+  return `<div class="kf-find kf-row">
+    <input class="kf-freg" value="${escAttr(f.region||"")}" placeholder="region" style="width:110px;${IN}">
+    <select class="kf-fdir" style="${IN}">${["labelled","projects to","receives from"].map(v=>`<option ${f.dir===v?"selected":""}>${v}</option>`).join("")}</select>
+    <input class="kf-fnote" value="${escAttr(f.note||"")}" placeholder="note" style="flex:1;${IN}">
+    <input class="kf-fsl" value="${escAttr(f.slides||"")}" placeholder="slides" style="width:70px;${IN}">
+    <button type="button" class="ov-btn kf-delfind">✕</button></div>`;
+}
+/* The imaging part, shared by an imaging session and an imaged behaviour
+   session: which of the animal's fields of view, each with its settings
+   (carried from the field's last session), plus adding a new field. */
+function imagingPartHTML(a,d){
+  const used=new Map(((d&&d.fovs)||[]).map(f=>[f.id,f]));
+  const fovs=animalFovs(a);
+  return `<div class="kf-note">Fields of view — settings start from each field's last session.</div>
+    ${fovs.map(f=>{ const v=used.get(f.id)||f;
+      return `<div class="kf-fov kf-row" data-fov="${escAttr(f.id)}">
+        <label class="kf-check" style="flex:0 0 110px"><input type="checkbox" class="kf-fovon" ${used.has(f.id)?"checked":""}> ${esc(f.name)}</label>
+        ${FOV_SETTINGS.map(k=>`<input class="kf-fs" data-key="${k.key}" value="${escAttr(v[k.key]!=null?String(v[k.key]):"")}" placeholder="${escAttr(k.label)}" title="${escAttr(k.label)}" style="width:72px;${IN}">`).join("")}
+      </div>`; }).join("")||`<div class="kf-note">${esc(a.name)} has no fields of view yet.</div>`}
+    <div class="kf-row"><input class="kf-newfov" placeholder="＋ new field of view (name)" style="flex:1;${IN}"></div>`;
+}
+function readImagingPart(host,a){
+  const out=[];
+  a.fovs=animalFovs(a);
+  host.querySelectorAll(".kf-fov").forEach(row=>{
+    if(!row.querySelector(".kf-fovon").checked)return;
+    const f=a.fovs.find(x=>x.id===row.dataset.fov); if(!f)return;
+    const v={id:f.id};
+    row.querySelectorAll(".kf-fs").forEach(i=>{ const t=i.value.trim(); if(t!==""){ v[i.dataset.key]=isNaN(+t)?t:+t; f[i.dataset.key]=v[i.dataset.key]; } });
+    out.push(v);
+  });
+  const nm=(host.querySelector(".kf-newfov")||{}).value;
+  if(nm&&nm.trim()){ const f={id:uid("fov_"),name:nm.trim(),dendrites:[]}; a.fovs.push(f); out.push({id:f.id}); }
+  return {fovs:out};
+}
+// The people a record can name: this workspace's lab members.
+function labPeople(){
+  const names=new Set([(DB.me&&DB.me.name)||""]);
+  Object.values(DB.sharedMembers||{}).forEach(m=>{ if(m&&m.name) names.add(m.name); });
+  return [...names].filter(Boolean).sort();
+}
+// Why a weighing was taken — worked out, never tagged by hand.
+function weighingContext(a,date){
+  const d=String(date).slice(0,10);
+  if(restrictionAt(a,d)) return "restriction weighing";
+  const near=surgeriesOf(a).find(s=>Math.abs(calDayDelta(s.date,d))<=3);
+  if(near) return d<String(near.date).slice(0,10)?"pre-op weighing":"post-op weighing";
+  return "routine weighing";
+}
+
+function recordKind(key){ return RECORD_KINDS.find(k=>k.key===key)||null; }
 /* An entry shared by someone else may use a type this workspace has never
    heard of. Its definition travelled with it (see buildDefs), kept apart from
    this person's own library so neither overwrites the other — so a shared
@@ -14095,14 +14382,9 @@ function diaryTypeExists(key){
 }
 // every type that can be chosen here: your own, plus the ones you are being
 // shown from a shared project
-function allDiaryTypeDefs(){
-  const mine=diaryTypeDefs(), have=new Set(mine.map(t=>t.key)), out=[...mine];
-  Object.keys(DB.sharedDefs||{}).forEach(id=>
-    ((DB.sharedDefs[id]||{}).diaryTypes||[]).forEach(t=>{
-      if(t&&t.key&&!have.has(t.key)){ have.add(t.key); out.push(Object.assign({},t,{fromShared:true})); }
-    }));
-  return out.sort((a,b)=>(a.label||"").localeCompare(b.label||""));
-}
+// Record kinds are defined in code and identical on every device, so there is
+// nothing for a collaborator to lend: everyone has the same list.
+function allDiaryTypeDefs(){ return RECORD_KINDS.slice(); }
 /* Whether an entry belongs on the Timeline, asked in one place.
    Five render paths each rebuilt this rule from `diaryTypeDefs()`, which lists
    only THIS workspace's types — so an entry of a type read from a shared
@@ -15163,10 +15445,32 @@ function diaryEntrySummaryShort(e,a){
   if(!s||s==="—") return "";
   return s.replace(/ · —$/,"").replace(/^—$/,"");
 }
+/* Each kind says what it is in its own words — "Lever · middle · 120 trials ·
+   78%" rather than a row of "field value" pairs. A kind with nothing special
+   to say falls through to its plain fields. */
+const KIND_SUMMARY={
+  weight:(d,e,a)=>[d.grams!=null&&d.grams!==""?d.grams+"g":"", rationOf(e)!=null?"fed "+rationOf(e)+"g":""],
+  training:d=>[d.task, d.stage, d.trials!=null&&d.trials!==""?d.trials+" trials":"", d.success!=null&&d.success!==""?d.success+"%":"",
+    d.length?d.length+" min":"", d.settings&&d.settings.angle!=null?"angle "+d.settings.angle:"", d.imaged?"imaged":""],
+  microscopy:d=>[d.purpose, (d.fovs||[]).length?(d.fovs.length+" FOV"+(d.fovs.length===1?"":"s")):"", d.status&&d.status!=="raw"?d.status:""],
+  surgery:d=>[d.headpost?"head-post":"", d.window?"window":"", d.duration?d.duration+" min":"", d.operator, d.complications?"⚠ "+d.complications:""],
+  postop:d=>[d.given===true?"post-op given":d.given===false?"not given":"", d.condition],
+  perfusion:d=>[d.operator, d.pbs?"→ PBS "+fmtDMY(d.pbs).slice(0,5):"", d.notProcessed?"not processed":""],
+  histology:d=>[d.plane, d.thickness?d.thickness+"µm":"", (d.slides||[]).length?(d.slides.length+" slide"+(d.slides.length===1?"":"s")+", "+d.slides.reduce((n,s)=>n+s.aps.length,0)+" slices"):"", d.storage],
+  histo:d=>[(d.findings||[]).map(f=>[f.region,f.dir!=="labelled"?f.dir:""].filter(Boolean).join(" ")).join(", ")]
+};
 function diaryEntrySummary(e,a){
   const d=e.data||{};
   const timePrefix=e.time?`${e.time}${e.endTime?"–"+e.endTime:""} · `:"";
-  if(e.type==="training") return timePrefix+([d.task, d.stage, ...trainingMetricsDisplay(e).map(x=>`${x.label} ${x.val}`), d.note].filter(Boolean).join(" · ")||"—");
+  if(KIND_SUMMARY[e.type]){
+    const parts=KIND_SUMMARY[e.type](d,e,a).filter(x=>x!=null&&String(x).trim()!=="");
+    if(entryHasRole(e,"weight")&&a){
+      const wc=weightChangeInfo(a,e);
+      if(wc&&wc.base) parts.push(`${fmtWeightChange(wc.base)} vs baseline`);
+    }
+    const note=diaryNoteOf(d); if(note) parts.push(note);
+    return timePrefix+(parts.join(" · ")||"—");
+  }
   const def=diaryTypeDef(e.type);
   const parts=def.fields.map(f=>{
     const v=d[f.key]; if(v==null||v==="")return null;
@@ -15375,23 +15679,13 @@ function renderAnimals(){
      can record, and what the animal's own window shows. Two tabs rather than
      two buttons: the toolbar has no room to grow, and these are one subject. */
   bar.querySelector("#a_types").onclick=()=>{
-    modal(`<h3>Fields</h3>
-      <div class="sr-tabs" id="fl_tabs">
-        <button type="button" class="on" data-b="entry">Diary entry types</button>
-        <button type="button" data-b="animal">The animal window</button></div>
-      <div id="dtypes_host"></div>
-      <div id="asec_host" hidden></div>
+    /* 2.0: what can be recorded is designed, not configured, so the entry-type
+       editor is gone. What stays is the animal window's own extra fields —
+       profile-level things that belong to the animal itself. */
+    modal(`<h3>Fields on the animal</h3>
+      <div id="asec_host"></div>
       <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
-    renderDiaryTypesLib(document.getElementById("dtypes_host"));
-    const tabs=document.getElementById("fl_tabs");
-    tabs.addEventListener("click",ev=>{
-      const b=ev.target.closest("button"); if(!b)return;
-      tabs.querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b));
-      const animal=b.dataset.b==="animal";
-      document.getElementById("dtypes_host").hidden=animal;
-      document.getElementById("asec_host").hidden=!animal;
-      if(animal) renderAnimalFieldsLib(document.getElementById("asec_host"));
-    });
+    renderAnimalFieldsLib(document.getElementById("asec_host"));
     // a renamed or recoloured type changes what the list behind shows
     document.getElementById("scrim").addEventListener("click",()=>renderAnimals(),{once:true});
   };
@@ -15872,16 +16166,11 @@ function paintDiary(container,a,opts){
   }
   function renderForm(type,d,entryDate,entryTime,entryEndTime){
     d=d||{};
-    const isTraining=type==="training";
-    const fieldsHTML=isTraining ? `
-      <label style="margin-top:6px">Task</label>
-      <div class="dg-taskwrap">
-        <input class="dg-f-task" type="text" autocomplete="off" value="${escAttr(d.task||"")}" placeholder="e.g. 2AFC lick">
-        <div class="dg-tasksuggest"></div>
-      </div>
-      <div class="dg-metrics-host" style="margin-top:6px">${renderMetricsFields(d.task,d.metrics)}</div>
-      <label style="margin-top:4px;display:flex;align-items:center;gap:5px"><input type="checkbox" class="dg-f-savelib" style="width:auto"> save task name to library</label>`
-      : renderTypeFields(type,d,a);
+    // 2.0: the kind's plain fields, then whatever is particular to it
+    const kf=KIND_FORMS[type];
+    const kctx={a,e:editingId?a.diary.find(x=>x.id===editingId):null,d,date:entryDate||selDate};
+    const fieldsHTML=(type==="training"?"":renderTypeFields(type,d,a))+(kf&&kf.html?kf.html(kctx):"")
+      +(type==="training"?renderTypeFields(type,d,a):"");
     const dtVal=(entryDate||selDate)+(entryTime?"T"+entryTime:"");
     const isDone=editingId?!!(a.diary.find(e=>e.id===editingId)||{}).done:false;
     return `<div class="dg-form">
@@ -15896,12 +16185,14 @@ function paintDiary(container,a,opts){
       </div>
       ${fieldsHTML?`<div style="margin-top:6px">${fieldsHTML}</div>`:""}
       <label style="margin-top:6px">Note</label><textarea class="dg-f-note">${esc(diaryNoteOf(d))}</textarea>
-      ${diaryRepeatHTML("dg",editingId?(a.diary.find(e=>e.id===editingId)||{}).seriesRule:null)}
+      <div hidden>${diaryRepeatHTML("dg",null)}</div>
       ${editingId?`<div class="drow" style="margin-top:4px"><button type="button" class="btn danger dg-formdel">Delete entry</button></div>`:""}
       ${formActions()}</div>`;
   }
   function wireForm(host,type,editing){
-    wireDiaryRepeat(host,"dg",editing?editing.seriesRule:null,
+    // repeating series are retired in 2.0 — what recurs is derived (feeding,
+    // post-op checks) or scheduled by a protocol — so none is ever offered
+    wireDiaryRepeat(host,"dg",null,
       ()=>(editing?editing.date:selDate)||todayDateStr());
     // Opened from the Timeline (openCalItem), this modal exists to edit one
     // entry and nothing else — Cancel/Save should close it, not fall back to
@@ -15931,51 +16222,8 @@ function paintDiary(container,a,opts){
       if(!hasTime(dtValue)) endTimeValue="";
     }, 15);
     bindTimeButton(host.querySelector(".dg-f-endtime"), ()=>endTimeValue, v=>{ endTimeValue=v||""; }, 15);
-    if(type==="training"){
-      // swap in the selected task's own parameter fields as its name changes,
-      // and drive a themed suggestion dropdown in place of a native <datalist>
-      // (unstyleable - shows as a jarring plain white browser popup)
-      const taskInput=host.querySelector(".dg-f-task"), metricsHost=host.querySelector(".dg-metrics-host");
-      const suggestBox=host.querySelector(".dg-tasksuggest");
-      let hlIdx=-1;
-      const matches=()=>{
-        const q=taskInput.value.trim().toLowerCase();
-        return (DB.config.taskLib||[]).map(t=>t.name).filter(Boolean).filter(n=>!q||n.toLowerCase().includes(q));
-      };
-      function paintSuggest(){
-        const ms=matches();
-        if(!ms.length){ suggestBox.classList.remove("show"); suggestBox.innerHTML=""; return; }
-        suggestBox.innerHTML=ms.map((n,i)=>`<div class="dg-tsitem${i===hlIdx?" hl":""}" data-n="${escAttr(n)}">${esc(n)}</div>`).join("");
-        suggestBox.classList.add("show");
-      }
-      function selectTask(name){
-        taskInput.value=name;
-        suggestBox.classList.remove("show"); suggestBox.innerHTML="";
-        metricsHost.innerHTML=renderMetricsFields(name, editing?editing.data.metrics:{});
-        taskInput.focus();
-      }
-      taskInput.addEventListener("input",()=>{
-        hlIdx=-1;
-        metricsHost.innerHTML=renderMetricsFields(taskInput.value.trim(), editing?editing.data.metrics:{});
-        paintSuggest();
-      });
-      taskInput.addEventListener("focus",()=>{ hlIdx=-1; paintSuggest(); });
-      taskInput.addEventListener("keydown",e=>{
-        const items=[...suggestBox.querySelectorAll(".dg-tsitem")];
-        if(!items.length)return;
-        if(e.key==="ArrowDown"){ e.preventDefault(); hlIdx=Math.min(hlIdx+1,items.length-1); paintSuggest(); }
-        else if(e.key==="ArrowUp"){ e.preventDefault(); hlIdx=Math.max(hlIdx-1,0); paintSuggest(); }
-        else if(e.key==="Enter"){ if(hlIdx>=0){ e.preventDefault(); selectTask(items[hlIdx].dataset.n); } }
-        else if(e.key==="Escape"){ suggestBox.classList.remove("show"); }
-      });
-      // mousedown (not click) fires before the input's blur, so the selection
-      // registers before blur would otherwise hide the dropdown out from under it
-      suggestBox.addEventListener("mousedown",e=>{
-        const item=e.target.closest(".dg-tsitem"); if(!item)return;
-        e.preventDefault(); selectTask(item.dataset.n);
-      });
-      taskInput.addEventListener("blur",()=>{ setTimeout(()=>suggestBox.classList.remove("show"),120); });
-    }
+    // the kind's own part, made live
+    { const kf=KIND_FORMS[type]; if(kf&&kf.wire) kf.wire(host,{a,e:editing||null,d:(editing&&editing.data)||{},date:(editing&&editing.date)||selDate}); }
     host.querySelector(".dg-save").onclick=()=>{
       const entryDate=(dtValue||selDate).slice(0,10);
       const entryTime=hasTime(dtValue)?dtValue.slice(11,16):null;
@@ -15984,20 +16232,9 @@ function paintDiary(container,a,opts){
       // something nonsensical.
       if(endTimeValue&&entryTime&&endTimeValue<=entryTime){ toast("End time must be after the start time — not saved"); }
       const entryEndTime=(entryTime&&endTimeValue&&endTimeValue>entryTime)?endTimeValue:null;
-      let data={};
-      if(type==="training"){
-        const taskName=host.querySelector(".dg-f-task").value.trim();
-        if(host.querySelector(".dg-f-savelib").checked && taskName && !(DB.config.taskLib||[]).some(t=>t.name===taskName)){
-          (DB.config.taskLib=DB.config.taskLib||[]).push({name:taskName,params:[]});
-        }
-        // metrics fields are whatever this task's library definition currently
-        // specifies (flexible per task) - read each by its stable param key
-        data={task:taskName, metrics:readMetricFields(host)};
-      } else {
-        // generic field-driven types: read each of this type's defined
-        // fields by its stable key, typed per the field's declared type
-        data=readTypeData(host,type,a);
-      }
+      // the kind's plain fields, then whatever its own part holds
+      let data=readTypeData(host,type,a);
+      { const kf=KIND_FORMS[type]; if(kf&&kf.read) kf.read(host,{a,e:editing||null,date:entryDate},data); }
       data.note=host.querySelector(".dg-f-note").value.trim();
       const doneVal=!!host.querySelector(".dg-f-done")?.classList.contains("on");
       const rep=readDiaryRepeat(host,"dg");
@@ -17511,13 +17748,7 @@ function goMaterials(sub){
 function openLinked(l){
   if(l.kind==="animal"){ closeDetail(); switchTo("animals"); animalModal(l.id); return; }
   if(l.kind==="template"){ closeDetail(); goMaterials("procedures"); return; }
-  if(l.kind==="task"){
-    closeDetail(); switchTo("animals");
-    modal(`<h3>Diary entry types</h3><div id="dtypes_host"></div>
-      <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`,{wide:true});
-    renderDiaryTypesLib(document.getElementById("dtypes_host"));
-    return;
-  }
+  if(l.kind==="task"){ closeDetail(); switchTo("animals"); return; }   // 2.0: no entry-type editor to open
   // A paper/protocol/other Library record — straight to its own link, the
   // same one the Library row's own ↗ button opens, instead of just landing
   // on the Library tab in general and leaving the actual click to find it.
