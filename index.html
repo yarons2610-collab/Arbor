@@ -223,6 +223,18 @@
   .ch-tbl td.pg-an{font-family:inherit;font-size:12px}
   .ch-warn{color:var(--overdue)}
   .ch-sum td{color:var(--ink-dim);border-top:1px solid var(--line2)}
+  /* feeding */
+  .cal-feed{background:color-mix(in srgb,var(--amber) 18%,var(--panel));border-left:3px solid var(--amber);color:var(--ink);cursor:pointer}
+  .cal-feed-done:not(.cal-feed-warn){opacity:.6}   /* a warning never fades with the rest */
+  .cal-feed-warn{border-left-color:var(--overdue);background:color-mix(in srgb,var(--overdue) 16%,var(--panel))}
+  .cal-feed-warn b{color:var(--overdue)}
+  .fd-tbl input{width:72px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 7px;font-size:12.5px}
+  .fd-num{font-family:var(--mono);font-size:11px}
+  .fd-ph{font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
+  .fd-ready{color:var(--gcamp)}
+  .fd-warn td{background:color-mix(in srgb,var(--overdue) 9%,transparent)}
+  .fd-floor{color:var(--overdue);font-family:var(--mono);font-size:10px}
+  .fd-st{color:var(--gcamp);white-space:nowrap}
   .pg-tabs{display:flex;gap:4px;margin-bottom:9px}
   .pg-tab{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-faint);border-radius:7px;
     padding:3px 10px;font-size:11.5px;cursor:pointer;font-family:var(--mono)}
@@ -10882,6 +10894,15 @@ function renderTimeline(){
   // against everything else occupying it.
   const timedLayout=new Map(); // task-occurrence id / diary-entry id -> {col,totalCols}
   calTimedIndex={days:[],startISO:isoOf(ws)};
+  /* The daily feeding is not stored anywhere: it exists on a day because
+     somebody is on restriction that day. Collected here so it is packed with
+     everything else and never drawn over another event. */
+  const feedDays=[];
+  for(let d=0;d<NCOL;d++){
+    const day=new Date(ws); day.setDate(ws.getDate()+d);
+    const f=feedingOn(isoOf(day)); if(f) feedDays.push({dayIdx:d,f});
+  }
+  const feedMin=t=>{ const [h,m]=String(t||FEEDING_TIME).split(":").map(Number); return h*60+(m||0); };
   for(let d=0;d<NCOL;d++){
     const day=new Date(ws); day.setDate(ws.getDate()+d); day.setHours(0,0,0,0);
     // each day sees only the part of an event that falls on it, so a box
@@ -10898,7 +10919,8 @@ function renderTimeline(){
     });
     // a task-occurrence id and a diary-entry id can never collide (tk_…@when
     // vs d_…), so one map keyed by id serves both renderers below
-    const dayEvents=[...taskEvents,...diaryEvents];
+    const feedEvents=feedDays.filter(x=>x.dayIdx===d).map(x=>({key:"feed:"+x.f.date,startMin:feedMin(x.f.time),endMin:feedMin(x.f.time)+45}));
+    const dayEvents=[...taskEvents,...diaryEvents,...feedEvents];
     calTimedIndex.days.push(dayEvents);
     packColumns(dayEvents).forEach((v,k)=>timedLayout.set(k,v));
   }
@@ -11020,6 +11042,19 @@ function renderTimeline(){
         const mode=resizeModeFor(ev);
         beginTimedEventDrag(mode,item,evt,ev,wrap);
       });
+      hourCells[dayIdx].cell.appendChild(evt);
+    });
+    feedDays.forEach(({dayIdx,f})=>{
+      const start=feedMin(f.time); if(Math.floor(start/60)!==h) return;
+      const{col:colIdx,totalCols,span:colSpan=1}=timedLayout.get("feed:"+f.date)||{col:0,totalCols:1};
+      const colPct=100/totalCols;
+      const evt=document.createElement("div");
+      evt.className="cal-evt-timed cal-feed"+(f.belowFloor.length?" cal-feed-warn":"")+(f.done===f.rows.length&&f.date<=todayDateStr()?" cal-feed-done":"");
+      evt.style.cssText=`top:${(start%60)/60*100}%;height:75%;left:calc(${colIdx*colPct}% + 2px);width:calc(${colPct*colSpan}% - 4px);z-index:2`;
+      evt.innerHTML=feedingChipHTML(f);
+      evt.title=feedingTitle(f);
+      evt.addEventListener("pointerdown",ev=>ev.stopPropagation());
+      evt.addEventListener("click",ev=>{ ev.stopPropagation(); openFeedingModal(f.date); });
       hourCells[dayIdx].cell.appendChild(evt);
     });
     // click-to-create on hour cells; drag-to-create sets a duration first
@@ -14369,6 +14404,66 @@ function restrictionStatus(a,date){
    האכלות tasks: nobody manages a roster — starting a restriction adds the
    animal, ending it removes it — and done means every animal was weighed and
    fed, not that a box was ticked. */
+/* The day's feeding, for everyone at once — the form the feeding item opens.
+   One line per animal: today's weight and the ration given, with what you
+   need to choose the ration beside it (where it is against baseline, which
+   phase, how fast it is moving). The ration starts at the last one given, so
+   most days only the weight is typed. Leaving a line empty records nothing. */
+function openFeedingModal(date){
+  const f=feedingOn(date);
+  if(!f){ toast("Nobody is on restriction that day"); return; }
+  const pctTxt=st=>st.pct==null?"—":Math.round(st.pct)+"%";
+  const row=({a,st})=>{
+    const w=st.todayWeighing, g=w&&w.data&&w.data.grams!=null&&w.data.grams!==""?w.data.grams:"";
+    const r=w?rationOf(w):null;
+    const phase=st.phase==="maintaining"
+      ?`<span class="fd-ph fd-ready">ready · maintaining</span>`
+      :`<span class="fd-ph">reaching${st.daysToTarget!=null?` · ~${st.daysToTarget}d to go`:""}</span>`;
+    const trend=st.perDay!=null?`${st.perDay>0?"+":""}${(Math.round(st.perDay*100)/100)}g/day`:"";
+    return `<tr class="fd-row${st.belowFloor?" fd-warn":""}" data-a="${escAttr(a.id)}">
+      <td><button type="button" class="ov-link fd-open" data-a="${escAttr(a.id)}">${esc(a.name)}</button><div>${phase}</div></td>
+      <td class="fd-num"><b>${pctTxt(st)}</b><div class="ov-dim">of ${st.baseline?st.baseline.grams+"g":"?"}${trend?" · "+esc(trend):""}</div></td>
+      <td><input class="fd-g" type="text" inputmode="decimal" value="${escAttr(String(g))}" placeholder="${st.lastWeighing?esc(String(st.lastWeighing.data.grams)):"g"}"></td>
+      <td><input class="fd-r" type="text" inputmode="decimal" value="${escAttr(r!=null?String(r):(st.lastRation!=null?String(st.lastRation):""))}"></td>
+      <td class="fd-st">${st.todayDone?"✓":""}${st.belowFloor?` <span class="fd-floor">⚠ below ${RESTRICTION_FLOOR}%</span>`:""}</td></tr>`;
+  };
+  modal(`<h3>🍽 Feeding — ${esc(fmtDMY(date))}</h3>
+    <div class="ov-dim" style="font-size:12px;margin:-4px 0 10px">Target ${RESTRICTION_TARGET}% of baseline · floor ${RESTRICTION_FLOOR}%.
+      Type today's weight; the ration starts at the last one given.</div>
+    <div class="pg-wrap"><table class="pg-tbl fd-tbl"><thead><tr><th>Animal</th><th>Now</th><th>Weight (g)</th><th>Ration (g)</th><th></th></tr></thead>
+      <tbody>${f.rows.map(row).join("")}</tbody></table></div>
+    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn accent" id="fd_save">Save</button></div>`,{wide:true});
+  const root=document.getElementById("modal");
+  root.querySelectorAll(".fd-open").forEach(b=>b.onclick=()=>{ closeModal(); animalModal(b.dataset.a); });
+  document.getElementById("fd_save").onclick=()=>{
+    let n=0, bad=[];
+    root.querySelectorAll(".fd-row").forEach(tr=>{
+      const a=DB.animals.find(x=>x.id===tr.dataset.a); if(!a)return;
+      const gs=tr.querySelector(".fd-g").value.trim().replace(",","."), rs=tr.querySelector(".fd-r").value.trim().replace(",",".");
+      if(!gs)return;                                   // an untouched line records nothing
+      const g=+gs, r=rs===""?null:+rs;
+      if(!(g>0)){ bad.push(a.name); return; }
+      // a "ration" the size of a mouse is a weight typed in the wrong box
+      if(r!=null&&(!(r>=0)||r>10)){ bad.push(a.name+" (ration "+rs+"g?)"); return; }
+      recordRestrictionDay(a,date,g,r); n++;
+    });
+    if(bad.length){ toast("Check: "+bad.join(", ")); return; }
+    persist(); closeModal(); render();
+    toast(n?`Feeding saved for ${n} animal${n===1?"":"s"}`:"Nothing entered");
+  };
+}
+// The count and any warning lead, because the calendar's compact chips show
+// only their first line.
+function feedingChipHTML(f){
+  const n=f.rows.length, warn=f.belowFloor.length;
+  const future=f.date>todayDateStr();
+  return `<div class="et">🍽 Feeding ${future?`· ${n}`:`${f.done}/${n}`}${warn?` <b>⚠${warn}</b>`:""}</div>
+    <div class="es">${n} on restriction${warn?` · ${warn} below ${RESTRICTION_FLOOR}%`:""}</div>`;
+}
+function feedingTitle(f){
+  return `Feeding ${fmtDMY(f.date)} — ${f.rows.map(x=>x.a.name+(x.st.todayDone?" ✓":"")+(x.st.belowFloor?" ⚠":"")).join(", ")}`;
+}
 function feedingOn(date){
   const d=String(date).slice(0,10);
   const rows=(DB.animals||[]).filter(a=>a.alive!==false&&restrictionAt(a,d))
@@ -14377,7 +14472,9 @@ function feedingOn(date){
   if(!rows.length) return null;
   return {date:d,time:FEEDING_TIME,rows,
     done:rows.filter(x=>x.st.todayDone).length,
-    belowFloor:rows.filter(x=>x.st.belowFloor)};
+    // only today and earlier: tomorrow's weight is not known yet, so painting
+    // every future day red would only repeat today's warning
+    belowFloor:d<=todayDateStr()?rows.filter(x=>x.st.belowFloor):[]};
 }
 
 /* ---- what is true about an animal: the one vocabulary ----
@@ -14630,6 +14727,7 @@ function animalOverviewHTML(a){
   return `<div class="ov">
     <div class="ov-life">${life}</div>
     ${sec("Body",body+`<div id="ov_baseedit"></div>`,baseCtl)}
+    ${sec("Food restriction",restrictionSectionHTML(a),"")}
     ${sec("Procedure",proc,`<button type="button" class="ov-btn ov-godetails" data-focus="proc">edit…</button>`)}
     ${sec("Experiments",exps.concat(projs).join("")||dim("not in any experiment"))}
     ${fields?sec("Recorded on the animal",fields,`<button type="button" class="ov-btn ov-godetails">edit…</button>`):""}
@@ -14639,6 +14737,47 @@ function animalOverviewHTML(a){
 /* The baselines, edited where they are read. A baseline is the animal's — a
    number from a date — so it is set here, from the latest weighing or by hand,
    and every weighing in the diary reads it. */
+/* The restriction, in the animal's own window: where it stands, how to log
+   today, and how to start or end one. Past periods stay listed — a second
+   restriction later does not replace the first. */
+function restrictionSectionHTML(a){
+  const dim=t=>`<span class="ov-dim">${t}</span>`;
+  const st=restrictionStatus(a,todayDateStr());
+  const past=animalRestrictions(a).filter(r=>r.end&&r.end<todayDateStr());
+  const pastHTML=past.length?`<div class="ov-sub">Earlier</div>`+past.map(r=>
+    `<div>${esc(fmtDMY(r.start))} – ${esc(fmtDMY(r.end))}${r.endReason?" "+dim(esc(r.endReason)):""}</div>`).join(""):"";
+  if(!st){
+    const lw=latestWeightEntry(a);
+    return `${dim("not on restriction")} <button type="button" class="ov-btn ov-rstart">start restriction…</button>
+      <div id="ov_rform" hidden class="ov-baseed" style="margin-top:6px">
+        <div class="ov-bnew">
+          <span class="ov-dim">from</span><input type="date" id="ov_rd" value="${todayDateStr()}">
+          <span class="ov-dim">baseline</span><input type="number" step="0.1" id="ov_rg" value="${escAttr(lw?String(lw.data.grams):"")}" placeholder="g" style="width:74px">
+          <span class="ov-dim">g · ration</span><input type="number" step="0.05" id="ov_rr" value="2.7" style="width:66px"><span class="ov-dim">g</span>
+          <button type="button" class="btn accent ov-rgo" style="font-size:12px;padding:4px 12px">Start</button>
+        </div>
+        <div class="ov-dim" style="margin-top:5px;font-size:11px">The baseline weighing becomes ${esc(a.name)}'s baseline. Target ${RESTRICTION_TARGET}%, floor ${RESTRICTION_FLOOR}%.</div>
+      </div>${pastHTML}`;
+  }
+  const col=st.belowFloor?"var(--overdue)":st.phase==="maintaining"?"var(--gcamp)":"var(--amber)";
+  const line=[
+    `day ${st.daysOn}`,
+    st.pct!=null?`<b style="color:${col}">${Math.round(st.pct)}%</b> of ${st.baseline?st.baseline.grams+"g":"?"}`:dim("not weighed yet"),
+    st.phase==="maintaining"?`<span style="color:var(--gcamp)">ready since ${esc(fmtDMY(st.readyDate))} · maintaining</span>`
+      :`reaching ${RESTRICTION_TARGET}%${st.daysToTarget!=null?" · ~"+st.daysToTarget+"d to go":""}`,
+    st.lastRation!=null?`ration ${st.lastRation}g`:""
+  ].filter(Boolean).join(`<span class="ov-sep">·</span>`);
+  return `${line}
+    ${st.belowFloor?`<div style="color:var(--overdue);margin-top:3px">⚠ below the ${RESTRICTION_FLOOR}% floor</div>`:""}
+    <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+      <button type="button" class="ov-btn ov-rfeed">${st.todayDone?"✓ fed today — edit":"log today's feeding…"}</button>
+      <button type="button" class="ov-btn ov-rendshow">end restriction…</button></div>
+    <div id="ov_rend" hidden class="ov-bnew" style="margin-top:6px">
+      <span class="ov-dim">ended</span><input type="date" id="ov_red" value="${todayDateStr()}">
+      <input type="text" id="ov_rer" placeholder="reason (optional)" style="flex:1;min-width:120px">
+      <button type="button" class="btn ghost ov-rend" data-r="${escAttr(st.r.id)}" style="font-size:12px;padding:4px 12px">End</button></div>
+    ${pastHTML}`;
+}
 function animalBaselineEditorHTML(a){
   const lw=latestWeightEntry(a);
   const list=animalBaselines(a);
@@ -17100,6 +17239,19 @@ function animalModal(id,draft,opts){
       if(day){ showTab("diary",{date:day.dataset.d}); return; }
       const exb=t.closest(".ov-openexp");
       if(exb){ const ex=DB.experiments.find(x=>x.id===exb.dataset.ex); if(ex){ closeModal(); experimentModal(ex,()=>render()); } return; }
+      if(t.closest(".ov-rstart")){ const f=document.getElementById("ov_rform"); f.hidden=!f.hidden; return; }
+      if(t.closest(".ov-rgo")){
+        const d=document.getElementById("ov_rd").value, g=+document.getElementById("ov_rg").value, r=document.getElementById("ov_rr").value;
+        if(!d||!(g>0)){ toast("Give the start date and the baseline weight"); return; }
+        // it is also that day's weighing, so it shows in the history and the curve
+        if(!startRestriction(a,d,g,r)){ toast(`${a.name} is already on restriction then`); return; }
+        recordRestrictionDay(a,d,g,null);
+        persist(); render(); paintOverview(); toast(`${a.name} is on restriction from ${fmtDMY(d)}`); return; }
+      if(t.closest(".ov-rfeed")){ closeModal(); openFeedingModal(todayDateStr()); return; }
+      if(t.closest(".ov-rendshow")){ const f=document.getElementById("ov_rend"); f.hidden=!f.hidden; return; }
+      const re=t.closest(".ov-rend");
+      if(re){ endRestriction(a,re.dataset.r,document.getElementById("ov_red").value,document.getElementById("ov_rer").value.trim());
+        persist(); render(); paintOverview(); toast("Restriction ended"); return; }
       if(t.closest(".ov-baseedit")){
         const ed=document.getElementById("ov_baseedit");
         ed.innerHTML=ed.innerHTML?"":animalBaselineEditorHTML(a); return; }
