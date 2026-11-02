@@ -5037,6 +5037,9 @@ const V2_TYPE_MAP={dt_c9wh_dj57qywf:{type:"microscopy",purpose:"structural"},   
                    dt_c9wh_sc5v8d3l:{type:"microscopy",purpose:"structural",note:"Reconstruction"}};
 // Hebrew inside an English sentence keeps its own direction without reordering the rest
 const bidiIso=t=>"\u2068"+String(t==null?"":t)+"\u2069";
+// The 1.0 "FOVs" table field: its rows became each animal's fields of view.
+// A collaborator still on 1.0 can send the definition back, so readers skip it too.
+const isRetiredFovTable=f=>!!f&&f.type==="table"&&/fov/i.test(f.label||"");
 function v2Report(key,text){
   DB._v2report=DB._v2report||[];
   if(!DB._v2report.some(r=>r.key===key)) DB._v2report.push({key,text});
@@ -5118,7 +5121,7 @@ function migrateV2(){
     if(drop.length){ removeShared("diary",drop,a); a.diary=a.diary.filter(e=>!drop.includes(e)); changed=true; }
     // the "Two Photon → FOVs" table becomes the animal's fields of view
     animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
-      if(f.type!=="table"||!/fov/i.test(f.label||"")) return;
+      if(!isRetiredFovTable(f)) return;
       const rows=((a.tables||{})[f.key])||[]; if(!rows.length) return;
       const col=re=>((f.fields||[]).find(x=>re.test(x.label||""))||{}).key;
       const kN=col(/fov|number|name/i), kP=col(/^planes?$/i), kF=col(/per plane|frames/i);
@@ -5130,6 +5133,15 @@ function migrateV2(){
         changed=true; });
     }));
   });
+  // its rows now live on the animals, so the table itself retires — left in
+  // place it would show every FOV twice, once in each shape
+  const emptied=new Set();
+  animalSections().forEach(sec=>{ const n=(sec.fields||[]).length;
+    sec.fields=(sec.fields||[]).filter(f=>!isRetiredFovTable(f));
+    if(sec.fields.length===n) return;
+    changed=true; if(!sec.fields.length) emptied.add(sec);
+    v2Report("fovtable:"+sec.id,`The "${sec.label||"section"}" FOV table became each animal's fields of view (Imaging in the animal's window).`); });
+  if(emptied.size) DB.config.animalSections=animalSections().filter(sec=>!emptied.has(sec));
   const names=new Map();
   (DB.animals||[]).forEach(a=>{ const k=String(a.name||"").trim().toLowerCase(); if(!k)return; names.set(k,(names.get(k)||0)+1); });
   names.forEach((n,k)=>{ if(n>1) v2Report("dupname:"+k,`${n} animals are named "${(DB.animals.find(a=>String(a.name||"").trim().toLowerCase()===k)||{}).name}" — worth checking whether one is a duplicate.`); });
@@ -12652,8 +12664,8 @@ function sectionsForAnimal(a){
   const sp=a&&spOf(a); if(!sp) return own;
   const have=new Set(own.map(x=>x.id));
   const extra=(((DB.sharedDefs||{})[sp]||{}).animalSections||[])
-    .filter(x=>x&&x.id&&!have.has(x.id)&&(x.fields||[]).length)
-    .map(x=>Object.assign({},x,{fromShared:true}));
+    .map(x=>x&&Object.assign({},x,{fromShared:true,fields:(x.fields||[]).filter(f=>!isRetiredFovTable(f))}))
+    .filter(x=>x&&x.id&&!have.has(x.id)&&x.fields.length);
   return own.concat(extra);
 }
 /* Which sections an animal shows is that animal's own business. A colony holds
@@ -15315,7 +15327,7 @@ function customFacts(){
   const out=[], seen=new Set();
   animalSections().concat(Object.keys(DB.sharedDefs||{}).flatMap(sp=>((DB.sharedDefs[sp]||{}).animalSections||[])))
     .forEach(sec=>(sec.fields||[]).forEach(f=>{
-      if(!f||!f.key||seen.has(f.key))return; seen.add(f.key);
+      if(!f||!f.key||seen.has(f.key)||isRetiredFovTable(f))return; seen.add(f.key);
       out.push({id:"cf:"+f.key, group:sec.label||"Your own fields",
         label:(sec.label?sec.label+" · ":"")+(f.label||f.key),
         type:f.type==="yesno"?"yesno":f.type==="number"?"number":f.type==="table"?"number":"text",
@@ -19379,15 +19391,14 @@ function exportFullDatabaseExcel(){
   // one — on the Timeline that task stands in for all of them, so the sheet
   // is where the grouping is otherwise invisible
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>diary.push([a.name||"",e.date||"",e.time||"",e.endTime||"",
-    diaryTypeDef(e.type).label,noTime(e,a),yes(e.done),e.seriesRule?repeatLabel(e.seriesRule,e.date)||"Yes":"",
-    diaryBelongsTo(e),stamp(e.created)])));
+    diaryTypeDef(e.type).label,noTime(e,a),yes(entryHappened(e)),stamp(e.created)])));
 
   const inj=[];
   DB.animals.forEach(a=>(a.surgeryDetail&&a.surgeryDetail.injections||[]).forEach((x,i)=>{
     // one row per depth — the primary dv/volume plus any extras added in the
     // editor, so a multi-depth injection doesn't lose data
     [{dv:x.dv,volume:x.volume},...(x.depths||[])].forEach((d,di)=>inj.push([a.name||"",i+1,di+1,x.virus||"",x.type||"",
-      x.siteRegion||"",num(x.ap),num(x.ml),num(d.dv),num(d.volume),x.partnerRegion||"",num(x.pAp),num(x.pMl),num(x.pDv)]));
+      x.siteRegion||"",num(x.ap),num(x.ml),num(d.dv),num(d.volume),x.partnerRegion||"",num(x.pAp),num(x.pMl),num(x.pDv),x.verified||""]));
   }));
 
   const timeline=taskList().map(t=>{
@@ -19435,45 +19446,52 @@ function exportFullDatabaseExcel(){
     ["Notes",(DB.notes||[]).length],
   ];
 
-  /* A table field cannot live in a cell, and flattening it to "3 rows" throws
-     away the thing it was built to keep. Each one gets its own sheet in long
-     format — one line per row, per entry — which is the shape a pivot table or
-     a plot wants, and the shape that makes "how did FOV 2 change" answerable
-     in the spreadsheet as well as in the app. */
+  /* One sheet per record kind, columns named for what the kind records —
+     the shape a pivot table or a plot wants. A record not yet done says so,
+     rather than being left out, so a booked surgery is visible too. */
   const tableSheets=[];
   const seenNames={};
   const sheetName=lbl=>{ let n=(lbl||"Table").slice(0,28); 
     seenNames[n]=(seenNames[n]||0)+1; return seenNames[n]>1?`${n} ${seenNames[n]}`:n; };
   const cellOf=(v,sf)=>v==null?"":(sf&&sf.type==="yesno")?(v?"Yes":"No"):(sf&&sf.type==="number")?num(v):v;
-  (DB.config.diaryTypes||[]).forEach(t=>(t.fields||[]).forEach(f=>{
-    if(f.type!=="table")return;
-    const cols=(f.fields||[]).filter(x=>x&&x.key), pers=(f.per||[]).filter(x=>x&&x.key);
-    const rows=[];
-    if(tableAnchor(f)==="animal"){
-      DB.animals.forEach(a=>{
-        const defined=(a.tables||{})[f.key]||[];
-        if(!defined.length)return;
-        const entries=(a.diary||[]).filter(e=>e.type===t.key);
-        defined.forEach(r=>{
-          const base=[a.name||"",...cols.map(sf=>cellOf(r[sf.key],sf))];
-          const measured=entries.filter(e=>perRowValues((e.data||{})[f.key])[r.id]);
-          if(!measured.length){ rows.push([...base,"","",...pers.map(()=>"")]); return; }
-          measured.forEach(e=>{ const v=perRowValues((e.data||{})[f.key])[r.id]||{};
-            rows.push([...base,e.date||"",e.time||"",...pers.map(sf=>cellOf(v[sf.key],sf))]); });
-        });
-      });
-      if(rows.length) tableSheets.push(sheet(sheetName(f.label),
-        ["Animal",...cols.map(sf=>sf.label||sf.key),"Date","Time",...pers.map(sf=>sf.label||sf.key)],rows,0,1,2));
-    } else {
-      DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-        if(e.type!==t.key)return;
-        tableRows((e.data||{})[f.key]).forEach((r,i)=>rows.push(
-          [a.name||"",e.date||"",e.time||"",i+1,...cols.map(sf=>cellOf(r[sf.key],sf))]));
-      }));
-      if(rows.length) tableSheets.push(sheet(sheetName(f.label),
-        ["Animal","Date","Time","Row",...cols.map(sf=>sf.label||sf.key)],rows,0,1,2));
-    }
-  }));
+  const recs=type=>DB.animals.flatMap(a=>(a.diary||[]).filter(e=>e.type===type).map(e=>({a,e,d:e.data||{}})));
+  const planned=e=>entryHappened(e)?"":"planned";
+  const note=d=>diaryNoteOf(d)||"";
+  const fovName=(a,id)=>(animalFovs(a).find(f=>f.id===id)||{}).name||"";
+  const kindSheets=[
+    sheet("Weighings",["Animal","Date","Time","Weight (g)","Ration (g)","% of baseline","Why","Note"],
+      recs("weight").filter(({d})=>d.grams!=null&&d.grams!==""||rationOf({data:d})!=null).map(({a,e,d})=>{
+        const b=baselineAt(a,e.date), pct=b&&d.grams!==""&&d.grams!=null?Math.round(1000*d.grams/b.grams)/10:"";
+        return [a.name||"",e.date||"",e.time||"",num(d.grams),rationOf({data:d})??"",pct,weighingContext(a,e.date),note(d)]; }),0,1,2),
+    sheet("Food restrictions",["Animal","Start","End","Target %","Baseline (g)","Baseline date","Ended because"],
+      DB.animals.flatMap(a=>animalRestrictions(a).map(r=>{ const b=baselineAt(a,r.start);
+        return [a.name||"",r.start||"",r.end||"",r.target||RESTRICTION_TARGET,b?b.grams:"",b?b.date:"",r.endReason||""]; })),0,1),
+    sheet("Surgeries",["Animal","Date","Time","Status","Duration (min)","Operator","Complications","Head-post","Window","Injections","Note"],
+      recs("surgery").map(({a,e,d})=>[a.name||"",e.date||"",e.time||"",planned(e),num(d.duration),d.operator||"",d.complications||"",
+        yes(d.headpost),yes(d.window),injectionsOfSurgery(a,e).map(i=>(i.virus||"?")+(i.siteRegion?" → "+i.siteRegion:"")).join("; "),note(d)]),0,1),
+    sheet("Post-op checks",["Animal","Date","Post-op given","Condition","Note"],
+      recs("postop").map(({a,e,d})=>[a.name||"",e.date||"",d.given===true?"Yes":d.given===false?"No":"",d.condition||"",note(d)]),0,1),
+    sheet("Behaviour sessions",["Animal","Date","Time","Status","Task","Stage","Trials","Success %","Length (min)","Settings","Imaged","Data at","Note"],
+      recs("training").map(({a,e,d})=>[a.name||"",e.date||"",e.time||"",planned(e),d.task||"",d.stage||"",num(d.trials),num(d.success),num(d.length),
+        Object.entries(d.settings||{}).map(([k,v])=>`${k}=${v}`).join(", "),yes(d.imaged),d.dataAt||"",note(d)]),0,1,2),
+    sheet("Imaging sessions",["Animal","Date","Time","Status","Purpose","During behaviour","FOVs","Laser","Channels","Analysis","Data at","Note"],
+      [...recs("microscopy"),...recs("training").filter(({d})=>d.imaged)].map(({a,e,d})=>[a.name||"",e.date||"",e.time||"",planned(e),
+        e.type==="training"?"functional":(d.purpose||""),yes(e.type==="training"),(d.fovs||[]).map(f=>fovName(a,f.id)).filter(Boolean).join(", "),
+        d.laser||"",d.channels||"",d.status||"",d.dataAt||"",note(d)]),0,1,2),
+    sheet("FOVs",["Animal","FOV",...FOV_SETTINGS.map(f=>f.label),"Dendrites","Reconstructed","Times imaged"],
+      DB.animals.flatMap(a=>animalFovs(a).map(f=>{ const den=f.dendrites||[];
+        const n=(a.diary||[]).filter(e=>entryHappened(e)&&((e.data||{}).fovs||[]).some(x=>x.id===f.id)).length;
+        return [a.name||"",f.name||"",...FOV_SETTINGS.map(k=>cellOf(f[k.key],k)),den.map(x=>x.name).join(", "),
+          den.filter(x=>x.reconstructed).map(x=>x.name).join(", "),n]; })),0,1),
+    sheet("Perfusions",["Animal","Date","Status","Done by","Moved to PBS","Not processed","Note"],
+      recs("perfusion").map(({a,e,d})=>[a.name||"",e.date||"",planned(e),d.operator||"",d.pbs||"",yes(d.notProcessed),note(d)]),0,1),
+    sheet("Slicing",["Animal","Date","Sliced by","Plane","Thickness (µm)","Stored at","Slide","Slices","APs","Note"],
+      recs("histology").flatMap(({a,e,d})=>{ const head=[a.name||"",e.date||"",d.operator||"",d.plane||"",num(d.thickness),d.storage||""];
+        const sl=d.slides||[]; return sl.length?sl.map(x=>[...head,x.n,(x.aps||[]).length,(x.aps||[]).join(", "),note(d)]):[[...head,"","","",note(d)]]; }),0,1,6),
+    sheet("Histology",["Animal","Date","Done by","Scans at","Region","Finding","On slides","Finding note","Note"],
+      recs("histo").flatMap(({a,e,d})=>{ const head=[a.name||"",e.date||"",d.operator||"",d.dataAt||""];
+        const f=d.findings||[]; return f.length?f.map(x=>[...head,x.region||"",x.dir||"",x.slides||"",x.note||"",note(d)]):[[...head,"","","","",note(d)]]; }),0,1),
+  ];
   animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
     if(f.type!=="table")return;
     const cols=(f.fields||[]).filter(x=>x&&x.key);
@@ -19491,14 +19509,15 @@ function exportFullDatabaseExcel(){
     sheet("Animals",["Name","Cage","Sex","Strain","Status","Practice","Excluded","Born","Age (weeks)","Sacrificed","Surgeries",
       "Days since last surgery","Latest weight (g)","Baseline (g)","% of baseline","Virus","Injection sites","Projection targets",
       "Head-post","Cranial window","Experiments (group)","Next plan stage","Comments"],animals,0),
-    sheet("Diary entries",["Animal","Date","Time","End time","Type","Details","Done","Repeats","Part of","Logged"],diary,0,1,2),
+    sheet("All records",["Animal","Date","Time","End time","Kind","Details","Done","Logged"],diary,0,1,2),
     ...(customCols.length?[sheet("Animal fields",
       ["Animal",...customCols.map(([sec,f])=>`${sec.label||"Section"} · ${f.label||f.key}`)],
       DB.animals.map(a=>[a.name||"",...customCols.map(([,f])=>cellOf((a.custom||{})[f.key],f))])
         .filter(r=>r.slice(1).some(v=>v!=="")),0)]:[]),
+    ...kindSheets,
     ...tableSheets,
     sheet("Injections",["Animal","Injection #","Depth #","Virus","Virus type","Site region","AP","ML","DV","Volume (nl)",
-      "Target region","Target AP","Target ML","Target DV"],inj,0,1,2),
+      "Target region","Target AP","Target ML","Target DV","Histology"],inj,0,1,2),
     sheet("Timeline",["When","Until","Duration (min)","Kind","Title","Repeats","Project","Experiment","Materials",
       "Occurrences done","Notes"],timeline,0,4),
     sheet("Experiments",["Project","Title","Question","Deadline","End","Animals","Description","Outcome"],exps,0,1),
