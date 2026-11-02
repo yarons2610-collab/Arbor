@@ -5854,7 +5854,10 @@ function quickFindHits(q){
   };
   const go=fn=>()=>{ closeModal(); fn(); };
   DB.animals.forEach(a=>{
-    const r=score(a.name,a.cage,a.strain); if(!isFinite(r))return;
+    // a name first; a virus or an injection site still finds the animal
+    let r=score(a.name,a.cage,a.strain);
+    if(!isFinite(r)){ const p=score(animalVirusText(a),animalSiteText(a)); if(isFinite(p)) r=p+1; }
+    if(!isFinite(r))return;
     add("Animal","🐭",a.name,[a.cage&&"cage "+a.cage,animalWhere(a)].filter(Boolean).join(" · "),r,
       go(()=>{ switchTo("animals"); animalModal(a.id); }));
   });
@@ -5878,9 +5881,11 @@ function quickFindHits(q){
   });
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
     const def=diaryTypeDef(e.type);
-    const r=score(def&&def.label,diaryNoteOf(e.data||{}),a.name+" "+(def?def.label:"")); if(!isFinite(r))return;
-    add("Diary",(def&&def.icon)||"🔖",`${a.name} — ${def?def.label:e.type}`,
-      fmtDMY(e.date)+(diaryNoteOf(e.data||{})?" · "+diaryNoteOf(e.data||{}):""),r+1,
+    // what the record says — the task, the operator, the plane — not only its kind
+    const sum=diaryEntrySummary(Object.assign({},e,{time:null,endTime:null}),a).replace(/^—$/,"");
+    const r=score(def&&def.label,sum,a.name+" "+(def?def.label:"")); if(!isFinite(r))return;
+    add("Record",(def&&def.icon)||"🔖",`${a.name} — ${def?def.label:e.type}`,
+      fmtDMY(e.date)+(sum?" · "+sum:""),r+1,
       go(()=>openCalItem({kind:"diary",id:e.id,title:a.name,deadline:`${e.date}${e.time?"T"+e.time:""}`,src:{a,e}})));
   }));
   [["reading","📖","Paper"],["protocol","📋","Protocol"],["other","🗂","Other"]].forEach(([k,icon,kind])=>{
@@ -5909,7 +5914,7 @@ function quickFindHits(q){
     const r=score(x.name); if(!isFinite(r))return;
     add("Procedure","🧰",x.name,"",r,go(()=>goMaterials("procedures")));
   });
-  const ORDER=["Animal","Task","Event","Diary","Note","Experiment","Project","Paper","Protocol","Other","Virus","Site","Procedure"];
+  const ORDER=["Animal","Task","Event","Record","Note","Experiment","Project","Paper","Protocol","Other","Virus","Site","Procedure"];
   return hits.sort((a,b)=>a.rank-b.rank||ORDER.indexOf(a.kind)-ORDER.indexOf(b.kind)
     ||String(a.label).localeCompare(String(b.label))).slice(0,40);
 }
