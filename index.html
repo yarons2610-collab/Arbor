@@ -189,6 +189,12 @@
   .am-pane.hidden{display:none}
   .ov{display:flex;flex-direction:column;gap:13px;font-size:12.5px;line-height:1.55}
   .ov-life{font-size:13px}
+  .ov-warns{display:flex;flex-direction:column;gap:3px}
+  .wn{font-size:12px;padding:3px 9px;border-radius:7px;border:1px solid var(--line2)}
+  .wn-red{color:var(--overdue);border-color:color-mix(in srgb,var(--overdue) 50%,transparent);background:color-mix(in srgb,var(--overdue) 10%,transparent)}
+  .wn-amber{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 45%,transparent)}
+  .wn-ok{color:var(--gcamp);border-color:color-mix(in srgb,var(--gcamp) 45%,transparent)}
+  svg.lc{display:block;margin:3px 0 6px}
   .ov-sec{border-top:1px solid var(--line);padding-top:9px}
   .ov-h{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);
     margin-bottom:5px;display:flex;align-items:center;gap:8px}
@@ -6547,14 +6553,9 @@ function upcomingNotifications(wantEvents){
                 overdue:dueClass(o.when,"",o.endDate)==="overdue"})))
   ].sort((x,y)=>x.t.deadline.localeCompare(y.t.deadline));
   if(wantEvents) return {tasks,diaryItems:[]};
-  const diaryLookback=addDays(today,-NOTIFY_DIARY_LOOKAHEAD_DAYS);
-  const diaryHorizon=addDays(today,NOTIFY_DIARY_LOOKAHEAD_DAYS);
-  const diaryItems=[];
-  DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
-    if(!diaryDrawsOnTimeline(e)||e.done)return;
-    if(e.date>=diaryLookback&&e.date<=diaryHorizon) diaryItems.push({a,e});
-  }));
-  diaryItems.sort((x,y)=>x.e.date.localeCompare(y.e.date));
+  // 2.0: animal work speaks through one warnings layer — the same marks the
+  // animal's window and the timeline show — and good news is not a nag
+  const diaryItems=allWarnings(today).filter(w=>w.level!=="ok");
   return {tasks,diaryItems};
 }
 function updateNotifyNudge(wantEvents){
@@ -6563,7 +6564,7 @@ function updateNotifyNudge(wantEvents){
   const btn=document.getElementById(wantEvents?"eventNudge":"notifyNudge");
   document.getElementById(wantEvents?"eventCnt":"notifyCnt").textContent=n;
   btn.style.display=n>0?"":"none";
-  btn.classList.toggle("due",tasks.some(x=>x.overdue));
+  btn.classList.toggle("due",tasks.some(x=>x.overdue)||diaryItems.some(w=>w.level==="red"));
   btn.title=n>0?`${n} upcoming/due ${wantEvents?"event":"item"}${n!==1?"s":""}`:"Nothing due";
 }
 function openNotificationsModal(wantEvents){
@@ -6589,18 +6590,15 @@ function openNotificationsModal(wantEvents){
       <span style="font-family:var(--mono);font-size:10.5px;color:${overdue?"var(--overdue)":"var(--ink-faint)"};flex:0 0 auto">${overdue?"overdue · ":""}${fmtWhenFull(t.deadline)}</span>
       <button class="ntf-opentask" data-id="${t.id}" data-when="${escAttr(t.deadline)}" data-end="${escAttr(t.endDate||"")}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
     </div>`).join("");
-    const diaryRows=diaryItems.map(({a,e})=>{ const def=diaryTypeDef(e.type);
-      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
-      <button type="button" class="step-dot" data-ck-diary="${e.id}" title="Mark done"></button>
-      <span style="flex:0 0 auto">${def.icon}</span>
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)} — ${esc(def.label)}</span>
-      <span style="font-family:var(--mono);font-size:10.5px;color:${e.date===today?"var(--amber)":"var(--ink-faint)"};flex:0 0 auto">${e.date===today?"today":e.date}${e.time?" "+e.time:""}</span>
-      <button class="ntf-openanimal" data-name="${escAttr(a.name)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
-    </div>`; }).join("");
+    const diaryRows=diaryItems.map(w=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
+      <span class="wn-${w.level}" style="flex:0 0 auto">${w.level==="red"?"⚠":"●"}</span>
+      <span style="flex:1;min-width:0"><b>${esc(w.a.name)}</b> — ${esc(w.text)}</span>
+      <button class="ntf-openhub" data-a="${escAttr(w.a.id)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
+    </div>`).join("");
     document.getElementById("modal").innerHTML=`<h3>${wantEvents?"Upcoming events":"Upcoming & due"}</h3>
       <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px">${wantEvents?"Events":"Tasks"} (overdue, or due within ${NOTIFY_TASK_LOOKAHEAD_DAYS} days)</div>
       ${taskRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}
-      ${wantEvents?"":`<div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:14px 0 6px">Animal diary — scheduled within ${NOTIFY_DIARY_LOOKAHEAD_DAYS} days</div>
+      ${wantEvents?"":`<div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:14px 0 6px">Animals — needs attention</div>
       ${diaryRows||`<div style="font-size:11px;color:var(--ink-faint);padding-bottom:8px">none</div>`}`}
       <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`;
   };
@@ -6614,6 +6612,8 @@ function openNotificationsModal(wantEvents){
       updateNotifyNudge(wantEvents); draw();
       return;
     }
+    const oh=e.target.closest(".ntf-openhub");
+    if(oh){ closeModal(); animalModal(oh.dataset.a); return; }
     const ot=e.target.closest(".ntf-opentask"), oa=e.target.closest(".ntf-openanimal");
     if(ot){ closeModal(); const tk=taskOf(ot.dataset.id); if(tk)taskEditor(tk,()=>render(),ot.dataset.when||null,ot.dataset.end||null); else { const ex=expById(ot.dataset.id); if(ex)experimentModal(ex,()=>render()); } }
     else if(oa){ closeModal(); animalSearch=oa.dataset.name; switchTo("animals"); }   // one-off jump, not a saved search — see openCalItem's own note
@@ -14780,6 +14780,112 @@ function agendaOn(date){
   return items;
 }
 
+/* ---- warnings: one layer ----
+   Everything that needs attention, worked out in one place from the facts —
+   so the animal's window, its card, the timeline and the bell all say the
+   same thing. red = danger (below the floor, a post-op check missed), amber =
+   attention (due today, overdue), ok = good news worth knowing (ready). */
+function animalWarnings(a,date){
+  const d=String(date||todayDateStr()).slice(0,10), out=[];
+  if(a.alive===false){
+    const b=brainOf(a);
+    if(b&&!b.notProcessed&&!b.sliced&&!b.pbs&&b.pbsDue<=d) out.push({level:b.pbsDue<d?"red":"amber",text:b.pbsDue<d?`brain overdue to move to PBS (due ${fmtDMY(b.pbsDue)})`:"brain: move to PBS today"});
+    return out;
+  }
+  const st=restrictionStatus(a,d);
+  if(st){
+    if(st.belowFloor) out.push({level:"red",text:`${Math.round(st.pct)}% of baseline — below the ${RESTRICTION_FLOOR}% floor`});
+    if(!st.todayDone&&d===todayDateStr()) out.push({level:"amber",text:"not weighed and fed today"});
+    if(st.phase==="maintaining"&&st.readyDate===d) out.push({level:"ok",text:"reached target today — ready for behaviour"});
+  }
+  postopDueOn(d).filter(x=>x.a===a&&!postopDone(x.rec)).forEach(x=>out.push({level:"amber",text:`post-op check day ${x.n} due`}));
+  // a missed check stays a red mark until it is done
+  entriesWithRole(a,"surgery").filter(entryHappened).forEach(s=>{
+    for(let n=1;n<=POSTOP_DAYS;n++){
+      const due=addDaysISO(String(s.date).slice(0,10),n).slice(0,10);
+      if(due<d&&calDayDelta(due,d)<=14&&!postopDone(postopRecord(a,s,n))) out.push({level:"red",text:`post-op check day ${n} (${fmtDMY(due).slice(0,5)}) missed`});
+    }
+  });
+  const od=animalOverdueStages(a); if(od) out.push({level:"amber",text:`${od} overdue protocol stage${od===1?"":"s"}`});
+  return out;
+}
+function warningsHTML(list){
+  return list.map(w=>`<div class="wn wn-${w.level}">${w.level==="red"?"⚠":w.level==="ok"?"✓":"●"} ${esc(w.text)}</div>`).join("");
+}
+function allWarnings(date){
+  return (DB.animals||[]).flatMap(a=>animalWarnings(a,date).map(w=>Object.assign({a},w)))
+    .sort((x,y)=>({red:0,amber:1,ok:2}[x.level]-{red:0,amber:1,ok:2}[y.level]));
+}
+
+/* ---- each kind's section in the animal's overview ---- */
+function behaviourSectionHTML(a){
+  const sess=(a.diary||[]).filter(e=>e.type==="training"&&entryHappened(e))
+    .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+  if(!sess.length) return "";
+  const byTask=new Map(); sess.forEach(e=>{ const t=(e.data&&e.data.task)||"(task?)"; if(!byTask.has(t))byTask.set(t,[]); byTask.get(t).push(e); });
+  return [...byTask.entries()].map(([task,list])=>{
+    const last=list[list.length-1].data||{};
+    const pts=list.map(e=>+((e.data||{}).success)).map(v=>isNaN(v)?null:v);
+    return `<div class="ov-exp"><b>${esc(task)}</b> · ${esc(last.stage||"beginner")} · ${list.length} session${list.length===1?"":"s"}${
+      last.success!=null&&last.success!==""?` · last ${esc(String(last.success))}%`:""}</div>${learningCurveSVG(list)}`;
+  }).join("");
+}
+/* Success rate per session, with the sessions where the stage moved marked —
+   the picture you judge a stage change by. */
+function learningCurveSVG(list){
+  const pts=list.map((e,i)=>({i,v:+((e.data||{}).success),stage:(e.data||{}).stage||"beginner"})).filter(p=>!isNaN(p.v));
+  if(pts.length<2) return "";
+  const W=260,H=54,P=4, n=list.length-1||1;
+  const x=i=>P+(W-2*P)*i/n, y=v=>H-P-(H-2*P)*Math.max(0,Math.min(100,v))/100;
+  const path=pts.map((p,k)=>(k?"L":"M")+x(p.i).toFixed(1)+" "+y(p.v).toFixed(1)).join(" ");
+  const marks=pts.filter((p,k)=>k&&p.stage!==pts[k-1].stage)
+    .map(p=>`<line x1="${x(p.i)}" x2="${x(p.i)}" y1="${P}" y2="${H-P}" stroke="var(--amber)" stroke-dasharray="2 2"/><text x="${x(p.i)+2}" y="${P+8}" font-size="8" fill="var(--amber)">${esc(p.stage)}</text>`).join("");
+  return `<svg class="lc" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="success rate per session">
+    <line x1="${P}" x2="${W-P}" y1="${y(50)}" y2="${y(50)}" stroke="var(--line2)" stroke-dasharray="1 3"/>${marks}
+    <path d="${path}" fill="none" stroke="#a98cff" stroke-width="1.6"/>
+    ${pts.map(p=>`<circle cx="${x(p.i).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="2" fill="#a98cff"><title>${p.v}%</title></circle>`).join("")}</svg>`;
+}
+function imagingSectionHTML(a){
+  const fovs=animalFovs(a);
+  const sess=(a.diary||[]).filter(e=>(e.type==="microscopy"||(e.type==="training"&&e.data&&e.data.imaged))&&entryHappened(e));
+  if(!fovs.length&&!sess.length) return "";
+  const lastOf=id=>sess.filter(e=>(e.data.fovs||[]).some(f=>f.id===id)).map(e=>e.date).sort().pop();
+  const waiting=sess.filter(e=>e.type==="microscopy"&&e.data&&e.data.status!=="analysed");
+  return `${fovs.map(f=>{ const den=f.dendrites||[], rec=den.filter(x=>x.reconstructed).length, li=lastOf(f.id);
+      return `<div class="ov-exp fov-row" data-fov="${escAttr(f.id)}"><b>${esc(f.name)}</b>${
+        [f.depth!=null?f.depth+"µm":"",f.zoom!=null?"×"+f.zoom:"",f.planes?f.planes+" planes":""].filter(Boolean).map(t=>" · "+esc(String(t))).join("")}${
+        li?` <span class="ov-dim">last imaged ${esc(fmtDMY(li))}</span>`:""}
+        <div class="ov-dim">dendrites: ${den.length?den.map(x=>`<button type="button" class="ov-btn dd-tg" data-fov="${escAttr(f.id)}" data-dd="${escAttr(x.id)}" title="toggle reconstructed">${x.reconstructed?"✓ ":""}${esc(x.name)}</button>`).join(" "):"none"}
+          <button type="button" class="ov-btn dd-add" data-fov="${escAttr(f.id)}">＋ dendrite</button> ${den.length?`${rec}/${den.length} reconstructed`:""}</div></div>`; }).join("")}
+    ${waiting.length?`<div class="ov-sub">Waiting for analysis</div>`+waiting.map(e=>`<div>${esc(fmtDMY(e.date))} <span class="ov-dim">${esc(e.data.status||"raw")}</span></div>`).join(""):""}`;
+}
+function brainSectionHTML(a){
+  const b=brainOf(a); if(!b) return "";
+  const slicing=(a.diary||[]).filter(e=>e.type==="histology"&&String(e.date)>=b.perfused);
+  const slides=slicing.reduce((n,e)=>n+((e.data&&e.data.slides)||[]).length,0);
+  const ver=animalInjections(a).filter(i=>i.verified);
+  return `<div>perfused ${esc(fmtDMY(b.perfused))}${b.p.data&&b.p.data.operator?" by "+esc(b.p.data.operator):""} · <b>${esc(b.state)}</b>${
+    b.pbs?` <span class="ov-dim">PBS ${esc(fmtDMY(b.pbs))}</span>`:` <span class="ov-dim">PBS due ${esc(fmtDMY(b.pbsDue))}</span>`}</div>
+    ${slides?`<div>${slides} slide${slides===1?"":"s"} cut</div>`:""}
+    ${ver.length?`<div>verified: ${ver.map(i=>esc((i.virus||"?")+" → "+(i.siteRegion||"?")+" "+i.verified)).join(" · ")}</div>`:""}`;
+}
+function postopSectionHTML(a){
+  const due=[];
+  entriesWithRole(a,"surgery").filter(entryHappened).forEach(s=>{
+    for(let n=1;n<=POSTOP_DAYS;n++){
+      const dd=addDaysISO(String(s.date).slice(0,10),n).slice(0,10);
+      if(calDayDelta(dd,todayDateStr())<=7&&dd<=addDaysISO(todayDateStr(),POSTOP_DAYS).slice(0,10)) due.push({n,dd,done:postopDone(postopRecord(a,s,n))});
+    }
+  });
+  return due.length?`<div class="ov-dim">post-op: ${due.map(x=>`day ${x.n} ${x.done?"✓":x.dd<todayDateStr()?"<b style='color:var(--overdue)'>missed</b>":x.dd===todayDateStr()?"today":fmtDMY(x.dd).slice(0,5)}`).join(" · ")}</div>`:"";
+}
+function animalNotesHTML(a){
+  const notes=(DB.notes||[]).filter(n=>(n.links||[]).some(l=>l.kind==="animal"&&l.id===a.id))
+    .sort((x,y)=>String(y.date||y.updated||"").localeCompare(String(x.date||x.updated||"")));
+  if(!notes.length) return "";
+  return notes.slice(0,8).map(n=>`<button type="button" class="ov-entry ov-note" data-n="${escAttr(n.id)}"><span class="ov-edate">${esc(n.date?fmtDMY(n.date).slice(0,5):"")}</span><b>${esc(n.title||noteBodyPreview(n).slice(0,60)||"note")}</b></button>`).join("");
+}
+
 /* ---- their forms ---- */
 function openPostopModal(date){
   const rows=postopDueOn(date);
@@ -14990,6 +15096,23 @@ const ANIMAL_FACT_BUILTINS=[
     text:(v,a)=>{ const n=animalNextStage(a); return n?`next: ${n.label} ${fmtDMY(n.date).slice(0,5)}${n.late?" (late)":""}`:""; }},
   {id:"overdue",   group:"Experiments", label:"Overdue plan stages", type:"number",
     get:a=>animalOverdueStages(a), text:v=>v?`${v} overdue`:""},
+  {id:"restriction", group:"Restriction", label:"On restriction", type:"yesno", get:a=>!!restrictionAt(a,todayDateStr())},
+  {id:"restrictionPhase", group:"Restriction", label:"Restriction phase", type:"text",
+    get:a=>{ const s=restrictionStatus(a,todayDateStr()); return s?(s.phase==="maintaining"?"ready":"reaching"):""; },
+    text:v=>v==="ready"?"✓ ready":v?"reaching target":""},
+  {id:"restrictionDay", group:"Restriction", label:"Days on restriction", type:"number",
+    get:a=>{ const s=restrictionStatus(a,todayDateStr()); return s?s.daysOn:null; }, text:v=>v!=null?`restriction day ${v}`:""},
+  {id:"stage", group:"Behaviour", label:"Behaviour stage", type:"text",
+    get:a=>{ const e=(a.diary||[]).filter(x=>x.type==="training"&&entryHappened(x)&&x.data&&x.data.stage).sort((x,y)=>String(x.date).localeCompare(String(y.date))).pop(); return e?e.data.stage:""; }},
+  {id:"lastSuccess", group:"Behaviour", label:"Last success %", type:"number",
+    get:a=>{ const e=(a.diary||[]).filter(x=>x.type==="training"&&entryHappened(x)&&x.data&&x.data.success!=null&&x.data.success!=="").sort((x,y)=>String(x.date).localeCompare(String(y.date))).pop(); return e?+e.data.success:null; },
+    text:v=>v!=null?`${v}% success`:""},
+  {id:"fovs", group:"Imaging", label:"Fields of view", type:"number", get:a=>animalFovs(a).length||null, text:v=>v?`${v} FOV${v===1?"":"s"}`:""},
+  {id:"brain", group:"Brain", label:"Brain", type:"text", get:a=>{ const b=brainOf(a); return b?b.state:""; }},
+  {id:"verified", group:"Brain", label:"Injections verified", type:"text",
+    get:a=>animalInjections(a).filter(i=>i.verified).map(i=>(i.siteRegion||"?")+" "+i.verified).join(", ")},
+  {id:"warnings", group:"Attention", label:"Needs attention", type:"number",
+    get:a=>animalWarnings(a).filter(w=>w.level!=="ok").length||null, text:v=>v?`⚠ ${v}`:""},
   {id:"lastEntry", group:"Diary", label:"Last diary entry", type:"date",
     get:a=>lastDiaryDate(a)||null, text:v=>v?"last entry "+daysAgoText(v):""}
 ];
@@ -15151,11 +15274,17 @@ function animalOverviewHTML(a){
   const own=customFacts().map(d=>({d,v:animalFact(a,d.id)})).filter(x=>x.v.text);
   const fields=own.length?`<div class="ov-grid">${own.map(x=>`<span class="ov-k">${esc(x.d.label.replace(/^.* · /,""))}</span><span>${esc(String(x.v.value))}</span>`).join("")}</div>`:"";
 
+  const warns=animalWarnings(a);
   return `<div class="ov">
     <div class="ov-life">${life}</div>
+    ${warns.length?`<div class="ov-warns">${warningsHTML(warns)}</div>`:""}
     ${sec("Body",body+`<div id="ov_baseedit"></div>`,baseCtl)}
     ${sec("Food restriction",restrictionSectionHTML(a),"")}
-    ${sec("Procedure",proc,`<button type="button" class="ov-btn ov-godetails" data-focus="proc">edit…</button>`)}
+    ${sec("Procedure",proc+postopSectionHTML(a),`<button type="button" class="ov-btn ov-godetails" data-focus="proc">edit…</button>`)}
+    ${sec("Behaviour",behaviourSectionHTML(a),"")}
+    ${sec("Imaging",imagingSectionHTML(a),"")}
+    ${sec("Brain",brainSectionHTML(a),"")}
+    ${sec("Notes",animalNotesHTML(a),"")}
     ${sec("Experiments",exps.concat(projs).join("")||dim("not in any experiment"))}
     ${fields?sec("Recorded on the animal",fields,`<button type="button" class="ov-btn ov-godetails">edit…</button>`):""}
     ${sec("Diary",diary,`<button type="button" class="ov-btn ov-godiary">open diary…</button>`)}
@@ -15231,7 +15360,7 @@ function animalBaselineEditorHTML(a){
    line under each that sums up what can be summed: the arm's mean weight
    against baseline is the number the whole cohort is judged by.
    Which columns is a view choice, kept on this device like the card's line. */
-const COHORT_DEFAULT=["pctBaseline","weight","virus","postOp","nextStage"];
+const COHORT_DEFAULT=["pctBaseline","restrictionPhase","stage","lastSuccess","nextStage","warnings"];
 function cohortCols(){
   const v=DB.config&&DB.config.cohortCols;
   return (Array.isArray(v)?v:COHORT_DEFAULT).filter(id=>animalFactDef(id));
@@ -17621,6 +17750,17 @@ function animalModal(id,draft,opts){
       if(day){ showTab("diary",{date:day.dataset.d}); return; }
       const exb=t.closest(".ov-openexp");
       if(exb){ const ex=DB.experiments.find(x=>x.id===exb.dataset.ex); if(ex){ closeModal(); experimentModal(ex,()=>render()); } return; }
+      const dda=t.closest(".dd-add");
+      if(dda){ const nm=prompt("Dendrite name"); if(!nm)return;
+        const f=animalFovs(a).find(x=>x.id===dda.dataset.fov); if(!f)return;
+        (f.dendrites=f.dendrites||[]).push({id:uid("dd_"),name:nm.trim(),reconstructed:false});
+        persist(); paintOverview(); return; }
+      const ddt=t.closest(".dd-tg");
+      if(ddt){ const f=animalFovs(a).find(x=>x.id===ddt.dataset.fov), dd=f&&(f.dendrites||[]).find(x=>x.id===ddt.dataset.dd); if(!dd)return;
+        dd.reconstructed=!dd.reconstructed; if(dd.reconstructed){ dd.date=todayDateStr(); dd.by=(DB.me&&DB.me.name)||""; }
+        persist(); paintOverview(); return; }
+      const on=t.closest(".ov-note");
+      if(on){ closeModal(); noteModal(on.dataset.n); return; }
       if(t.closest(".ov-rstart")){ const f=document.getElementById("ov_rform"); f.hidden=!f.hidden; return; }
       if(t.closest(".ov-rgo")){
         const d=document.getElementById("ov_rd").value, g=+document.getElementById("ov_rg").value, r=document.getElementById("ov_rr").value;
