@@ -1139,6 +1139,15 @@
     margin-left:3px;padding:0 4px}
   .btn.filt-on{border-color:var(--gcamp);color:var(--ink)}
   .acond-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+  .aq-box{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+  .aq-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .aq-row>.af-label{min-width:110px}
+  .aq{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);
+    border-radius:20px;padding:3px 10px;font-size:11.5px;cursor:pointer}
+  .aq.on{border-color:var(--gcamp);color:var(--ink);background:color-mix(in srgb,var(--gcamp) 14%,var(--panel2))}
+  .aq .aq-tg{border:0;background:none;color:inherit;font:inherit;padding:0;cursor:pointer}
+  .aq select,.aq input{background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;font-size:11px;padding:1px 4px}
+  .aq-days{width:3.2em;text-align:center}
   .acond{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line2);
     border-radius:20px;padding:3px 6px 3px 11px;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
   .acond-x{border:0;background:transparent;color:var(--ink-faint);cursor:pointer;font-size:10px;padding:0 3px}
@@ -4683,16 +4692,10 @@ function migrate(){                       // backfill fields added in later vers
   matSubTab=["inventory","viruses","sites","procedures"].includes(DB.config.matSubTab)?DB.config.matSubTab:"sites";
   animalProject=DB.config.animalFilters.project||"all";
   calMode=DB.config.calMode||"week";
-  animalEntry=DB.config.animalFilters.entry||"all";
   animalGroupBy=DB.config.animalFilters.groupBy||"none";
-  animalConds=Array.isArray(DB.config.animalFilters.conds)?DB.config.animalFilters.conds:[];
-  /* v290 asked about the procedure under Surgery. Those questions are about
-     the animal and now live there; a filter saved the old way is re-pointed so
-     it keeps meaning exactly what it meant. */
-  const PROC_TO_FACT={__proc_virus:"virus",__proc_site:"targets",__proc_partner:"projections",
-    __proc_head:"headpost",__proc_window:"window",__proc_n:"injections"};
-  animalConds.forEach(c=>{ if(c&&PROC_TO_FACT[c.field]){ c.field=PROC_TO_FACT[c.field]; c.type=COND_ANIMAL;
-    if(c.op==="hasnt") c.op="nothas"; } });
+  // 2.0 asks fixed questions; a 1.0 "entry" pick or built condition is dropped
+  animalQs=(DB.config.animalFilters.qs&&typeof DB.config.animalFilters.qs==="object")?DB.config.animalFilters.qs:{};
+  delete DB.config.animalFilters.entry; delete DB.config.animalFilters.conds;
   animalFiltersOpen=!!DB.config.animalFilters.panelOpen;
   // "dob"/"added"/"sac" are the pre-earliest/latest values a saved workspace
   // may still carry — each meant ascending (earliest/oldest first) already,
@@ -5081,6 +5084,8 @@ function migrate(){                       // backfill fields added in later vers
    into one result instead of two copies.
    It never guesses silently: anything odd goes into DB._v2report, which the
    app shows once, for a person to look at. */
+// Before this moment every record was made by 1.0. Set to the day 2.0 went live.
+const V2_EPOCH=Date.parse("2026-11-03T00:00:00");
 const V2_TYPE_MAP={dt_c9wh_dj57qywf:{type:"microscopy",purpose:"structural"},   // "Spines"
                    dt_c9wh_sc5v8d3l:{type:"microscopy",purpose:"structural",note:"Reconstruction"}};
 // Hebrew inside an English sentence keeps its own direction without reordering the rest
@@ -5245,6 +5250,17 @@ function migrateV2(){
     v2Report("rounds",`${coverTasks.length} feeding task${coverTasks.length===1?"":"s"} (${bidiIso("האכלות")}) retired — the daily feeding now comes from the restrictions themselves.`);
     changed=true;
   }
+  /* 1.0 never recorded moving a brain to PBS, so every brain it perfused
+     would read as still in PFA. The move is taken to have happened on its
+     due day — said so on the record (pbsAssumed) and in the report, and
+     derived from the perfusion date, so every device makes the same one. */
+  const assumed=[];
+  (DB.animals||[]).forEach(a=>{
+    const b=brainOf(a); if(!b||b.pbs||b.notProcessed||b.sliced||b.pbsDue>todayDateStr()) return;
+    if(!((b.p.created||0)<V2_EPOCH)) return;      // recorded in 2.0: the reminder is real
+    const d=b.p.data=b.p.data||{}; d.pbs=b.pbsDue; d.pbsAssumed=true; assumed.push(a.name); changed=true;
+  });
+  if(assumed.length) v2Report("pbs:"+assumed.join("|"),`Brains perfused before Arbor 2.0 had no "moved to PBS" date; it was set to two days after perfusion for ${assumed.join(", ")}. Correct any that differ in the perfusion record.`);
   // protocol stages name record kinds; a plan an arm points at must exist
   planList().forEach(pl=>planStages(pl).forEach(st=>{ const m=V2_TYPE_MAP[st.type]; if(m){ st.type=m.type; changed=true; } }));
   (DB.experiments||[]).forEach(ex=>(ex.groupDefs||[]).forEach(g=>{
@@ -12958,7 +12974,7 @@ function noteModal(id,over){
 }
 
 /* ---------- ANIMALS (colony / surgery log) ---------- */
-let animalExperiment="all", animalProject="all", animalGroup="all", animalCage="all", animalStatus="all", animalEntry="all", animalSearch="", animalSort="name", animalGroupBy="none";
+let animalExperiment="all", animalProject="all", animalGroup="all", animalCage="all", animalStatus="all", animalSearch="", animalSort="name", animalGroupBy="none";
 let animalExcluded="all", animalPractice="all";
 // "dead" asks the axis, "sacrificed"/"early_death" ask how — one control, two
 // depths, instead of a flat list that could not express "all the dead ones"
@@ -12976,185 +12992,98 @@ let animalFiltersOpen=false;
 // How many filters are actually doing something — shown on the button so a
 // collapsed panel can never hide the fact that the list is being narrowed.
 function animalActiveFilterCount(){
-  return [animalCage,animalExperiment,animalProject,animalGroup,animalStatus,animalEntry,animalExcluded,animalPractice]
-    .filter(v=>v&&v!=="all").length + animalConds.length;
+  return [animalCage,animalExperiment,animalProject,animalGroup,animalStatus,animalExcluded,animalPractice]
+    .filter(v=>v&&v!=="all").length + Object.keys(animalQs).length;
 }
 function clearAnimalFilters(){
-  animalCage=animalExperiment=animalProject=animalGroup=animalStatus=animalEntry="all";
+  animalCage=animalExperiment=animalProject=animalGroup=animalStatus="all";
   animalExcluded=animalPractice="all";
-  animalConds=[]; animalOpenedFrom=null;
+  animalQs={}; animalOpenedFrom=null;
   Object.assign(DB.config.animalFilters,
-    {tag:"all",cage:"all",experiment:"all",project:"all",group:"all",status:"all",entry:"all",excluded:"all",practice:"all",conds:[]});
+    {tag:"all",cage:"all",experiment:"all",project:"all",group:"all",status:"all",excluded:"all",practice:"all",qs:{}});
   persist(); renderAnimals();
 }
-// Conditions on the values inside diary entries. An animal satisfies one if
-// ANY of its entries of that type satisfies it, and passes the filter only if
-// it satisfies EVERY condition — so they narrow, the way stacked filters are
-// expected to. Operators follow the field's own type: "over 22" means nothing
-// for a yes/no, "contains" means nothing for a number.
-let animalConds=[];
-const COND_OPS={
-  number:[["gt","over"],["lt","under"],["eq","equals"]],
-  count :[["gt","more than"],["lt","fewer than"],["eq","exactly"]],
-  date  :[["after","after"],["before","before"],["on","on"]],
-  select:[["is","is"],["not","is not"]],
-  yesno :[["yes","is Yes"],["no","is No"]],
-  // Three answers that never overlap. "Not completed" read as if it took in
-  // animals with no such entry at all, so "has none" is its own answer rather
-  // than something to infer. "no"/"yes" keep their keys so saved filters still
-  // mean what they meant.
-  done  :[["no","scheduled, not done yet"],["yes","done"],["none","not scheduled at all"]],
-  text  :[["has","contains"],["nothas","does not contain"]]
-};
-/* Every entry type can be filtered on, not just the ones that happen to
-   declare custom fields. Three things are true of every entry regardless of
-   type — it has a note, it has a date, and there is some number of them — and
-   restricting the builder to declared fields hid all of that, leaving types
-   like Surgery, Perfusion and Comment with nothing to filter by at all.
-   Training carries more still: the behavioural task's name, and whatever
-   metrics that task defines in the task library. */
-const COND_ANIMAL="__animal";
-function condFields(typeKey){
-  /* "The animal itself": every fact the animal's window shows, askable as a
-     condition with the same name and the same reading — so a filter can never
-     ask about something the animal does not say, or say it differently. */
-  if(typeKey===COND_ANIMAL)
-    return ANIMAL_FACT_BUILTINS.concat(customFacts()).map(d=>({key:d.id,label:d.label,
-      type:d.type==="date"?"date":d.type==="yesno"?"yesno":d.type==="number"?"number":"text",src:"fact"}));
-  const d=diaryTypeDef(typeKey); if(!d)return [];
-  const out=[
-    {key:"__count",label:"Number of entries",type:"count",src:"count"},
-    {key:"__date", label:"Date",             type:"date", src:"date"},
-    // the ✓ on the entry itself — "scheduled for surgery but hasn't had it"
-    // is a question about the tick, not about the date: an entry whose day has
-    // passed without being ticked is exactly the case worth finding
-    {key:"__done", label:"Status",           type:"done", src:"done"},
-    {key:"__note", label:"Note",             type:"text", src:"note"}
+/* The Animals tab's questions. 1.0 offered a builder — any entry type, any
+   field, over / under / contains — which is the open spreadsheet 2.0 left
+   behind. These are the questions the lab actually asks, each one reading a
+   fact the animal's window already shows, so the filter and the window can
+   never disagree. A question is a switch; some take a value (which virus,
+   which task) or a number of days. */
+let animalQs={};
+// built on first use: its labels read constants declared further down
+let animalQuestionsCache=null;
+function animalQuestions(){ return animalQuestionsCache||(animalQuestionsCache=(()=>{
+  const today=()=>todayDateStr();
+  const rs=a=>restrictionStatus(a,today());
+  const sessions=a=>(a.diary||[]).filter(e=>e.type==="training"&&entryHappened(e));
+  const imaged=a=>(a.diary||[]).filter(e=>entryHappened(e)&&(e.type==="microscopy"||(e.type==="training"&&e.data&&e.data.imaged)));
+  const daysAgo=n=>addDaysISO(today(),-(+n||0)).slice(0,10);
+  const all=f=>[...new Set((DB.animals||[]).flatMap(f))].sort((x,y)=>String(x).localeCompare(String(y),undefined,{numeric:true}));
+  return [
+    {id:"rs_on",    group:"Food restriction", label:"on restriction",  test:a=>!!rs(a)},
+    {id:"rs_reach", group:"Food restriction", label:"reaching",        test:a=>(rs(a)||{}).phase==="reaching"},
+    {id:"rs_maint", group:"Food restriction", label:"maintaining",     test:a=>(rs(a)||{}).phase==="maintaining"},
+    {id:"rs_low",   group:"Food restriction", label:`below ${RESTRICTION_FLOOR}%`, test:a=>!!(rs(a)||{}).belowFloor},
+    {id:"rs_unfed", group:"Food restriction", label:"not fed today",   test:a=>{ const st=rs(a); return !!st&&!st.todayDone; }},
+    {id:"pr_had",   group:"Procedure", label:"had surgery",    test:a=>surgeriesOf(a).some(x=>!x.planned)},
+    {id:"pr_booked",group:"Procedure", label:"surgery booked", test:a=>surgeriesOf(a).some(x=>x.planned&&x.date>=today())},
+    {id:"pr_postop",group:"Procedure", label:`in post-op (first ${POSTOP_DAYS} days)`,
+      test:a=>surgeriesOf(a).some(x=>{ if(x.planned) return false; const n=calDayDelta(x.date,today()); return n>=0&&n<=POSTOP_DAYS; })},
+    {id:"pr_virus", group:"Procedure", label:"virus is", pick:()=>all(animalViruses), test:(a,v)=>animalViruses(a).includes(v)},
+    {id:"pr_site",  group:"Procedure", label:"site is",  pick:()=>all(animalSites),   test:(a,v)=>animalSites(a).includes(v)},
+    {id:"bh_task",  group:"Behaviour", label:"task is",  pick:()=>behaviourTaskNames(), test:(a,v)=>sessions(a).some(e=>e.data&&e.data.task===v)},
+    {id:"bh_stage", group:"Behaviour", label:"stage is", pick:()=>["beginner","middle","expert"], test:(a,v)=>animalFact(a,"stage").value===v},
+    // only animals that train at all — otherwise every untrained animal matches
+    {id:"bh_idle",  group:"Behaviour", label:"no session in the last", days:7,
+      test:(a,n)=>{ const s=sessions(a); return s.length>0&&!s.some(e=>String(e.date).slice(0,10)>=daysAgo(n)); }},
+    {id:"im_fovs",  group:"Imaging", label:"has FOVs", test:a=>animalFovs(a).length>0},
+    {id:"im_recent",group:"Imaging", label:"imaged in the last", days:14, test:(a,n)=>imaged(a).some(e=>String(e.date).slice(0,10)>=daysAgo(n))},
+    {id:"im_recon", group:"Imaging", label:"dendrites waiting for reconstruction", test:a=>animalFovs(a).some(f=>(f.dendrites||[]).some(d=>!d.reconstructed))},
+    {id:"br_perf",  group:"Brain", label:"perfused",       test:a=>!!brainOf(a)},
+    {id:"br_pbs",   group:"Brain", label:"in PBS",         test:a=>(brainOf(a)||{}).state==="in PBS"},
+    {id:"br_ready", group:"Brain", label:"ready to slice",
+      test:a=>{ const b=brainOf(a); return !!b&&!!b.pbs&&!b.sliced&&!b.notProcessed&&b.sliceFrom<=today(); }},
+    {id:"br_sliced",group:"Brain", label:"sliced",         test:a=>!!(brainOf(a)||{}).sliced},
+    {id:"br_histo", group:"Brain", label:"histology done", test:a=>(a.diary||[]).some(e=>e.type==="histo"&&entryHappened(e))},
+    {id:"br_np",    group:"Brain", label:"won't be processed", test:a=>!!(brainOf(a)||{}).notProcessed},
+    {id:"wn_any",   group:"Warnings", label:"has any warning", test:a=>animalWarnings(a,today()).some(w=>w.level!=="ok")}
   ];
-  if(typeKey==="training"){
-    out.push({key:"__task",label:"Task",type:"text",src:"task"});
-    // metric keys differ per task, so offer the union across the library
-    const seen=new Set();
-    (DB.config.taskLib||[]).forEach(t=>(t.params||[]).forEach(p=>{
-      if(seen.has(p.key))return; seen.add(p.key);
-      out.push({key:"m:"+p.key,label:`${p.label||p.key} (task metric)`,
-                type:p.type||"text",options:p.options,src:"metric"});
-    }));
-  }
-  (d.fields||[]).forEach(f=>out.push({...f,src:"field"}));
-  return out;
+})()); }
+function animalQuestion(id){ return animalQuestions().find(q=>q.id===id)||null; }
+// every switched-on question must hold; one whose value is gone asks nothing
+function animalPassesQs(a){
+  return Object.entries(animalQs).every(([id,v])=>{ const q=animalQuestion(id); return !q||q.test(a,v); });
 }
-function condFieldDef(typeKey,fieldKey){
-  return condFields(typeKey).find(f=>f.key===fieldKey)||null;
-}
-function condValueOf(e,f){
-  if(f.src==="note")   return diaryNoteOf(e.data||{});
-  if(f.src==="date")   return e.date||"";
-  if(f.src==="done")   return !!e.done;   // false, not undefined: an untouched entry IS "not completed"
-  if(f.src==="task")   return (e.data||{}).task||"";
-  if(f.src==="metric") return ((e.data||{}).metrics||{})[f.key.slice(2)];
-  return (e.data||{})[f.key];
-}
-function condMatches(a,c){
-  if(c.type===COND_ANIMAL) return factMatches(a,c);
-  const f=condFieldDef(c.type,c.field); if(!f)return false;
-  const entries=(a.diary||[]).filter(e=>e.type===c.type);
-  // a count is a fact about the set, not about any one entry
-  if(f.type==="count"){
-    const n=entries.length, t=parseFloat(c.value);
-    if(isNaN(t))return false;
-    return c.op==="gt"?n>t:c.op==="lt"?n<t:n===t;
-  }
-  if(f.type==="done"&&c.op==="none") return !entries.length;
-  return entries.some(e=>{
-    const v=condValueOf(e,f);
-    if(v==null||v==="")return false;
-    if(f.type==="number"){
-      const n=parseFloat(v), t=parseFloat(c.value);
-      if(isNaN(n)||isNaN(t))return false;
-      return c.op==="gt"?n>t:c.op==="lt"?n<t:n===t;
+function animalQsHTML(){
+  const groups=[...new Set(animalQuestions().map(q=>q.group))];
+  const chip=q=>{
+    const on=Object.prototype.hasOwnProperty.call(animalQs,q.id), v=animalQs[q.id];
+    if(q.pick){
+      const opts=q.pick();
+      if(!opts.length&&!on) return "";
+      return `<label class="aq${on?" on":""}">${esc(q.label)} <select class="aq-pick" data-q="${q.id}">
+        <option value="">—</option>${opts.map(o=>`<option value="${escAttr(o)}" ${on&&v===o?"selected":""}>${esc(o)}</option>`).join("")}</select></label>`;
     }
-    if(f.type==="date"){
-      const d1=String(v).slice(0,10), d2=String(c.value||"").slice(0,10);
-      if(!d2)return false;
-      return c.op==="after"?d1>d2:c.op==="before"?d1<d2:d1===d2;
-    }
-    if(f.type==="done") return c.op==="yes"?v===true:v!==true;
-    if(f.type==="yesno"){ const b=(v===true||v==="1"||v===1||String(v).toLowerCase()==="yes");
-      return c.op==="yes"?b:!b; }
-    const sv=String(v).toLowerCase(), tv=String(c.value||"").toLowerCase();
-    if(f.type==="select") return c.op==="is"?sv===tv:sv!==tv;
-    return c.op==="has"?sv.includes(tv):!sv.includes(tv);
-  });
-}
-function condLabel(c){
-  if(c.type===COND_ANIMAL){
-    const f=condFieldDef(c.type,c.field), ft=f?f.type:"text";
-    const op=((COND_OPS[ft]||COND_OPS.text).find(o=>o[0]===c.op)||["",c.op])[1];
-    return `${f?f.label:c.field} ${op}${ft==="yesno"?"":" "+c.value}`;
-  }
-  const d=diaryTypeDef(c.type), f=condFieldDef(c.type,c.field);
-  const ft=f?f.type:"text";
-  const op=((COND_OPS[ft]||COND_OPS.text).find(o=>o[0]===c.op)||["",c.op])[1];
-  // "Surgery · not scheduled at all" — the answer already says it is a status
-  if(ft==="done") return `${d?d.label:c.type} · ${op}`;
-  return `${d?d.label:c.type} · ${f?f.label:c.field} ${op}${ft==="yesno"?"":" "+c.value}`;
-}
-function openCondModal(after){
-  const types=allDiaryTypeDefs();
-  if(!types.length){ toast("No entry types defined yet"); return; }
-  const draw=()=>{
-    // the animal comes first: it is the question most filters are asking
-    const tKey=document.getElementById("cnd_type")?.value||COND_ANIMAL;
-    const fields=condFields(tKey);
-    const fKey=document.getElementById("cnd_field")?.value||fields[0].key;
-    const f=condFieldDef(tKey,fKey)||fields[0];
-    const ops=COND_OPS[f.type]||COND_OPS.text;
-    const valHTML=
-      (f.type==="yesno"||f.type==="done") ? "" :
-      f.type==="select" ? `<select id="cnd_val">${(f.options||[]).map(o=>`<option value="${escAttr(o)}">${esc(o)}</option>`).join("")}</select>` :
-      f.type==="date"   ? `<input id="cnd_val" type="date">` :
-      `<input id="cnd_val" type="text" inputmode="${(f.type==="number"||f.type==="count")?"decimal":"text"}" placeholder="${
-        f.type==="count"?"e.g. 3":f.type==="number"?"e.g. 22":"text to match"}">`;
-    document.getElementById("cnd_body").innerHTML=`
-      <div class="drow">
-        <div class="fld" style="flex:1"><label>About</label>
-          <select id="cnd_type"><option value="${COND_ANIMAL}" ${tKey===COND_ANIMAL?"selected":""}>🐭 The animal itself</option>${types.map(t=>`<option value="${t.key}" ${t.key===tKey?"selected":""}>${esc(t.label)}</option>`).join("")}</select></div>
-        <div class="fld" style="flex:1"><label>Field</label>
-          <select id="cnd_field">${fields.map(x=>`<option value="${escAttr(x.key)}" ${x.key===fKey?"selected":""}>${esc(x.label)}</option>`).join("")}</select></div>
-      </div>
-      <div class="drow">
-        <div class="fld" style="flex:1"><label>Is</label>
-          <select id="cnd_op">${ops.map(o=>`<option value="${o[0]}">${esc(o[1])}</option>`).join("")}</select></div>
-        ${valHTML?`<div class="fld" style="flex:1"><label>Value</label>${valHTML}</div>`:""}
-      </div>`;
-    document.getElementById("cnd_type").addEventListener("change",()=>{
-      // a new type has a different field list; start it at that list's first
-      const el=document.getElementById("cnd_field");
-      el.innerHTML=condFields(document.getElementById("cnd_type").value)
-        .map(x=>`<option value="${escAttr(x.key)}">${esc(x.label)}</option>`).join("");
-      draw();
-    });
-    document.getElementById("cnd_field").addEventListener("change",draw);
+    if(q.days) return `<span class="aq${on?" on":""}"><button type="button" class="aq-tg" data-q="${q.id}">${esc(q.label)}</button>
+      <input class="aq-days" data-q="${q.id}" type="text" inputmode="numeric" value="${escAttr(String(on?v:q.days))}"> days</span>`;
+    return `<button type="button" class="aq aq-tg${on?" on":""}" data-q="${q.id}">${esc(q.label)}</button>`;
   };
-  modal(`<h3>Add a condition</h3><div id="cnd_body"></div>
-    <div class="actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
-      <button class="btn accent" id="cnd_add">Add</button></div>`,{wide:true});
-  draw();
-  document.getElementById("cnd_add").onclick=()=>{
-    const type=document.getElementById("cnd_type").value;
-    const field=document.getElementById("cnd_field").value;
-    const op=document.getElementById("cnd_op").value;
-    const valEl=document.getElementById("cnd_val");
-    const value=valEl?valEl.value.trim():"";
-    const f=condFieldDef(type,field);
-    if(f&&f.type!=="yesno"&&f.type!=="done"&&!value){ toast("Give it a value to compare against"); return; }
-    animalConds.push({type,field,op,value});
-    DB.config.animalFilters.conds=animalConds; persist();
-    closeModal(); if(after)after();
-  };
+  return groups.map(g=>{ const chips=animalQuestions().filter(q=>q.group===g).map(chip).join("");
+    return chips?`<div class="aq-row"><span class="af-label">${esc(g)}</span>${chips}</div>`:""; }).join("");
 }
-// Which animal cards have their detail panel open — tracked here rather than
+function wireAnimalQs(bar){
+  const save=()=>{ DB.config.animalFilters.qs=animalQs; persist(); renderAnimals(); };
+  bar.querySelectorAll(".aq-tg").forEach(b=>b.onclick=()=>{
+    const q=animalQuestion(b.dataset.q); if(!q) return;
+    if(Object.prototype.hasOwnProperty.call(animalQs,q.id)) delete animalQs[q.id];
+    else animalQs[q.id]=q.days?(+((bar.querySelector(`.aq-days[data-q="${q.id}"]`)||{}).value)||q.days):true;
+    save(); });
+  bar.querySelectorAll(".aq-pick").forEach(el=>el.onchange=()=>{
+    if(el.value) animalQs[el.dataset.q]=el.value; else delete animalQs[el.dataset.q]; save(); });
+  bar.querySelectorAll(".aq-days").forEach(el=>el.onchange=()=>{
+    const n=parseInt(el.value,10); if(!(n>0)) return;
+    if(Object.prototype.hasOwnProperty.call(animalQs,el.dataset.q)){ animalQs[el.dataset.q]=n; save(); } });
+}// Which animal cards have their detail panel open — tracked here rather than
 // as pure per-card DOM state, so a full renderAnimals() (needed whenever a
 // quick-edit might change which animals a status filter or a dob/sacrificed
 // sort should even show) doesn't collapse every card that was open.
@@ -13896,6 +13825,9 @@ function agendaOn(date){
   return items;
 }
 
+// a missed step stops being shouted about after this long — by then it was
+// either done and not written down, or it is history
+const WARN_WINDOW_DAYS=14;
 /* ---- warnings: one layer ----
    Everything that needs attention, worked out in one place from the facts —
    so the animal's window, its card, the timeline and the bell all say the
@@ -13905,7 +13837,7 @@ function animalWarnings(a,date){
   const d=String(date||todayDateStr()).slice(0,10), out=[];
   if(a.alive===false){
     const b=brainOf(a);
-    if(b&&!b.notProcessed&&!b.sliced&&!b.pbs&&b.pbsDue<=d) out.push({level:b.pbsDue<d?"red":"amber",text:b.pbsDue<d?`brain overdue to move to PBS (due ${fmtDMY(b.pbsDue)})`:"brain: move to PBS today"});
+    if(b&&!b.notProcessed&&!b.sliced&&!b.pbs&&b.pbsDue<=d&&calDayDelta(b.pbsDue,d)<=WARN_WINDOW_DAYS) out.push({level:b.pbsDue<d?"red":"amber",text:b.pbsDue<d?`brain overdue to move to PBS (due ${fmtDMY(b.pbsDue)})`:"brain: move to PBS today"});
     return out;
   }
   const st=restrictionStatus(a,d);
@@ -13919,7 +13851,7 @@ function animalWarnings(a,date){
   entriesWithRole(a,"surgery").filter(entryHappened).forEach(s=>{
     for(let n=1;n<=POSTOP_DAYS;n++){
       const due=addDaysISO(String(s.date).slice(0,10),n).slice(0,10);
-      if(due<d&&calDayDelta(due,d)<=14&&!postopDone(postopRecord(a,s,n))) out.push({level:"red",text:`post-op check day ${n} (${fmtDMY(due).slice(0,5)}) missed`});
+      if(due<d&&calDayDelta(due,d)<=WARN_WINDOW_DAYS&&!postopDone(postopRecord(a,s,n))) out.push({level:"red",text:`post-op check day ${n} (${fmtDMY(due).slice(0,5)}) missed`});
     }
   });
   const od=animalOverdueStages(a); if(od) out.push({level:"amber",text:`${od} overdue protocol stage${od===1?"":"s"}`});
@@ -14360,25 +14292,6 @@ function animalFact(a,id){
   const def=animalFactDef(id); if(!def||!a) return {def,value:null,text:""};
   let v=null; try{ v=def.get(a); }catch(e){ v=null; }
   return {def,value:v,text:factText(def,v,a)};
-}
-// A fact as a condition, for the filters: same name, same reading.
-function factMatches(a,c){
-  const f=animalFact(a,c.field); if(!f.def) return false;
-  const v=f.value, t=f.def.type;
-  if(t==="yesno") return c.op==="yes"?!!v:!v;
-  if(t==="number"){
-    if(v==null||v==="")return false;
-    const n=+v, x=parseFloat(c.value); if(isNaN(x))return false;
-    return c.op==="gt"?n>x:c.op==="lt"?n<x:n===x;
-  }
-  if(t==="date"){
-    if(!v)return false;
-    const d1=String(v).slice(0,10), d2=String(c.value||"").slice(0,10); if(!d2)return false;
-    return c.op==="after"?d1>d2:c.op==="before"?d1<d2:d1===d2;
-  }
-  const sv=String(v==null?"":v).toLowerCase(), tv=String(c.value||"").toLowerCase();
-  if(!tv) return false;
-  return c.op==="has"?sv.includes(tv):!sv.includes(tv);
 }
 
 /* ---- the animal's overview: state and history in one place ----
@@ -15003,13 +14916,9 @@ function renderAnimals(){
       ${col("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["dead","No longer alive"],["sacrificed","— sacrificed"],["early_death","— early death"]])}
       ${col("Excluded","a_excluded",animalExcluded,[["all","Either"],["no","Not excluded"],["yes","Excluded only"]])}
       ${col("Practice","a_practice",animalPractice,[["all","Either"],["no","Not practice"],["yes","Practice only"]])}
-      ${col("Entry","a_entry",animalEntry,[["all","Any entry"],["none","No entries"],
-        ...allDiaryTypeDefs().map(d=>[d.key,`${d.icon||""} ${d.label}`.trim()])])}
     </div>
+    <div class="aq-box">${animalQsHTML()}</div>
     <div class="acond-bar">
-      ${animalConds.map((c,i)=>`<span class="acond" data-i="${i}">${esc(condLabel(c))}<button type="button" class="acond-x" data-i="${i}" title="Remove">✕</button></span>`).join("")}
-      <button type="button" class="acond-add" id="a_addcond">⊕ Add condition</button>
-      ${animalConds.length>1?`<button type="button" class="acond-add" id="a_clearcond">clear conditions</button>`:""}
       ${animalActiveFilterCount()?`<button type="button" class="acond-add" id="a_clearall">clear all filters</button>`:""}
     </div>
     </div>
@@ -15021,11 +14930,7 @@ function renderAnimals(){
   };
   const clearAllBtn=bar.querySelector("#a_clearall");
   if(clearAllBtn) clearAllBtn.onclick=clearAnimalFilters;
-  bar.querySelector("#a_addcond").onclick=()=>openCondModal(()=>renderAnimals());
-  const clearBtn=bar.querySelector("#a_clearcond");
-  if(clearBtn) clearBtn.onclick=()=>{ animalConds=[]; DB.config.animalFilters.conds=[]; persist(); renderAnimals(); };
-  bar.querySelectorAll(".acond-x").forEach(b=>b.onclick=()=>{
-    animalConds.splice(+b.dataset.i,1); DB.config.animalFilters.conds=animalConds; persist(); renderAnimals(); });
+  wireAnimalQs(bar);
   const onPick=(id,fn)=>{ const el=bar.querySelector("#"+id); if(el)el.addEventListener("change",e=>fn(e.target.value)); };
   onPick("a_cage",v=>{ animalCage=v; DB.config.animalFilters.cage=v; persist(); renderAnimals(); });
   onPick("a_exp",v=>{ animalExperiment=v; DB.config.animalFilters.experiment=v; persist(); renderAnimals(); });
@@ -15035,7 +14940,6 @@ function renderAnimals(){
   onPick("a_status",v=>{ animalStatus=v; DB.config.animalFilters.status=v; persist(); renderAnimals(); });
   onPick("a_excluded",v=>{ animalExcluded=v; DB.config.animalFilters.excluded=v; persist(); renderAnimals(); });
   onPick("a_practice",v=>{ animalPractice=v; DB.config.animalFilters.practice=v; persist(); renderAnimals(); });
-  onPick("a_entry",v=>{ animalEntry=v; DB.config.animalFilters.entry=v; persist(); renderAnimals(); });
   onPick("a_groupby",v=>{ animalGroupBy=v; DB.config.animalFilters.groupBy=v; persist(); renderAnimals(); });
   /* Toggling redraws the list under the open popover, which would take the
      popover's own anchor with it — so the choice is written and only the cards
@@ -15098,11 +15002,6 @@ function renderAnimals(){
       .some(v=>v && String(v).toLowerCase().includes(q));
   }
   const inCage=(a,c)=>c==="all"||(c==="none"?!a.cage:a.cage===c);
-  // "has an entry of this type" — the options come from diaryTypeDefs(), so a
-  // type you add yourself is filterable the moment it exists
-  const inEntry=(a,key)=>key==="all"||(key==="none"
-    ? !(a.diary||[]).length
-    : (a.diary||[]).some(e=>e.type===key));
   // in an experiment = linked to it, or assigned to one of its groups
   const inExperiment=(a,sid)=>{
     if(sid==="all")return true;
@@ -15126,8 +15025,7 @@ function renderAnimals(){
   let list=DB.animals.filter(a=>
     inCage(a,animalCage) && inExperiment(a,animalExperiment) && inProject(a,animalProject) && inGroup(a,animalGroup) &&
     inLife(a,animalStatus) && inFlag(a.excluded,animalExcluded) && inFlag(a.practice,animalPractice) &&
-    inEntry(a,animalEntry) &&
-    animalConds.every(c=>condMatches(a,c)) &&
+    animalPassesQs(a) &&
     searchMatch(a));
   // Missing dates sort last whichever way round, so a half-filled column never
   // buries the animals that do have one.
