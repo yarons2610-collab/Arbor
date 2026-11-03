@@ -644,7 +644,11 @@
   .step-row{display:flex;align-items:center;gap:6px;padding:3px 0}
   .step-caret,.step-edit,.step-add,.step-del{border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:1px 6px;font-size:11px;cursor:pointer;flex:0 0 auto}
   .step-tick{color:var(--gcamp);font-size:11px;flex:0 0 auto}
-  .gdef-row{display:flex;align-items:center;gap:7px;padding:3px 0}
+  .gdef-row{display:flex;align-items:center;gap:7px;padding:3px 0;flex-wrap:wrap}
+  .gdef-row>.gdef-name{flex:1 1 140px;width:auto;min-width:0}
+  .gdef-row>.gdef-n{flex:0 0 64px;width:64px}
+  .gdef-row>.gdef-plan{flex:1 1 170px;width:auto;min-width:0}
+  .gdef-row>button{flex:0 0 auto}
   .gdef-row .gdef-name{flex:1 1 auto;width:auto;min-width:0;font-size:12.5px;padding:5px 8px}
   .gdef-row .gdef-n{flex:0 0 72px;width:72px;font-size:11.5px;padding:5px 6px;text-align:right}
   .gdef-count{font-family:var(--mono);font-size:10.5px;color:var(--amber);min-width:34px;text-align:right}
@@ -1152,6 +1156,13 @@
   .aq .aq-tg{border:0;background:none;color:inherit;font:inherit;padding:0;cursor:pointer}
   .aq select,.aq input{background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;font-size:11px;padding:1px 4px}
   .aq-days{width:3.2em;text-align:center}
+  .gdef-req{flex-basis:100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:2px 0 8px 2px;font-size:11.5px}
+  .gdef-req select{width:auto;max-width:220px;font-size:11.5px;padding:3px 6px}
+  .gdef-req .gdef-wait{width:3.6em;padding:2px 4px;font-size:11.5px}
+  .gdef-req label,.gdef-req .kf-check{display:inline-flex;align-items:center;gap:5px;margin:0;font:inherit;font-size:11.5px;
+    text-transform:none;letter-spacing:0;color:var(--ink-dim)}
+  .gdef-req input[type=checkbox]{width:auto;margin:0}
+  .ch-ok{color:var(--gcamp)}
   .tl-card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px}
   .tl-sets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
   .tl-set{display:inline-flex;gap:4px;align-items:center}
@@ -7942,6 +7953,36 @@ function linkFromValue(kind,v){
   if(kind==="material"){ const i=v.indexOf("::"); return {kind:"material",cat:v.slice(0,i),id:v.slice(i+2)}; }
   return {kind,id:v};
 }
+/* What an experiment or a project carries by hand in 2.0: its notes, and
+   references into the Library — one picker for papers, protocols and other
+   records. What it uses (procedures, tasks, viruses) is not attached here; it
+   is a group's requirement or read off the animals. */
+const REF_KINDS=["reading","protocol","other"];
+function mountRefsEditor(host,owner,onChange){
+  const draw=()=>{
+    owner.links=owner.links||[];
+    const chip=({l,i})=>`<span class="linkchip" data-i="${i}"><span class="lk-open">${esc(linkName(l))}</span><button class="lk-del" title="Unlink">✕</button></span>`;
+    const mine=k=>owner.links.map((l,i)=>({l,i})).filter(x=>k.includes(x.l.kind));
+    const refOpts=REF_KINDS.map(k=>({k,label:(LINK_GROUPS.find(g=>g.kind===k)||{}).label,items:linkOptions(k)})).filter(g=>g.items.length);
+    const noteOpts=linkOptions("note");
+    host.innerHTML=`<div class="lk-sec"><div class="lk-sec-t">📝 Notes</div>
+        <div class="linklist">${mine(["note"]).map(chip).join("")||`<span class="pc-empty">none</span>`}</div>
+        <div class="lk-add-wrap">${noteOpts.length?`<select class="lk-sel" data-kind="note"><option value="">＋ attach a note…</option>${noteOpts.map(o=>`<option value="${escAttr(o.v)}">${esc(o.t)}</option>`).join("")}</select>`:""}</div></div>
+      <div class="lk-sec"><div class="lk-sec-t">📚 References</div>
+        <div class="linklist">${mine(REF_KINDS).map(chip).join("")||`<span class="pc-empty">none</span>`}</div>
+        <div class="lk-add-wrap">${refOpts.length?`<select class="lk-sel lk-ref"><option value="">＋ add from the Library…</option>${refOpts.map(g=>`<optgroup label="${escAttr(g.label)}">${g.items.map(o=>`<option value="${escAttr(g.k+"|"+o.v)}">${esc(o.t)}</option>`).join("")}</optgroup>`).join("")}</select>`
+          :`<span class="pc-empty">the Library is empty</span>`}</div></div>`;
+    const add=l=>{ if(!owner.links.some(x=>sameLink(x,l)))owner.links.push(l); persist(); draw(); if(onChange)onChange(); };
+    host.querySelectorAll(".lk-sel").forEach(sel=>sel.addEventListener("change",e=>{
+      const v=e.target.value; if(!v) return;
+      if(sel.classList.contains("lk-ref")){ const i=v.indexOf("|"); add(linkFromValue(v.slice(0,i),v.slice(i+1))); }
+      else add(linkFromValue(sel.dataset.kind,v)); }));
+    host.querySelectorAll(".linkchip").forEach(c=>{ const i=+c.dataset.i;
+      c.querySelector(".lk-open").onclick=()=>openLinked(owner.links[i]);
+      c.querySelector(".lk-del").onclick=()=>{ owner.links.splice(i,1); persist(); draw(); if(onChange)onChange(); }; });
+  };
+  draw();
+}
 function mountLinkEditor(host,owner,onChange,opts){
   const kinds=LINK_GROUPS.filter(g=>
     (!opts||!opts.only||opts.only.includes(g.kind))&&(!opts||!opts.exclude||!opts.exclude.includes(g.kind)));
@@ -8407,7 +8448,7 @@ function experimentModal(st,after){
       <textarea id="sm_excl" rows="2">${esc(st.exclusions||"")}</textarea></div>
     <div class="fld"><label>Outcome</label>
       <textarea id="sm_out" rows="3">${esc(st.outcome||"")}</textarea></div>
-    <div class="fld"><label>Uses</label><div id="sm_links"></div></div>
+    <div class="fld"><label>Notes &amp; references</label><div id="sm_links"></div></div>
     ${shareRowHTML("experiments",st)}
     <div class="drow" style="margin-top:16px"><button class="btn danger" id="sm_del">Delete experiment</button></div>
     <div class="actions"><button class="btn accent" id="sm_save">Done</button></div>`,{wide:true});
@@ -8633,6 +8674,14 @@ function experimentModal(st,after){
           <option value="__new__">＋ New plan…</option></select>
         <button class="gdef-planedit" title="${g.planId?"Write this arm's plan":"Give this arm a plan first"}" ${g.planId?"":"disabled"}>✎</button>
         <button class="gdef-del" title="Remove this group">✕</button>
+        <div class="gdef-req">
+          <span class="ov-dim">before work starts:</span>
+          <select class="gdef-proc" title="A procedure every animal in this group has (Materials › Procedures)">
+            <option value="">no procedure</option>${(DB.config.procedureLib||[]).map(pr=>`<option value="${escAttr(pr.id)}" ${(g.req||{}).procId===pr.id?"selected":""}>${esc(pr.name||"(unnamed)")}</option>`).join("")}</select>
+          ${(g.req||{}).procId?`<label class="ov-dim">then wait <input class="gdef-wait" type="number" min="0" value="${(g.req||{}).waitDays??28}"> days</label>
+            <button type="button" class="ov-btn gdef-apply">apply to ${groupCount(st,g.id)} animal${groupCount(st,g.id)===1?"":"s"}</button>`:""}
+          <label class="kf-check" style="margin:0"><input type="checkbox" class="gdef-target" ${(g.req||{}).atTarget?"checked":""}> restriction target reached</label>
+        </div>
       </div>`).join(""):`<div class="pc-empty">No groups yet.</div>`;
     box.querySelectorAll(".gdef-row").forEach(r=>{
       const g=(st.groupDefs||[]).find(x=>x.id===r.dataset.g); if(!g)return;
@@ -8658,6 +8707,16 @@ function experimentModal(st,after){
         paintPlan();
       });
       r.querySelector(".gdef-planedit").onclick=()=>editPlanFor(planEditingGroup===g.id?null:g.id);
+      const req=()=>(g.req=g.req||{});
+      r.querySelector(".gdef-proc").addEventListener("change",e=>{ req().procId=e.target.value||null;
+        if(req().procId&&req().waitDays==null) req().waitDays=28; persist(); drawGroupDefs(); paintCohort(); });
+      const w=r.querySelector(".gdef-wait"); if(w) w.addEventListener("change",e=>{ req().waitDays=Math.max(0,+e.target.value||0); persist(); paintCohort(); });
+      r.querySelector(".gdef-target").addEventListener("change",e=>{ req().atTarget=e.target.checked; persist(); paintCohort(); });
+      const ap=r.querySelector(".gdef-apply"); if(ap) ap.onclick=()=>{
+        const tpl=procedureTemplate(req().procId); if(!tpl) return;
+        if(!confirm(`Add "${tpl.name}" to the procedure of every animal in ${g.name||"this group"}?\n\nWhat an animal already has is kept; only the missing parts are added, as planned. No surgery is booked.`)) return;
+        const n=applyTemplateToGroup(st,g); paintCohort(); drawGroupDefs();
+        toast(n?`Added to ${n} animal${n===1?"":"s"}`:"Every animal already has it"); };
       r.querySelector(".gdef-del").onclick=()=>{
         const n=groupCount(st,g.id);
         if(n&&!confirm(`Remove "${g.name||"this group"}"?\n\n${n} animal${n!==1?"s":""} will become unassigned.`))return;
@@ -8679,7 +8738,7 @@ function experimentModal(st,after){
   drawGroupDefs(); drawGroups();
   document.getElementById("sm_addgroup").onclick=()=>{ addGroup(st,""); drawGroupDefs(); drawGroups(); };
 
-  mountLinkEditor(document.getElementById("sm_links"),st,()=>{ drawGroupDefs(); drawGroups(); },{exclude:["animal"]});
+  mountRefsEditor(document.getElementById("sm_links"),st,()=>{ drawGroupDefs(); drawGroups(); });
   document.getElementById("sm_del").onclick=()=>{
     if(!confirm(`Delete "${st.title||"this experiment"}"? Its tasks stay, just unassigned.`))return;
     deleteExperiment(st.id); closeModal(); if(after)after(); };
@@ -8704,7 +8763,8 @@ function projectModal(pr,after){
     <div class="fld"><label style="display:flex;align-items:center;gap:8px">Animals
       <button type="button" class="ov-btn" id="pm_cohortcols" title="Which facts to show for each animal">columns…</button></label>
       <div id="pm_cohort"></div></div>
-    <div class="fld"><label>Uses</label><div id="pm_links"></div></div>
+    <div class="fld"><label>Animals in the project</label><div id="pm_animals"></div></div>
+    <div class="fld"><label>Notes &amp; references</label><div id="pm_links"></div></div>
     <div class="share-box">
       <label class="share-main"><input type="checkbox" id="pm_shared" ${pr.shared?"checked":""}>
         <span>Share this project with a collaborator</span></label>
@@ -8780,7 +8840,8 @@ function projectModal(pr,after){
     persist(); render(); drawShades();
     toast(`${kids.length} experiment${kids.length!==1?"s":""} now shaded from this project`);
   };
-  mountLinkEditor(document.getElementById("pm_links"),pr,()=>{});
+  mountLinkEditor(document.getElementById("pm_animals"),pr,()=>{},{only:["animal"]});
+  mountRefsEditor(document.getElementById("pm_links"),pr,()=>{});
   wireCohort(document.getElementById("pm_cohort"),()=>cohortGroupsOfProject(pr),document.getElementById("pm_cohortcols"));
   /* Sharing. Phase 1 marks the project and shows the consequences; nothing
      leaves this device until the publishing phase. The running total is the
@@ -11399,6 +11460,8 @@ function mountPlanEditor(host,pl,onChange){
             ${si===0?"on day 0":"days after"}</label>
           <input type="time" class="pl_stime" data-si="${si}" value="${escAttr(stageTime(st)||"")}"
             title="Time of day this stage happens. Clear it to make the stage all-day." style="${IST};padding:4px 6px;width:96px">
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)" title="Warn if the animal has not reached its restriction target by this stage">
+            <input type="checkbox" class="pl_starget" data-si="${si}" style="width:auto" ${st.cond==="atTarget"?"checked":""}> at target</label>
           <button class="pl_sup" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===0?"disabled":""} title="Move up">↑</button>
           <button class="pl_sdown" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===planStages(pl).length-1?"disabled":""} title="Move down">↓</button>
           <button class="pl_sdel" data-si="${si}" style="${BTNS};padding:2px 7px;color:var(--overdue)">✕</button>
@@ -11422,6 +11485,7 @@ function mountPlanEditor(host,pl,onChange){
     // stored as "" rather than left undefined and re-defaulted
     if(el.classList.contains("pl_stime")){ stAt(el.dataset).time=el.value||""; changed(); return; }
     if(el.classList.contains("pl_weekends")){ pl.skipWeekends=!el.checked; changed(); draw(); return; }
+    if(el.classList.contains("pl_starget")){ const st=stAt(el.dataset); if(el.checked) st.cond="atTarget"; else delete st.cond; changed(); return; }
   });
   host.addEventListener("click",e=>{
     const b=e.target.closest("button"); if(!b||!host.contains(b)) return;
@@ -13959,6 +14023,27 @@ function animalWarnings(a,date){
     }
   });
   const od=animalOverdueStages(a); if(od) out.push({level:"amber",text:`${od} overdue protocol stage${od===1?"":"s"}`});
+  out.push(...requirementWarnings(a,d));
+  return out;
+}
+/* An experiment's conditions, said where the animal's work is: a group
+   requirement still unmet when its next plan stage is near, and a stage that
+   asks for the restriction target meeting an animal that has not reached it. */
+function requirementWarnings(a,d){
+  const out=[], soon=addDaysISO(d,3).slice(0,10);
+  (DB.experiments||[]).forEach(ex=>{
+    if(!(ex.groups||{})[a.id]&&!animalsForStep(ex).some(x=>x.id===a.id)) return;
+    const next=(a.diary||[]).filter(e=>e.fromPlan===ex.id&&!entryHappened(e)&&String(e.date).slice(0,10)<=soon)
+      .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+    if(!next.length) return;
+    const unmet=animalRequirements(ex,a,d).filter(r=>!r.ok);
+    if(unmet.length) out.push({level:"amber",text:`${ex.title||"experiment"}: ${unmet.map(r=>r.text).join(", ")} — next stage ${fmtDMY(next[0].date).slice(0,5)}`});
+    next.forEach(e=>{
+      const st=experimentPlanIds(ex).map(pid=>planStages(planById(pid)).find(x=>x.id===e.planStage)).find(Boolean);
+      if(st&&st.cond==="atTarget"&&!targetReqStatus(a,d).ok&&!unmet.some(r=>r.key==="target"))
+        out.push({level:"amber",text:`${st.label||"stage"} (${fmtDMY(e.date).slice(0,5)}) needs the restriction target — ${targetReqStatus(a,d).text}`});
+    });
+  });
   return out;
 }
 function warningsHTML(list){
@@ -14517,8 +14602,11 @@ function restrictionSectionHTML(a){
   const dim=t=>`<span class="ov-dim">${t}</span>`;
   const st=restrictionStatus(a,todayDateStr());
   const past=animalRestrictions(a).filter(r=>r.end&&r.end<=todayDateStr());
+  // a restriction ended in the last week can be taken back — ended by mistake,
+  // or the animal goes back on it — as long as no other one is running
+  const canResume=r=>!restrictionAt(a,todayDateStr())&&r.end>=addDaysISO(todayDateStr(),-7).slice(0,10)&&r===past[past.length-1];
   const pastHTML=past.length?`<div class="ov-sub">Earlier</div>`+past.map(r=>
-    `<div>${esc(fmtDMY(r.start))} – ${esc(fmtDMY(r.end))}${r.endReason?" "+dim(esc(r.endReason)):""}</div>`).join(""):"";
+    `<div>${esc(fmtDMY(r.start))} – ${esc(fmtDMY(r.end))}${r.endReason?" "+dim(esc(r.endReason)):""}${canResume(r)?` <button type="button" class="ov-btn ov-rresume" data-r="${escAttr(r.id)}">resume</button>`:""}</div>`).join(""):"";
   if(!st){
     const lw=latestWeightEntry(a);
     return `${dim("not on restriction")} <button type="button" class="ov-btn ov-rstart">start restriction…</button>
@@ -14606,18 +14694,91 @@ function cohortTableHTML(groups){
     }).join("");
     return `<tr class="ch-sum"><td>mean · n=${list.length}</td>${tds}</tr>`;
   };
-  return groups.filter(g=>g.animals.length).map(g=>`
-    <div class="pg-block">${g.label?`<div class="pg-head">${esc(g.label)}<span class="pg-sub">${g.animals.length} animal${g.animals.length===1?"":"s"}</span></div>`:""}
-      <div class="pg-wrap"><table class="pg-tbl ch-tbl"><thead>${head}</thead><tbody>
-        ${g.animals.map(a=>`<tr><td class="pg-an"><button type="button" class="ov-link ch-open" data-a="${escAttr(a.id)}">${esc(a.name)}</button></td>${cols.map(c=>cell(a,c)).join("")}</tr>`).join("")}
-        ${g.animals.length>1?summary(g.animals):""}
-      </tbody></table></div></div>`).join("")
+  // a group with requirements says, per animal, whether it is ready to work with
+  const reqCell=(gr,a)=>{ const rs=animalRequirements(gr.ex,a);
+    return `<td class="${rs.every(r=>r.ok)?"ch-ok":"ch-warn"}">${rs.map(r=>esc(r.text)).join(" · ")}</td>`; };
+  return groups.filter(g=>g.animals.length).map(g=>{ const rq=g.ex&&groupHasReq(g.g); return `
+    <div class="pg-block">${g.label?`<div class="pg-head">${esc(g.label)}<span class="pg-sub">${g.animals.length} animal${g.animals.length===1?"":"s"}${rq?` · ${g.animals.filter(a=>animalRequirements(g.ex,a).every(r=>r.ok)).length} ready`:""}</span></div>`:""}
+      <div class="pg-wrap"><table class="pg-tbl ch-tbl"><thead>${rq?head.replace("<th>Animal</th>","<th>Animal</th><th>Ready to work</th>"):head}</thead><tbody>
+        ${g.animals.map(a=>`<tr><td class="pg-an"><button type="button" class="ov-link ch-open" data-a="${escAttr(a.id)}">${esc(a.name)}</button></td>${rq?reqCell(g,a):""}${cols.map(c=>cell(a,c)).join("")}</tr>`).join("")}
+        ${g.animals.length>1?summary(g.animals).replace("</td>",`</td>${rq?"<td></td>":""}`):""}
+      </tbody></table></div></div>`; }).join("")
     ||`<div class="ov-dim" style="font-size:12px">No animals yet.</div>`;
+}
+/* ── what a group asks of its animals before work starts ──
+   A group can require a procedure — a template from Materials › Procedures,
+   with a waiting period after the surgery (expression) — and that the animal
+   has reached its restriction target. A plan stage can require the target
+   too. All of it is read off the animal, so a surgery recorded from the
+   Timeline or a weighing from the feeding window updates the experiment
+   without anything being ticked here. An unmet condition warns; it does not
+   move the plan's dates. */
+function procedureTemplate(id){ return (DB.config.procedureLib||[]).find(p=>p.id===id)||null; }
+// whether the animal's procedure holds every part the template asks for
+function procedureMatches(a,tpl){
+  const sd=(a&&a.surgeryDetail)||{};
+  if(tpl.headpost&&!sd.headpost) return false;
+  if(tpl.window&&!sd.window) return false;
+  const inj=animalInjections(a);
+  return (tpl.injections||[]).every(t=>inj.some(i=>(!t.virus||i.virus===t.virus)&&(!t.siteRegion||i.siteRegion===t.siteRegion)));
+}
+function procedureReqStatus(a,req,date){
+  const tpl=procedureTemplate(req.procId); if(!tpl) return null;
+  const name=tpl.name||"procedure";
+  if(!procedureMatches(a,tpl)) return {ok:false,key:"proc",text:`needs ${name}`};
+  // parts added from the template count once a surgery on or after that day
+  // has happened — an older surgery did not do them
+  const since=(((a.surgeryDetail||{}).templateAt)||{})[tpl.id]||"";
+  const done=surgeriesOf(a).filter(x=>!x.planned&&String(x.date).slice(0,10)>=since).pop();
+  if(!done){ const b=surgeriesOf(a).find(x=>x.planned);
+    return {ok:false,key:"proc",text:b?`${name} booked ${fmtDMY(b.date)}`:`${name} — surgery not booked`}; }
+  const wait=Math.max(0,+req.waitDays||0), ready=addDaysISO(String(done.date).slice(0,10),wait).slice(0,10);
+  if(ready>date) return {ok:false,key:"proc",text:`${name} done ${fmtDMY(done.date)} · ready ${fmtDMY(ready)}`};
+  return {ok:true,key:"proc",text:`${name} ✓${wait?` (ready ${fmtDMY(ready)})`:""}`};
+}
+// "reached" in the restriction's own sense: it has come down to the target,
+// and the phase it is in is maintaining
+function targetReqStatus(a,date){
+  const st=restrictionStatus(a,date);
+  if(!st) return {ok:false,key:"target",text:"not on restriction"};
+  if(st.phase==="maintaining") return {ok:true,key:"target",text:`restriction target ✓`};
+  return {ok:false,key:"target",text:`${st.pct!=null?Math.round(st.pct)+"%":"no weight"} — target ${st.target}%`};
+}
+function animalRequirements(ex,a,date){
+  const g=experimentGroupOf(ex,a.id), req=(g&&g.req)||{}, d=String(date||todayDateStr()).slice(0,10), out=[];
+  const p=procedureReqStatus(a,req,d); if(p) out.push(p);
+  if(req.atTarget) out.push(targetReqStatus(a,d));
+  return out;
+}
+function groupHasReq(g){ const r=(g&&g.req)||{}; return !!(r.procId||r.atTarget); }
+/* "Apply to all animals": each animal in the group gets the template's parts
+   in its procedure, as planned — head-post and window switched on, the
+   template's injections added where the animal does not have them yet.
+   Nothing already there is changed, and no surgery is booked. */
+function applyTemplateToGroup(ex,g){
+  const tpl=procedureTemplate(g.req&&g.req.procId); if(!tpl) return 0;
+  let n=0;
+  animalsForStep(ex).filter(a=>(ex.groups||{})[a.id]===g.id).forEach(a=>{
+    if(procedureMatches(a,tpl)) return;
+    const sd=a.surgeryDetail=a.surgeryDetail||{injections:[]};
+    sd.injections=sd.injections||[];
+    if(tpl.headpost) sd.headpost=true;
+    if(tpl.window){ sd.window=true; ["winAp","winMl","winDiam"].forEach(k=>{ if(sd[k]==null||sd[k]==="") sd[k]=tpl[k]; }); }
+    (tpl.injections||[]).forEach(t=>{
+      if(!sd.injections.some(i=>(!t.virus||i.virus===t.virus)&&(!t.siteRegion||i.siteRegion===t.siteRegion)))
+        sd.injections.push(Object.assign(JSON.parse(JSON.stringify(t)),{id:uid("inj_")}));
+    });
+    if(!sd.fromTemplate) sd.fromTemplate=tpl.id;
+    sd.templateAt=Object.assign({},sd.templateAt||{},{[tpl.id]:todayDateStr()});
+    n++;
+  });
+  if(n) persist();
+  return n;
 }
 // Experiments group by their arms; animals in no arm come last.
 function cohortGroupsOfExperiment(ex){
   const members=animalsForStep(ex);
-  const out=(ex.groupDefs||[]).map(g=>({label:g.name||"(unnamed arm)",animals:members.filter(a=>(ex.groups||{})[a.id]===g.id)}));
+  const out=(ex.groupDefs||[]).map(g=>({label:g.name||"(unnamed arm)",ex,g,animals:members.filter(a=>(ex.groups||{})[a.id]===g.id)}));
   const loose=members.filter(a=>!(ex.groupDefs||[]).some(g=>(ex.groups||{})[a.id]===g.id));
   if(loose.length) out.push({label:(ex.groupDefs||[]).length?"Not in a group":"",animals:loose});
   return out;
@@ -16823,6 +16984,9 @@ function animalModal(id,draft,opts){
       const on=t.closest(".ov-note");
       if(on){ closeModal(); noteModal(on.dataset.n); return; }
       if(t.closest(".ov-rstart")){ const f=document.getElementById("ov_rform"); f.hidden=!f.hidden; return; }
+      const rr=t.closest(".ov-rresume");
+      if(rr){ const r=animalRestrictions(a).find(x=>x.id===rr.dataset.r); if(!r) return;
+        r.end=null; r.endReason=""; persist(); render(); paintOverview(); toast("Restriction resumed"); return; }
       if(t.closest(".ov-rgo")){
         const d=document.getElementById("ov_rd").value, g=+document.getElementById("ov_rg").value, r=document.getElementById("ov_rr").value;
         if(!d||!(g>0)){ toast("Give the start date and the baseline weight"); return; }
