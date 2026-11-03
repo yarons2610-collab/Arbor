@@ -11917,16 +11917,17 @@ function renderTaskLib(){
         you set on the rig for it — each session starts from the animal's last ones.</div>
       ${names.map(name=>{
         const built=BEHAVIOUR_TASKS[name], t=lib().find(x=>x.name===name), n=sessions(name);
-        const sets=built?built.settings:((t&&t.params)||[]);
+        // 1.0's Time / Trials / Success are every session's own fields now; the
+        // index kept is the stored one, so editing still hits the right entry
+        const sets=((t&&t.params)||[]).map((f,i)=>({f,i})).filter(({f})=>!/^(time|trials|success)/i.test(f.label||""));
         return `<div class="tl-card" data-name="${escAttr(name)}">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <b style="font-size:13px">${esc(name)}</b>
             <span class="ov-dim" style="font-size:11px">${n} session${n===1?"":"s"}${built?" · designed in Arbor":""}</span>
             ${!built&&!n?`<button type="button" class="ov-btn tl-del" style="margin-left:auto;color:var(--overdue)">✕ task</button>`:""}
           </div>
-          <div class="tl-sets">${built
-            ? sets.map(f=>`<span class="aq">${esc(f.label)}</span>`).join(" ")
-            : sets.map((f,i)=>`<span class="tl-set"><input class="tl-label" data-i="${i}" value="${escAttr(f.label||"")}" placeholder="setting" style="${IN2};width:150px">
+          <div class="tl-sets">${built?built.settings.map(f=>`<span class="aq" title="built into Arbor">${esc(f.label)}</span>`).join(" "):""}${
+              sets.map(({f,i})=>`<span class="tl-set"><input class="tl-label" data-i="${i}" value="${escAttr(f.label||"")}" placeholder="setting" style="${IN2};width:150px">
                 <select class="tl-type" data-i="${i}" style="${IN2};width:auto"><option value="number" ${f.type==="number"?"selected":""}>number</option><option value="text" ${f.type!=="number"?"selected":""}>text</option></select>
                 <button type="button" class="ov-btn tl-rm" data-i="${i}" title="remove">✕</button></span>`).join("")
               +`<button type="button" class="ov-btn tl-add">＋ setting</button>`}</div>
@@ -13254,12 +13255,14 @@ function behaviourTaskNames(){
   const used=(DB.animals||[]).flatMap(a=>(a.diary||[]).filter(e=>e.type==="training").map(e=>e.data&&e.data.task)).filter(Boolean);
   return [...new Set(Object.keys(BEHAVIOUR_TASKS).concat((DB.config.taskLib||[]).map(t=>t.name).filter(Boolean)).concat(used))];
 }
+// A designed task's own settings, then any the lab added to it in Materials;
+// for any other task, only the added ones.
 function behaviourSettingsDef(task){
-  if(BEHAVIOUR_TASKS[task]) return BEHAVIOUR_TASKS[task].settings;
   const lib=(DB.config.taskLib||[]).find(t=>t.name===task);
   // the generic Time / Trials / Success params are session fields now
-  return ((lib&&lib.params)||[]).filter(p=>!/^(time|trials|success)/i.test(p.label||""))
+  const added=((lib&&lib.params)||[]).filter(p=>p&&p.key&&(p.label||"").trim()&&!/^(time|trials|success)/i.test(p.label||""))
     .map(p=>({key:p.key,label:p.label,type:p.type==="number"?"number":"text"}));
+  return (BEHAVIOUR_TASKS[task]?BEHAVIOUR_TASKS[task].settings:[]).concat(added);
 }
 function lastBehaviourSession(a,task,excludeId){
   return (a.diary||[]).filter(e=>e.type==="training"&&e.id!==excludeId&&e.data&&e.data.task===task&&e.data.settings)
@@ -13837,8 +13840,17 @@ const POSTOP_TIME="10:00", BRAIN_TIME="10:00", POSTOP_DAYS=3, PBS_AFTER=2;
 
 /* ---- post-op: three daily checks after every surgery that happened ---- */
 function postopId(a,s,n){ return "d_po_"+String(s.id).replace(/^d_/,"")+"_"+n; }
-function postopRecord(a,s,n){ return (a.diary||[]).find(e=>e.id===postopId(a,s,n))||null; }
-function postopDone(r){ return !!(r&&r.data&&r.data.given===true&&r.data.condition); }
+/* A surgery's check on day n: the one 2.0 made for it, else any post-op
+   record on that day — a check written in 1.0 has an id of its own, and was
+   read as missing although it was there. */
+function postopRecord(a,s,n){
+  const mine=(a.diary||[]).find(e=>e.id===postopId(a,s,n)); if(mine) return mine;
+  const day=addDaysISO(String(s.date).slice(0,10),n).slice(0,10);
+  return (a.diary||[]).find(e=>e.type==="postop"&&String(e.date).slice(0,10)===day)||null;
+}
+// Giving post-op is the check; the condition is what was seen, not a second
+// box to tick before it counts.
+function postopDone(r){ return !!(r&&r.data&&r.data.given===true); }
 function postopDueOn(date){
   const d=String(date).slice(0,10), out=[];
   (DB.animals||[]).forEach(a=>{
@@ -13935,6 +13947,13 @@ function animalWarnings(a,date){
       const due=addDaysISO(String(s.date).slice(0,10),n).slice(0,10);
       if(due<d&&calDayDelta(due,d)<=WARN_WINDOW_DAYS&&!postopDone(postopRecord(a,s,n))) out.push({level:"red",text:`post-op check day ${n} (${fmtDMY(due).slice(0,5)}) missed`});
     }
+    // what the last check saw, while it is recent: "watch" asks for attention, "poor" is a red flag
+    const last=[...Array(POSTOP_DAYS)].map((_,i)=>postopRecord(a,s,POSTOP_DAYS-i)).find(r=>r&&r.data&&r.data.condition);
+    if(last&&calDayDelta(String(last.date).slice(0,10),d)<=WARN_WINDOW_DAYS){
+      const c=last.data.condition;
+      if(c==="poor") out.push({level:"red",text:`post-op condition poor (${fmtDMY(last.date).slice(0,5)})`});
+      else if(c==="watch") out.push({level:"amber",text:`post-op condition: watch (${fmtDMY(last.date).slice(0,5)})`});
+    }
   });
   const od=animalOverdueStages(a); if(od) out.push({level:"amber",text:`${od} overdue protocol stage${od===1?"":"s"}`});
   return out;
@@ -14021,7 +14040,7 @@ function openPostopModal(date){
   const rows=postopDueOn(date);
   if(!rows.length){ toast("No post-op checks that day"); return; }
   modal(`<h3>🩹 Post-op checks — ${esc(fmtDMY(date))}</h3>
-    <div class="ov-dim" style="font-size:12px;margin:-4px 0 10px">The ${POSTOP_DAYS} days after each surgery. A check is done when post-op was given and the condition noted.</div>
+    <div class="ov-dim" style="font-size:12px;margin:-4px 0 10px">The ${POSTOP_DAYS} days after each surgery. Tick when post-op was given; the condition is optional.</div>
     <div class="pg-wrap"><table class="pg-tbl fd-tbl"><thead><tr><th>Animal</th><th>Day</th><th>Given</th><th>Condition</th><th>Note</th></tr></thead><tbody>
     ${rows.map(({a,s,n,rec})=>{ const d=(rec&&rec.data)||{};
       return `<tr class="po-row" data-a="${escAttr(a.id)}" data-s="${escAttr(s.id)}" data-n="${n}">

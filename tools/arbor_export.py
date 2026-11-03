@@ -1117,8 +1117,9 @@ def build_sheets(w):
     names = sorted(set(BEHAVIOUR_TASKS) | set(lib) | used, key=natural_key)
     tasks = []
     for n in names:
-        sets = BEHAVIOUR_TASKS.get(n) or [p.get("label") or p.get("key") or "" for p in (lib.get(n, {}).get("params") or [])
-                                          if not re.match(r"(?i)^(time|trials|success)", p.get("label") or "")]
+        sets = list(BEHAVIOUR_TASKS.get(n) or []) + [p.get("label") or p.get("key") or ""
+                                                     for p in (lib.get(n, {}).get("params") or [])
+                                                     if p.get("key") and (p.get("label") or "").strip() and not re.match(r"(?i)^(time|trials|success)", p.get("label") or "")]
         sessions = sum(1 for a in w.animals for e in (a.get("diary") or [])
                        if e.get("type") == "training" and (e.get("data") or {}).get("task") == n)
         tasks.append([n, ", ".join(sets), sessions])
