@@ -5146,10 +5146,13 @@ function migrateV2(){
       // post-op: 1.0's tick meant it was given
       if(e.type==="postop"&&e.done&&e.data&&e.data.given==null){ e.data.given=true; changed=true; }
       // repeating series are retired: their empty future slots go, the rest stay as plain records
-      if((e.seriesId||(e.fromTask&&coverIds.has(e.fromTask)))&&isEmpty(e)){ drop.push(e); return; }
+      // a round row whose task is a feeding round, or was deleted in 1.0
+      // before this ran, is no longer scheduled by anything
+      const roundRow=!!e.fromTask&&(coverIds.has(e.fromTask)||!taskList().some(t=>t.id===e.fromTask));
+      if((e.seriesId||roundRow)&&isEmpty(e)){ drop.push(e); return; }
       if(e.seriesId){ delete e.seriesId; delete e.seriesRule; changed=true; }
       // a feeding round's filled row is just that day's weighing now
-      if(e.fromTask&&coverIds.has(e.fromTask)){ delete e.fromTask; delete e.fromOcc; changed=true; }
+      if(roundRow){ delete e.fromTask; delete e.fromOcc; changed=true; }
       // comments become dated notes on the animal (deterministic id)
       if(e.type==="comment"){
         const nid="n_c_"+String(e.id).replace(/^d_/,"");
