@@ -10091,7 +10091,7 @@ function calVisibleRange(){
 function calFilterOn(k){ const f=DB.config.calFilters; return !f||f[k]!==false; }
 function calFilterSegHTML(){
   return `<div class="seg cal-filter" id="cal_filter" title="Show/hide categories">`
-    +[["tasks","Tasks"],["events","Events"],["diary","Animal work"]].map(([k,l])=>
+    +[["tasks","Tasks"],["events","Events"],["diary","Animals"]].map(([k,l])=>
       `<button type="button" data-f="${k}" class="${calFilterOn(k)?"on":""}">${l}</button>`).join("")
     +`</div>`;
 }
