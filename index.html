@@ -5091,6 +5091,11 @@ function migrate(){                       // backfill fields added in later vers
    app shows once, for a person to look at. */
 // Before this moment every record was made by 1.0. Set to the day 2.0 went live.
 const V2_EPOCH=Date.parse("2026-11-03T00:00:00");
+/* 1.0 never kept feedings, post-op checks or the brain's steps the way 2.0
+   reads them, so the days before 2.0 are history, not a to-do list: nothing
+   is drawn for them on the agenda and nothing before them counts as missed.
+   What was recorded then stays in each animal's diary. */
+const V2_START="2026-11-03";
 const V2_TYPE_MAP={dt_c9wh_dj57qywf:{type:"microscopy",purpose:"structural"},   // "Spines"
                    dt_c9wh_sc5v8d3l:{type:"microscopy",purpose:"structural",note:"Reconstruction"}};
 // Hebrew inside an English sentence keeps its own direction without reordering the rest
@@ -6810,7 +6815,7 @@ function openNotificationsModal(wantEvents){
     const diaryRows=diaryItems.map(w=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)">
       <span class="wn-${w.level}" style="flex:0 0 auto">${w.level==="red"?"⚠":"●"}</span>
       <span style="flex:1;min-width:0"><b>${esc(w.a.name)}</b> — ${esc(w.text)}</span>
-      <button class="ntf-openhub" data-a="${escAttr(w.a.id)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
+      <button class="ntf-openhub" data-a="${escAttr(w.a.id)}" data-fix="${escAttr(w.fix||"")}" data-date="${escAttr(w.date||"")}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:2px 8px;font-size:11px;flex:0 0 auto">open</button>
     </div>`).join("");
     document.getElementById("modal").innerHTML=`<h3>${wantEvents?"Upcoming events":"Upcoming & due"}</h3>
       <div style="font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px">${wantEvents?"Events":"Tasks"} (overdue, or due within ${NOTIFY_TASK_LOOKAHEAD_DAYS} days)</div>
@@ -6830,7 +6835,10 @@ function openNotificationsModal(wantEvents){
       return;
     }
     const oh=e.target.closest(".ntf-openhub");
-    if(oh){ closeModal(); animalModal(oh.dataset.a); return; }
+    // a warning opens where it is put right: the day's post-op checks or
+    // feeding, otherwise the animal
+    if(oh){ closeModal(); const fx=oh.dataset.fix, dt=oh.dataset.date;
+      if(fx==="postop"&&dt) openPostopModal(dt); else if(fx==="feeding"&&dt) openFeedingModal(dt); else animalModal(oh.dataset.a); return; }
     const ot=e.target.closest(".ntf-opentask"), oa=e.target.closest(".ntf-openanimal");
     if(ot){ closeModal(); const tk=taskOf(ot.dataset.id); if(tk)taskEditor(tk,()=>render(),ot.dataset.when||null,ot.dataset.end||null); else { const ex=expById(ot.dataset.id); if(ex)experimentModal(ex,()=>render()); } }
     else if(oa){ closeModal(); animalSearch=oa.dataset.name; switchTo("animals"); }   // one-off jump, not a saved search — see openCalItem's own note
@@ -13964,6 +13972,7 @@ function brainStepsOn(date){
 /* ---- the agenda for one day ---- */
 function agendaOn(date){
   const d=String(date).slice(0,10), today=todayDateStr(), items=[];
+  if(d<V2_START) return items;
   const f=feedingOn(d);
   if(f) items.push({key:"feed:"+d,kind:"feeding",time:f.time,
     done:d<=today&&f.done===f.rows.length, warn:f.belowFloor.length>0,
@@ -14004,15 +14013,16 @@ function animalWarnings(a,date){
   const st=restrictionStatus(a,d);
   if(st){
     if(st.belowFloor) out.push({level:"red",text:`${Math.round(st.pct)}% of baseline — below the ${RESTRICTION_FLOOR}% floor`});
-    if(!st.todayDone&&d===todayDateStr()) out.push({level:"amber",text:"not weighed and fed today"});
+    if(!st.todayDone&&d===todayDateStr()) out.push({level:"amber",text:"not weighed and fed today",fix:"feeding",date:d});
     if(st.phase==="maintaining"&&st.readyDate===d) out.push({level:"ok",text:"reached target today — ready for behaviour"});
   }
-  postopDueOn(d).filter(x=>x.a===a&&!postopDone(x.rec)).forEach(x=>out.push({level:"amber",text:`post-op check day ${x.n} due`}));
+  postopDueOn(d).filter(x=>x.a===a&&!postopDone(x.rec)).forEach(x=>out.push({level:"amber",text:`post-op check day ${x.n} due`,fix:"postop",date:d}));
   // a missed check stays a red mark until it is done
   entriesWithRole(a,"surgery").filter(entryHappened).forEach(s=>{
     for(let n=1;n<=POSTOP_DAYS;n++){
       const due=addDaysISO(String(s.date).slice(0,10),n).slice(0,10);
-      if(due<d&&calDayDelta(due,d)<=WARN_WINDOW_DAYS&&!postopDone(postopRecord(a,s,n))) out.push({level:"red",text:`post-op check day ${n} (${fmtDMY(due).slice(0,5)}) missed`});
+      if(due>=V2_START&&due<d&&calDayDelta(due,d)<=WARN_WINDOW_DAYS&&!postopDone(postopRecord(a,s,n)))
+        out.push({level:"red",text:`post-op check day ${n} (${fmtDMY(due).slice(0,5)}) missed`,fix:"postop",date:due});
     }
     // what the last check saw, while it is recent: "watch" asks for attention, "poor" is a red flag
     const last=[...Array(POSTOP_DAYS)].map((_,i)=>postopRecord(a,s,POSTOP_DAYS-i)).find(r=>r&&r.data&&r.data.condition);
@@ -14114,7 +14124,7 @@ function postopSectionHTML(a){
       if(calDayDelta(dd,todayDateStr())<=7&&dd<=addDaysISO(todayDateStr(),POSTOP_DAYS).slice(0,10)) due.push({n,dd,done:postopDone(postopRecord(a,s,n))});
     }
   });
-  return due.length?`<div class="ov-dim">post-op: ${due.map(x=>`day ${x.n} ${x.done?"✓":x.dd<todayDateStr()?"<b style='color:var(--overdue)'>missed</b>":x.dd===todayDateStr()?"today":fmtDMY(x.dd).slice(0,5)}`).join(" · ")}</div>`:"";
+  return due.length?`<div class="ov-dim">post-op: ${due.map(x=>`day ${x.n} ${x.done?"✓":x.dd<V2_START?"—":x.dd<todayDateStr()?"<b style='color:var(--overdue)'>missed</b>":x.dd===todayDateStr()?"today":fmtDMY(x.dd).slice(0,5)}`).join(" · ")}</div>`:"";
 }
 function animalNotesHTML(a){
   const notes=(DB.notes||[]).filter(n=>(n.links||[]).some(l=>l.kind==="animal"&&l.id===a.id))
