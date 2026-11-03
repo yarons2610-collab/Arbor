@@ -204,6 +204,23 @@
     padding:1px 8px;font-size:10.5px;cursor:pointer;text-transform:none;letter-spacing:0;font-family:inherit}
   .ov-btn:hover{color:var(--ink);border-color:var(--ink-faint)}
   .ov-inj{padding-left:2px}
+  /* a plan's stages: one line each, like the lab's own spreadsheet (two
+     where the window is narrow) */
+  .pl-head{display:none}
+  .pl-st{display:flex;flex-wrap:wrap;align-items:center;gap:5px 6px;padding:5px 0;border-top:1px solid var(--line)}
+  .pl-n{font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 20px;text-align:right}
+  .pl-gap{flex:0 0 auto;display:flex;align-items:center}
+  .pl-st .pl-gap input{width:46px}
+  .pl-day0{font-family:var(--mono);font-size:10px;color:var(--ink-faint);width:46px;text-align:center}
+  .pl-what{display:flex;flex-wrap:nowrap;gap:5px;align-items:center;flex:0 0 auto}
+  .pl-st select{width:auto;max-width:150px;flex:0 0 auto}
+  .pl-st .pl_slabel{flex:1 1 120px;min-width:0;width:auto}
+  .pl-sess{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);border:1px solid var(--line2);border-radius:5px;padding:1px 5px}
+  .pl-tail{display:flex;gap:4px;align-items:center;margin-left:auto}
+  .pl-st .pl-chk{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint);white-space:nowrap;
+    text-transform:none;letter-spacing:0;font-family:inherit;margin:0}
+  .pl-chk input{width:auto;margin:0}
+  .pl-time{border:1px solid var(--line2);background:var(--bg2);color:var(--ink);border-radius:6px;padding:4px 7px;font-size:11.5px;font-family:var(--mono);cursor:pointer}
   .ov-surg{margin-top:3px}
   .ov-surg .ov-inj{padding-left:18px}
   /* the procedure, surgery by surgery */
@@ -2722,7 +2739,10 @@ function buildDefs(file){
   planList().forEach(pl=>{
     if(!planIds.has(pl.id))return;
     usedPlans.push({id:pl.id,name:pl.name,skipWeekends:!!pl.skipWeekends,by:meId(),
-      stages:planStages(pl).map(st=>({id:st.id,label:st.label,type:st.type,after:stageGap(st)}))});
+      // everything a stage says travels — a collaborator's copy of "Lever
+      // session 3, imaged" must not arrive as just "Behaviour session"
+      stages:planStages(pl).map(st=>{ const o={id:st.id,label:st.label,type:st.type,after:stageGap(st)};
+        ["time","cond","task","imaged","target"].forEach(k=>{ if(st[k]!=null) o[k]=st[k]; }); return o; })});
   });
   return {
     by:meId(),
@@ -5085,6 +5105,7 @@ function migrate(){                       // backfill fields added in later vers
      place guaranteed to run on every load and after every pull, so an
      end-of-life entry that arrived from a plan, a round or a collaborator is
      honoured even though no form ever saw it. */
+  migratePlanStages();
   if(migrateV2()) persist();
   let reconciled=false;
   (DB.animals||[]).forEach(a=>{ if(reconcileAnimal(a)) reconciled=true; });
@@ -7695,6 +7716,78 @@ function stageTime(st){
   if(st.time==="") return null;                 // deliberately all-day
   return /^\d{2}:\d{2}$/.test(st.time||"")?st.time:DEFAULT_ENTRY_TIME;
 }
+/* ---- what each stage is ----
+   A stage is not just "a behaviour session" or "an imaging session": the lab's
+   paradigms are lever train, lever session imaged over the tuft, baseline
+   spines, reconstruction. So a behaviour stage names its task (and whether it
+   is imaged, and what), an imaging stage names what is imaged, and the
+   session number of each task is counted down the plan — never typed. The
+   record a stage writes starts out saying all of this (e.preset), so an
+   untouched row already reads "Lever · session 3". */
+function imagingTargets(){
+  // seeded once; a list the user has trimmed stays trimmed
+  if(!Array.isArray(DB.config.imagingTargets)) DB.config.imagingTargets=["Reconstruction","Spines","Tuft"];
+  const used=planList().flatMap(pl=>planStages(pl).map(st=>st.target))
+    .concat((DB.animals||[]).flatMap(a=>(a.diary||[]).map(e=>recordData(e).target)));
+  return [...new Set([...DB.config.imagingTargets,...used.filter(Boolean)])];
+}
+// a stage's session of its task: the 1st, 2nd… behaviour stage of that task in this plan
+function stageSessionNo(pl,st){
+  if(!st||st.type!=="training"||!st.task) return null;
+  let n=0;
+  for(const x of planStages(pl)){ if(x.type==="training"&&x.task===st.task) n++; if(x===st) return n; }
+  return null;
+}
+function stagePreset(pl,st){
+  if(!st) return null;
+  if(st.type==="training"&&st.task){
+    const o={task:st.task,session:stageSessionNo(pl,st)};
+    if(st.imaged){ o.imaged=true; if(st.target) o.target=st.target; }
+    return o;
+  }
+  if(st.type==="microscopy"&&st.target) return {target:st.target};
+  return null;
+}
+// a stage's name: its own, or what it is
+function stageName(st,pl){
+  if(!st) return "stage";
+  pl=pl||planList().find(p=>planStages(p).includes(st))||null;
+  return st.label||stageWhat(pl,st)||"stage";
+}
+// what a stage is, in a few words — its name when it has none of its own
+function stageWhat(pl,st){
+  if(!st) return "";
+  if(st.type==="training"&&st.task) return `${st.task} session ${stageSessionNo(pl,st)}${st.imaged?` (imaged${st.target?" · "+st.target.toLowerCase():""})`:""}`;
+  if(st.type==="microscopy"&&st.target) return `${st.target} imaging`;
+  if(st.type==="procedure") return "Procedure";
+  const k=diaryTypeDef(st.type); return (k&&k.label)||"";
+}
+// A record as it reads: what was written in it over what its plan stage
+// said it would be. The preset is never content — an untouched row has not
+// happened — but it is what the row is about.
+function recordData(e){ return (e&&e.preset)?Object.assign({},e.preset,e.data||{}):((e&&e.data)||{}); }
+/* Plans typed before stages had specifics: what the stage's own name says it
+   is. Once per plan; a stage that already names its task or target is left
+   alone. "Lever Train 3" is a Lever session, "Mid Lever Spines" an imaging of
+   spines — including where the kind picked was the other one. */
+function migratePlanStages(){
+  planList().forEach(pl=>{
+    if(pl.stagesV2) return;
+    const tasks=behaviourTaskNames().slice().sort((x,y)=>y.length-x.length);
+    planStages(pl).forEach(st=>{
+      if(st.task||st.target) return;
+      const L=String(st.label||"").toLowerCase(); if(!L) return;
+      if(/reconstruct/.test(L)){ st.type="microscopy"; st.target="Reconstruction"; return; }
+      if(/spine/.test(L)){ st.type="microscopy"; st.target="Spines"; return; }
+      const t=tasks.find(n=>L.includes(n.toLowerCase()));
+      if(t&&(st.type==="training"||st.type==="microscopy")){
+        st.type="training"; st.task=t;
+        if(/imaged/.test(L)){ st.imaged=true; st.target="Tuft"; }
+      }
+    });
+    pl.stagesV2=true;
+  });
+}
 function isWeekend(iso){ const d=new Date(iso.slice(0,10)+"T00:00:00").getDay(); return d===0||d===6; }
 // Walk n days forward, counting only the days the lab actually runs on. With
 // weekends included this is plain addition; without, a weekend costs nothing
@@ -7787,11 +7880,14 @@ function syncPlanEntries(ex,a){
       if(have.date!==date){ have.date=date; have.edited=Date.now(); n++; }
       if((have.time||null)!==stageTime(stage)){ have.time=stageTime(stage); n++; }
       if(have.type!==type){ have.type=type; n++; }
+      const pre=stagePreset(pl,stage);
+      if(JSON.stringify(have.preset||null)!==JSON.stringify(pre)){ if(pre) have.preset=pre; else delete have.preset; n++; }
       return;
     }
     a.diary=a.diary||[];
+    const pre=stagePreset(pl,stage);
     a.diary.push({id:planEntryId(ex.id,a.id,stage.id),type,date,time:stageTime(stage),endTime:null,
-      data:{},created:Date.now(),edited:null,fromPlan:ex.id,planStage:stage.id});
+      data:{},...(pre?{preset:pre}:{}),created:Date.now(),edited:null,fromPlan:ex.id,planStage:stage.id});
     n++;
   });
   // a stage removed from the plan takes its untouched row with it; one that
@@ -8541,7 +8637,7 @@ function experimentModal(st,after){
             <td>${items.map(r=>{
               const cls=r.p.done?"pg-done":(r.p.late?"pg-late":"pg-soon");
               const t=r.p.entry&&r.p.entry.time?r.p.entry.time+" ":"";
-              return `<span class="pg-pill ${cls}" title="${escAttr(r.a.name+" — "+(r.p.stage.label||"")+" — "+fmtDMY(r.p.date))}">${r.p.done?"✓":(r.p.late?"!":"")}${esc(t)}${esc(r.a.name)} · ${esc(r.p.stage.label||diaryTypeDef(r.p.stage.type).label||"stage")}</span>`;
+              return `<span class="pg-pill ${cls}" title="${escAttr(r.a.name+" — "+stageName(r.p.stage)+" — "+fmtDMY(r.p.date))}">${r.p.done?"✓":(r.p.late?"!":"")}${esc(t)}${esc(r.a.name)} · ${esc(stageName(r.p.stage))}</span>`;
             }).join("")}</td></tr>`).join("")}
         </tbody></table></div></div>`;
     }).join("");
@@ -8580,7 +8676,7 @@ function experimentModal(st,after){
           <td><button class="pg-start" data-a="${escAttr(a.id)}" style="border:1px solid var(--line2);background:var(--panel2);color:var(--gcamp);border-radius:7px;padding:3px 10px;font-size:11.5px;cursor:pointer">▶ Start…</button></td></tr>`;
         const cells=planProgress(st,a).map(p=>{
           const cls=p.done?"pg-done":(p.late?"pg-late":(p.date===today?"pg-today":"pg-soon"));
-          const tip=`${p.stage.label||""} — ${fmtDMY(p.date)}${p.done?" · done":(p.late?" · overdue":"")}${p.kind==="procedure"?" · from the animal's surgery record":""}`;
+          const tip=`${stageName(p.stage)} — ${fmtDMY(p.date)}${p.done?" · done":(p.late?" · overdue":"")}${p.kind==="procedure"?" · from the animal's surgery record":""}`;
           return `<td class="pg-c ${cls}" title="${escAttr(tip)}">${p.done?"✓":(p.late?"!":"")} ${esc(fmtDMY(p.date).slice(0,5))}</td>`;
         }).join("");
         return `<tr><td class="pg-an">${esc(a.name)}</td>${cells}
@@ -11456,10 +11552,26 @@ function mountPlanEditor(host,pl,onChange){
   if(!host||!pl) return;
   const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 8px;font-size:12px";
   const BTNS="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:7px;padding:3px 9px;font-size:11.5px;cursor:pointer";
-  const typeOpts=st=>[`<option value="procedure" ${st.type==="procedure"?"selected":""}>🔪 Procedure (the animal's own surgery record)</option>`]
+  // A Surgery stage writes the surgery record, which carries out the animal's
+  // planned procedure — so "Procedure" (a stage that wrote nothing) is only
+  // offered to a plan that already has one.
+  const typeOpts=st=>(st.type==="procedure"?[`<option value="procedure" selected>🔪 Procedure (writes no record)</option>`]:[])
     .concat(allDiaryTypeDefs().map(d=>`<option value="${escAttr(d.key)}" ${st.type===d.key?"selected":""}>${esc(d.icon||"🔖")} ${esc(d.label)}${d.fromShared?" (shared)":""}</option>`)).join("");
+  const opt=(v,cur,lab)=>`<option value="${escAttr(v)}"${v===cur?" selected":""}>${esc(lab||v)}</option>`;
+  const targetSel=(si,cur)=>`<select class="pl_starget2" data-si="${si}" style="${IST};padding:4px 6px" title="What is imaged">
+      <option value="">imaging…</option>${imagingTargets().map(t=>opt(t,cur)).join("")}<option value="__new">＋ new…</option></select>`;
+  // what is particular to the stage's kind
+  const specifics=(st,si)=>{
+    if(st.type==="training") return `<select class="pl_stask" data-si="${si}" style="${IST};padding:4px 6px" title="Behavioural task">
+        <option value="">task…</option>${behaviourTaskNames().map(t=>opt(t,st.task)).join("")}<option value="__new">＋ new task…</option></select>
+      <label class="pl-chk" title="Imaged during the session"><input type="checkbox" class="pl_simaged" data-si="${si}" ${st.imaged?"checked":""}> imaged</label>
+      ${st.imaged?targetSel(si,st.target):""}`;
+    if(st.type==="microscopy") return targetSel(si,st.target);
+    return "";
+  };
   const changed=()=>{ persist(); if(onChange) onChange(pl); };
   const draw=()=>{
+    const list=planStages(pl);
     host.innerHTML=`
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
         <input class="pl_name" value="${escAttr(pl.name||"")}" placeholder="Plan name (e.g. Imaging pipeline)" style="flex:1;min-width:160px;${IST}">
@@ -11467,50 +11579,80 @@ function mountPlanEditor(host,pl,onChange){
           title="With this off, a gap of 3 days means 3 working days, and no stage is ever left on a Saturday">
           <input type="checkbox" class="pl_weekends" style="width:auto" ${pl.skipWeekends?"":"checked"}> include weekends</label>
       </div>
-      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:7px">Stages, in order</div>
-      ${planStages(pl).map((st,si)=>`
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
-          <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 18px">${si+1}</span>
-          <input class="pl_slabel" data-si="${si}" value="${escAttr(st.label||"")}" placeholder="Stage name" style="flex:1;min-width:120px;${IST}">
-          <select class="pl_stype" data-si="${si}" style="${IST};flex:0 1 auto;max-width:240px">${typeOpts(st)}</select>
-          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)">
-            <input type="number" class="pl_safter" data-si="${si}" min="0" step="1" value="${si===0?0:stageGap(st)}"
-              ${si===0?"disabled title=\"The first stage lands on the day you start the animal\"":""} style="width:52px;${IST};padding:4px 6px">
-            ${si===0?"on day 0":"days after"}</label>
-          <input type="time" class="pl_stime" data-si="${si}" value="${escAttr(stageTime(st)||"")}"
-            title="Time of day this stage happens. Clear it to make the stage all-day." style="${IST};padding:4px 6px;width:96px">
-          <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink-faint)" title="Warn if the animal has not reached its restriction target by this stage">
-            <input type="checkbox" class="pl_starget" data-si="${si}" style="width:auto" ${st.cond==="atTarget"?"checked":""}> at target</label>
-          <button class="pl_sup" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===0?"disabled":""} title="Move up">↑</button>
-          <button class="pl_sdown" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===planStages(pl).length-1?"disabled":""} title="Move down">↓</button>
-          <button class="pl_sdel" data-si="${si}" style="${BTNS};padding:2px 7px;color:var(--overdue)">✕</button>
-        </div>`).join("")||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">No stages yet.</div>`}
+      <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:5px">Stages, in order — the number is ${pl.skipWeekends?"work days":"days"} after the stage before</div>
+      ${list.map((st,si)=>{ const what=stageWhat(pl,st), sn=stageSessionNo(pl,st);
+        return `<div class="pl-st" data-si="${si}">
+          <span class="pl-n">${si+1}</span>
+          <span class="pl-gap">${si===0?`<span class="pl-day0" title="The first stage lands on the day you start the animal">day 0</span>`
+            :`<input type="number" class="pl_safter" data-si="${si}" min="0" step="1" value="${stageGap(st)}" style="${IST};padding:4px 6px">`}</span>
+          <span class="pl-what">
+            <select class="pl_stype" data-si="${si}" style="${IST};padding:4px 6px">${typeOpts(st)}</select>
+            ${specifics(st,si)}
+            ${sn?`<span class="pl-sess" title="This is ${esc(st.task)} session ${sn} of the plan">#${sn}</span>`:""}
+          </span>
+          <input class="pl_slabel" data-si="${si}" value="${escAttr(st.label||"")}" placeholder="${escAttr(what||"Stage name")}" style="${IST}">
+          <span class="pl-tail">
+            <button type="button" class="pl_stime pl-time" data-si="${si}" title="Time of day — clear it for all day">${esc(stageTime(st)||"all day")}</button>
+            <label class="pl-chk" title="Warn if the animal has not reached its restriction target by this stage"><input type="checkbox" class="pl_starget" data-si="${si}" ${st.cond==="atTarget"?"checked":""}> at target</label>
+            <button class="pl_sdup" data-si="${si}" style="${BTNS};padding:2px 7px" title="Copy this stage — as many times as you need">⧉</button>
+            <button class="pl_sup" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===0?"disabled":""} title="Move up">↑</button>
+            <button class="pl_sdown" data-si="${si}" style="${BTNS};padding:2px 7px" ${si===list.length-1?"disabled":""} title="Move down">↓</button>
+            <button class="pl_sdel" data-si="${si}" style="${BTNS};padding:2px 7px;color:var(--overdue)" title="Remove">✕</button>
+          </span>
+        </div>`; }).join("")||`<div style="font-size:11px;color:var(--ink-faint);margin-bottom:6px">No stages yet.</div>`}
       <button class="pl_sadd" style="${BTNS}">＋ add stage</button>
-      ${planStages(pl).length?`<div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:9px">
+      ${list.length?`<div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:9px">
         Starting an animal on a Thursday would give: ${esc(planSchedule(pl,"2026-11-05").map((x,i)=>`${i+1}. ${fmtDMY(x.date)}`).join("  ·  "))}</div>`:""}`;
   };
   draw();
   const stAt=ds=>planStages(pl)[+ds.si];
+  // "＋ new…" in a list: asked for a name, added to the list, chosen
+  const askNew=(what,el,fallback)=>{ const nm=(prompt(`New ${what}:`)||"").trim(); if(!nm){ el.value=fallback||""; return null; } return nm; };
   host.addEventListener("input",e=>{
     const el=e.target;
     if(el.classList.contains("pl_name")){ pl.name=el.value; changed(); return; }
     if(el.classList.contains("pl_slabel")){ stAt(el.dataset).label=el.value; changed(); return; }
-    if(el.classList.contains("pl_safter")){ stAt(el.dataset).after=Math.max(0,+el.value||0); changed(); draw(); return; }
   });
   host.addEventListener("change",e=>{
     const el=e.target;
-    if(el.classList.contains("pl_stype")){ stAt(el.dataset).type=el.value; changed(); return; }
-    // an emptied box is a real answer ("all day"), not a missing one, so it is
-    // stored as "" rather than left undefined and re-defaulted
-    if(el.classList.contains("pl_stime")){ stAt(el.dataset).time=el.value||""; changed(); return; }
+    if(el.classList.contains("pl_safter")){ stAt(el.dataset).after=Math.max(0,+el.value||0); changed(); draw(); return; }
+    if(el.classList.contains("pl_stype")){ const st=stAt(el.dataset); st.type=el.value;
+      // the specifics of one kind mean nothing on another
+      if(st.type!=="training"){ delete st.task; delete st.imaged; }
+      if(st.type!=="training"&&st.type!=="microscopy") delete st.target;
+      changed(); draw(); return; }
+    if(el.classList.contains("pl_stask")){ const st=stAt(el.dataset); let v=el.value;
+      if(v==="__new"){ v=askNew("behavioural task",el,st.task); if(!v) return;
+        if(!behaviourTaskNames().includes(v)) (DB.config.taskLib=DB.config.taskLib||[]).push({name:v,params:[]}); }
+      if(v) st.task=v; else delete st.task; changed(); draw(); return; }
+    if(el.classList.contains("pl_simaged")){ const st=stAt(el.dataset); if(el.checked) st.imaged=true; else { delete st.imaged; delete st.target; } changed(); draw(); return; }
+    if(el.classList.contains("pl_starget2")){ const st=stAt(el.dataset); let v=el.value;
+      if(v==="__new"){ v=askNew("thing to image (e.g. Axons)",el,st.target); if(!v) return;
+        if(!imagingTargets().includes(v)) DB.config.imagingTargets.push(v); }
+      if(v) st.target=v; else delete st.target; changed(); draw(); return; }
     if(el.classList.contains("pl_weekends")){ pl.skipWeekends=!el.checked; changed(); draw(); return; }
     if(el.classList.contains("pl_starget")){ const st=stAt(el.dataset); if(el.checked) st.cond="atTarget"; else delete st.cond; changed(); return; }
   });
   host.addEventListener("click",e=>{
     const b=e.target.closest("button"); if(!b||!host.contains(b)) return;
     const ds=b.dataset;
+    if(b.classList.contains("pl_stime")){ const st=stAt(ds);
+      openTimePicker(b, stageTime(st)||"", v=>{ st.time=v||""; changed(); draw(); }, 15); return; }
     if(b.classList.contains("pl_sadd")){
-      pl.stages=planStages(pl).concat([{id:uid("s_"),label:"",type:"procedure",after:1}]); changed(); draw(); return; }
+      // a new stage starts as a copy of the kind and task of the last one —
+      // a paradigm is mostly the same session again
+      const last=planStages(pl).slice(-1)[0];
+      const st={id:uid("s_"),label:"",type:last?last.type:"training",after:1};
+      if(last){ ["task","imaged","target","time"].forEach(k=>{ if(last[k]!=null) st[k]=last[k]; }); }
+      pl.stages=planStages(pl).concat([st]); changed(); draw(); return; }
+    if(b.classList.contains("pl_sdup")){
+      const i=+ds.si, st=planStages(pl)[i]; if(!st) return;
+      const n=Math.round(+prompt(`How many copies of "${st.label||stageWhat(pl,st)}"? They go right after it, one ${pl.skipWeekends?"work ":""}day apart.`,"1"));
+      if(!(n>0)) return;
+      const copies=Array.from({length:Math.min(n,200)},()=>Object.assign(JSON.parse(JSON.stringify(st)),
+        {id:uid("s_"),after:i===0?1:Math.max(1,stageGap(st)),label:""}));
+      const list=planStages(pl).slice(); list.splice(i+1,0,...copies); pl.stages=list;
+      changed(); draw(); toast(`${copies.length} cop${copies.length===1?"y":"ies"} added`); return; }
     if(b.classList.contains("pl_sdel")){
       pl.stages=planStages(pl).filter((_,i)=>i!==+ds.si); changed(); draw(); return; }
     if(b.classList.contains("pl_sup")||b.classList.contains("pl_sdown")){
@@ -13435,7 +13577,7 @@ const KIND_FORMS={
       const set={}; host.querySelectorAll(".kf-set").forEach(i=>{ const v=i.value.trim(); if(v!=="") set[i.dataset.key]=isNaN(+v)?v:+v; });
       data.settings=set;
       data.imaged=!!host.querySelector(".kf-imaged").checked;
-      if(data.imaged) Object.assign(data,readImagingPart(host,a)); else delete data.fovs;
+      if(data.imaged) Object.assign(data,readImagingPart(host,a)); else { delete data.fovs; delete data.target; }
     }
   },
   microscopy:{
@@ -13577,7 +13719,10 @@ function findingRowHTML(f){
 function imagingPartHTML(a,d){
   const used=new Map(((d&&d.fovs)||[]).map(f=>[f.id,f]));
   const fovs=animalFovs(a);
-  return `<div class="kf-note">Fields of view — settings start from each field's last session.</div>
+  const tg=(d&&d.target)||"";
+  return `<div class="kf-row"><label>Imaging</label><select class="kf-target" style="${IN}"><option value="">—</option>${
+      imagingTargets().map(t=>`<option${t===tg?" selected":""}>${esc(t)}</option>`).join("")}</select></div>
+    <div class="kf-note">Fields of view — settings start from each field's last session.</div>
     ${fovs.map(f=>{ const v=used.get(f.id)||f;
       return `<div class="kf-fov kf-row" data-fov="${escAttr(f.id)}">
         <label class="kf-check" style="flex:0 0 110px"><input type="checkbox" class="kf-fovon" ${used.has(f.id)?"checked":""}> ${esc(f.name)}</label>
@@ -13597,7 +13742,8 @@ function readImagingPart(host,a){
   });
   const nm=(host.querySelector(".kf-newfov")||{}).value;
   if(nm&&nm.trim()){ const f={id:uid("fov_"),name:nm.trim(),dendrites:[]}; a.fovs.push(f); out.push({id:f.id}); }
-  return {fovs:out};
+  const tg=host.querySelector(".kf-target");
+  return {fovs:out,target:tg?tg.value:""};
 }
 // The people a record can name: this workspace's lab members.
 function labPeople(){
@@ -13663,7 +13809,7 @@ function diaryBelongsTo(e){
     let label="";
     experimentPlanIds(ex).forEach(pid=>{
       const st=planStages(planById(pid)).find(x=>x.id===stage);
-      if(st&&!label) label=st.label||"";
+      if(st&&!label) label=stageName(st,planById(pid));
     });
     return label?`${ex.title||"experiment"} › ${label}`:(ex.title||"");
   }
@@ -14095,7 +14241,7 @@ function requirementWarnings(a,d){
     next.forEach(e=>{
       const st=experimentPlanIds(ex).map(pid=>planStages(planById(pid)).find(x=>x.id===e.planStage)).find(Boolean);
       if(st&&st.cond==="atTarget"&&!targetReqStatus(a,d).ok&&!unmet.some(r=>r.key==="target"))
-        out.push({level:"amber",text:`${st.label||"stage"} (${fmtDMY(e.date).slice(0,5)}) needs the restriction target — ${targetReqStatus(a,d).text}`});
+        out.push({level:"amber",text:`${stageName(st)} (${fmtDMY(e.date).slice(0,5)}) needs the restriction target — ${targetReqStatus(a,d).text}`});
     });
   });
   return out;
@@ -14415,7 +14561,7 @@ function animalNextStage(a){
     if(!planRunFor(ex,a.id))return;
     planProgress(ex,a).forEach(p=>{
       if(p.done)return;
-      if(!best||p.date<best.date) best={date:p.date,label:p.stage.label||diaryTypeDef(p.stage.type).label,ex,late:p.late};
+      if(!best||p.date<best.date) best={date:p.date,label:stageName(p.stage),ex,late:p.late};
     });
   });
   return best;
@@ -14604,13 +14750,13 @@ function animalOverviewHTML(a){
     const g=animalGroups(a.id).find(x=>x.st.id===ex.id);
     const run=planRunFor(ex,a.id), pl=planForAnimal(ex,a);
     const prog=run?planProgress(ex,a):[];
-    const dots=prog.map(p=>`<span class="ov-dot ${p.done?"done":p.late?"late":p.date===todayDateStr()?"today":""}" title="${escAttr((p.stage.label||"")+" — "+fmtDMY(p.date)+(p.done?" · done":p.late?" · overdue":""))}"></span>`).join("");
+    const dots=prog.map(p=>`<span class="ov-dot ${p.done?"done":p.late?"late":p.date===todayDateStr()?"today":""}" title="${escAttr(stageName(p.stage)+" — "+fmtDMY(p.date)+(p.done?" · done":p.late?" · overdue":""))}"></span>`).join("");
     const nx=prog.find(p=>!p.done);
     return `<div class="ov-exp"><button type="button" class="ov-link ov-openexp" data-ex="${escAttr(ex.id)}">${esc(ex.title||"(unnamed experiment)")}</button>${
       g?" › "+esc(g.g.name||"group"):""}${
       pl?(run?` <span class="ov-dots">${dots}</span>${nx
-          ?(nx.late?` <span style="color:var(--overdue)">overdue: ${esc(nx.stage.label||"stage")} ${esc(fmtDMY(nx.date).slice(0,5))}</span>`
-                   :` ${dim("next "+esc(nx.stage.label||"stage")+" "+fmtDMY(nx.date).slice(0,5))}`)
+          ?(nx.late?` <span style="color:var(--overdue)">overdue: ${esc(stageName(nx.stage))} ${esc(fmtDMY(nx.date).slice(0,5))}</span>`
+                   :` ${dim("next "+esc(stageName(nx.stage))+" "+fmtDMY(nx.date).slice(0,5))}`)
           :` ${dim("plan complete")}`}`
             :` ${dim(esc(pl.name||"plan")+" — not started")}`):""}</div>`;
   });
@@ -15108,9 +15254,9 @@ const KIND_SUMMARY={
     // a 1.0 feeding round ticked without numbers: it happened, nothing was typed
     if(!g&&r==null) return [e.done?"no weight written":""];
     return [g?d.grams+"g":"", r!=null?"fed "+r+"g":""]; },
-  training:d=>[d.task, d.stage, d.trials!=null&&d.trials!==""?d.trials+" trials":"", d.success!=null&&d.success!==""?d.success+"%":"",
-    d.length?d.length+" min":"", d.settings&&d.settings.angle!=null?"angle "+d.settings.angle:"", d.imaged?"imaged":""],
-  microscopy:d=>[d.purpose, (d.fovs||[]).length?(d.fovs.length+" FOV"+(d.fovs.length===1?"":"s")):"", d.status&&d.status!=="raw"?d.status:""],
+  training:d=>[d.task, d.session?"session "+d.session:"", d.stage, d.trials!=null&&d.trials!==""?d.trials+" trials":"", d.success!=null&&d.success!==""?d.success+"%":"",
+    d.length?d.length+" min":"", d.settings&&d.settings.angle!=null?"angle "+d.settings.angle:"", d.imaged?"imaged"+(d.target?" "+d.target.toLowerCase():""):""],
+  microscopy:d=>[d.target, d.purpose, (d.fovs||[]).length?(d.fovs.length+" FOV"+(d.fovs.length===1?"":"s")):"", d.status&&d.status!=="raw"?d.status:""],
   surgery:d=>[d.headpost?"head-post":"", d.window?"window":"", d.duration?d.duration+" min":"", d.operator, d.complications?"⚠ "+d.complications:""],
   postop:d=>[d.given===true?"post-op given":d.given===false?"not given":"", d.condition],
   perfusion:d=>[d.operator, d.pbs?"→ PBS "+fmtDMY(d.pbs).slice(0,5):"", d.notProcessed?"not processed":""],
@@ -15118,7 +15264,7 @@ const KIND_SUMMARY={
   histo:d=>[(d.findings||[]).map(f=>[f.region,f.dir!=="labelled"?f.dir:""].filter(Boolean).join(" ")).join(", ")]
 };
 function diaryEntrySummary(e,a){
-  const d=e.data||{};
+  const d=recordData(e);
   const timePrefix=e.time?`${e.time}${e.endTime?"–"+e.endTime:""} · `:"";
   if(KIND_SUMMARY[e.type]){
     const parts=KIND_SUMMARY[e.type](d,e,a).filter(x=>x!=null&&String(x).trim()!=="");
@@ -15795,6 +15941,8 @@ function paintDiary(container,a,opts){
   }
   function renderForm(type,d,entryDate,entryTime,entryEndTime){
     d=d||{};
+    // a row a plan wrote opens saying what its stage is
+    { const row=editingId?a.diary.find(x=>x.id===editingId):null; if(row&&row.preset) d=Object.assign({},row.preset,d); }
     if(!editingId&&KIND_DEFAULTS[type]) d=Object.assign(KIND_DEFAULTS[type](a),d);
     // 2.0: the kind's plain fields, then whatever is particular to it
     const kf=KIND_FORMS[type];
@@ -15853,7 +16001,7 @@ function paintDiary(container,a,opts){
     // the kind's own part, made live
     // a new record's id is fixed now, so what its form adds can name it
     const recId=editing?editing.id:uid("d_");
-    { const kf=KIND_FORMS[type]; if(kf&&kf.wire) kf.wire(host,{a,id:recId,e:editing||null,d:(editing&&editing.data)||{},date:(editing&&editing.date)||selDate}); }
+    { const kf=KIND_FORMS[type]; if(kf&&kf.wire) kf.wire(host,{a,id:recId,e:editing||null,d:editing?recordData(editing):{},date:(editing&&editing.date)||selDate}); }
     host.querySelector(".dg-save").onclick=()=>{
       const entryDate=(dtValue||selDate).slice(0,10);
       const entryTime=hasTime(dtValue)?dtValue.slice(11,16):null;
@@ -18751,7 +18899,7 @@ function exportFullDatabaseExcel(){
   const sheetName=lbl=>{ let n=(lbl||"Table").slice(0,28); 
     seenNames[n]=(seenNames[n]||0)+1; return seenNames[n]>1?`${n} ${seenNames[n]}`:n; };
   const cellOf=(v,sf)=>v==null?"":(sf&&sf.type==="yesno")?(v?"Yes":"No"):(sf&&sf.type==="number")?num(v):v;
-  const recs=type=>DB.animals.flatMap(a=>(a.diary||[]).filter(e=>e.type===type).map(e=>({a,e,d:e.data||{}})));
+  const recs=type=>DB.animals.flatMap(a=>(a.diary||[]).filter(e=>e.type===type).map(e=>({a,e,d:recordData(e)})));
   const planned=e=>entryHappened(e)?"":"planned";
   const note=d=>diaryNoteOf(d)||"";
   const fovName=(a,id)=>(animalFovs(a).find(f=>f.id===id)||{}).name||"";
@@ -18768,12 +18916,12 @@ function exportFullDatabaseExcel(){
         yes(d.headpost),yes(d.window),injectionsOfSurgery(a,e).map(i=>(i.virus||"?")+(i.siteRegion?" → "+i.siteRegion:"")).join("; "),note(d)]),0,1),
     sheet("Post-op checks",["Animal","Date","Post-op given","Condition","Note"],
       recs("postop").map(({a,e,d})=>[a.name||"",e.date||"",d.given===true?"Yes":d.given===false?"No":"",d.condition||"",note(d)]),0,1),
-    sheet("Behaviour sessions",["Animal","Date","Time","Status","Task","Stage","Trials","Success %","Length (min)","Settings","Imaged","Data at","Note"],
-      recs("training").map(({a,e,d})=>[a.name||"",e.date||"",e.time||"",planned(e),d.task||"",d.stage||"",num(d.trials),num(d.success),num(d.length),
+    sheet("Behaviour sessions",["Animal","Date","Time","Status","Task","Session #","Stage","Trials","Success %","Length (min)","Settings","Imaged","Data at","Note"],
+      recs("training").map(({a,e,d})=>[a.name||"",e.date||"",e.time||"",planned(e),d.task||"",num(d.session),d.stage||"",num(d.trials),num(d.success),num(d.length),
         Object.entries(d.settings||{}).map(([k,v])=>`${k}=${v}`).join(", "),yes(d.imaged),d.dataAt||"",note(d)]),0,1,2),
-    sheet("Imaging sessions",["Animal","Date","Time","Status","Purpose","During behaviour","FOVs","Laser","Channels","Analysis","Data at","Note"],
+    sheet("Imaging sessions",["Animal","Date","Time","Status","Imaging","Purpose","During behaviour","FOVs","Laser","Channels","Analysis","Data at","Note"],
       [...recs("microscopy"),...recs("training").filter(({d})=>d.imaged)].map(({a,e,d})=>[a.name||"",e.date||"",e.time||"",planned(e),
-        e.type==="training"?"functional":(d.purpose||""),yes(e.type==="training"),(d.fovs||[]).map(f=>fovName(a,f.id)).filter(Boolean).join(", "),
+        d.target||"",e.type==="training"?"functional":(d.purpose||""),yes(e.type==="training"),(d.fovs||[]).map(f=>fovName(a,f.id)).filter(Boolean).join(", "),
         d.laser||"",d.channels||"",d.status||"",d.dataAt||"",note(d)]),0,1,2),
     sheet("FOVs",["Animal","FOV",...FOV_SETTINGS.map(f=>f.label),"Dendrites","Reconstructed","Times imaged"],
       DB.animals.flatMap(a=>animalFovs(a).map(f=>{ const den=f.dendrites||[];

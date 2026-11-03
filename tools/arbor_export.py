@@ -479,13 +479,13 @@ class Workspace:
             pl = next((p for p in self.plans if p.get("id") == plid), None)
             for st in ((pl or {}).get("stages") or []):
                 if st.get("id") == wanted:
-                    return f"{ex.get('title') or 'experiment'} › {st.get('label') or ''}".strip()
+                    return f"{ex.get('title') or 'experiment'} › {stage_name(pl, st)}".strip()
         return ex.get("title") or ""
 
     @staticmethod
     def kind_summary(e, a):
         """The record's one-line summary — KIND_SUMMARY in the app, part for part."""
-        d = e.get("data") or {}
+        d = record_data(e)
         k = e.get("type")
         has = lambda v: v not in (None, "")
         n = lambda v: f"{v:g}" if isinstance(v, float) else str(v)
@@ -498,14 +498,14 @@ class Workspace:
                 parts = [n(d["grams"]) + "g" if has(d.get("grams")) else "", f"fed {n(r)}g" if r != "" else ""]
         elif k == "training":
             st = d.get("settings") or {}
-            parts = [d.get("task"), d.get("stage"), f"{n(d['trials'])} trials" if has(d.get("trials")) else "",
+            parts = [d.get("task"), f"session {d['session']}" if d.get("session") else "", d.get("stage"), f"{n(d['trials'])} trials" if has(d.get("trials")) else "",
                      f"{n(d['success'])}%" if has(d.get("success")) else "",
                      f"{n(d['length'])} min" if d.get("length") else "",
                      f"angle {n(st['angle'])}" if st.get("angle") is not None else "",
-                     "imaged" if d.get("imaged") else ""]
+                     ("imaged" + (" " + d["target"].lower() if d.get("target") else "")) if d.get("imaged") else ""]
         elif k == "microscopy":
             f = d.get("fovs") or []
-            parts = [d.get("purpose"), f"{len(f)} FOV{'' if len(f) == 1 else 's'}" if f else "",
+            parts = [d.get("target"), d.get("purpose"), f"{len(f)} FOV{'' if len(f) == 1 else 's'}" if f else "",
                      d.get("status") if d.get("status") and d.get("status") != "raw" else ""]
         elif k == "surgery":
             parts = ["head-post" if d.get("headpost") else "", "window" if d.get("window") else "",
@@ -814,10 +814,39 @@ def table_sheets(w):
     return out
 
 
+def stage_name(pl, st):
+    """A stage's own name, or what it is — stageName in the app."""
+    if st.get("label"):
+        return st["label"]
+    t = st.get("type")
+    if t == "training" and st.get("task"):
+        n = 0
+        for x in (pl or {}).get("stages") or []:
+            if x.get("type") == "training" and x.get("task") == st["task"]:
+                n += 1
+            if x is st:
+                break
+        tg = st.get("target")
+        return f"{st['task']} session {n}" + (f" (imaged{' · ' + tg.lower() if tg else ''})" if st.get("imaged") else "")
+    if t == "microscopy" and st.get("target"):
+        return f"{st['target']} imaging"
+    if t == "procedure":
+        return "Procedure"
+    return (RECORD_KINDS.get(t) or ("stage",))[0]
+
+
+def record_data(e):
+    """A record as it reads: what was written in it over what its plan stage
+    said it would be (e.preset) — recordData in the app."""
+    d = dict(e.get("preset") or {})
+    d.update(e.get("data") or {})
+    return d
+
+
 def kind_sheets(w):
     """One sheet per record kind — the same sheets the app's export makes."""
     def recs(kind):
-        return [(a, e, e.get("data") or {}) for a in w.animals
+        return [(a, e, record_data(e)) for a in w.animals
                 for e in (a.get("diary") or []) if e.get("type") == kind]
 
     def planned(e):
@@ -879,24 +908,24 @@ def kind_sheets(w):
                      rows, sort=[0, 1]))
 
     rows = [[a.get("name") or "", e.get("date") or "", e.get("time") or "", planned(e), d.get("task") or "",
-             d.get("stage") or "", num(d.get("trials")), num(d.get("success")), num(d.get("length")),
+             num(d.get("session")), d.get("stage") or "", num(d.get("trials")), num(d.get("success")), num(d.get("length")),
              ", ".join(f"{k}={v}" for k, v in (d.get("settings") or {}).items()), yes(d.get("imaged")),
              d.get("dataAt") or "", note_of(d)] for a, e, d in recs("training")]
-    out.append(Sheet("Behaviour sessions", ["Animal", "Date", "Time", "Status", "Task", "Stage", "Trials",
+    out.append(Sheet("Behaviour sessions", ["Animal", "Date", "Time", "Status", "Task", "Session #", "Stage", "Trials",
                                             "Success %", "Length (min)", "Settings", "Imaged", "Data at", "Note"],
-                     rows, sort=[0, 1, 2], wide=[12]))
+                     rows, sort=[0, 1, 2], wide=[13]))
 
     rows = []
     for a, e, d in recs("microscopy") + [x for x in recs("training") if x[2].get("imaged")]:
         beh = e.get("type") == "training"
         rows.append([a.get("name") or "", e.get("date") or "", e.get("time") or "", planned(e),
-                     "functional" if beh else d.get("purpose") or "", yes(beh),
+                     d.get("target") or "", "functional" if beh else d.get("purpose") or "", yes(beh),
                      ", ".join(n for n in (fov_name(a, f.get("id")) for f in (d.get("fovs") or [])) if n),
                      d.get("laser") or "", d.get("channels") or "", d.get("status") or "",
                      d.get("dataAt") or "", note_of(d)])
-    out.append(Sheet("Imaging sessions", ["Animal", "Date", "Time", "Status", "Purpose", "During behaviour",
+    out.append(Sheet("Imaging sessions", ["Animal", "Date", "Time", "Status", "Imaging", "Purpose", "During behaviour",
                                           "FOVs", "Laser", "Channels", "Analysis", "Data at", "Note"],
-                     rows, sort=[0, 1, 2], wide=[11]))
+                     rows, sort=[0, 1, 2], wide=[12]))
 
     rows = []
     for a in w.animals:
