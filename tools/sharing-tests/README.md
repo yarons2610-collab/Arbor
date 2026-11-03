@@ -60,6 +60,20 @@ and `T.ok/eq` record results for `T.report()`.
 - **After weakening a safety check, re-prove it still fails.** Narrowing
   `leakCheck`'s id scan needed four negative tests before it could be trusted.
 
+## Also covered (fourth pass — Arbor 2.0, 02/11/2026)
+
+an animal carrying every 2.0 piece (baseline, restriction period, a day of
+feeding, surgery and post-op check, FOV with dendrites, imaging and behaviour
+sessions with task settings) reaching the repository whole, and the receiver
+seeing its restriction status, today's feeding, the post-op agenda and the hub
+· one person changing an FOV's depth while the other adds and ticks dendrites
+on the same FOV (merged per FOV, per setting — it used to lose the dendrites) ·
+a restriction ended on one side while the other logs that day's feeding · two
+of one person's own devices (same Gist; build `sC` with `arbor_gist_id` equal
+to A's) adding FOVs, starting a restriction and removing an FOV on the same
+animal at once — merged item by item through `base.sub`, removals honoured ·
+a private animal never reaching the shared file.
+
 ## Also covered (second pass)
 
 repeating tasks shared between people, and two or three of them ticking

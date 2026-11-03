@@ -144,6 +144,46 @@ def repeat_label(r):
     return base
 
 
+# ── record kinds ──────────────────────────────────────────────────────────────
+# Mirrors RECORD_KINDS in index.html: in Arbor 2.0 the kinds are defined in
+# code, not in the workspace's config, so the exporter carries its own copy.
+RECORD_KINDS = {
+    "weight": ("Weighing", [("grams", "Weight (g)", "number"), ("ration", "Ration (g)", "number")]),
+    "surgery": ("Surgery", [("duration", "Duration (min)", "number"), ("operator", "Operator", "text"),
+                            ("complications", "Complications", "text")]),
+    "postop": ("Post-op check", [("given", "Post-op given", "yesno"), ("condition", "Condition", "text")]),
+    "training": ("Behaviour session", [("stage", "Stage", "text"), ("trials", "Trials", "number"),
+                                       ("success", "Success %", "number"), ("length", "Session length (min)", "number"),
+                                       ("dataAt", "Data location", "text")]),
+    "microscopy": ("Imaging session", [("purpose", "Purpose", "text"), ("laser", "Laser power", "text"),
+                                       ("channels", "Channels", "text"), ("dataAt", "Data location", "text"),
+                                       ("status", "Analysis", "text")]),
+    "perfusion": ("Perfusion", [("operator", "Done by", "text")]),
+    "histology": ("Slicing", [("operator", "Sliced by", "text"), ("plane", "Plane", "text"),
+                              ("thickness", "Thickness (µm)", "number"), ("storage", "Stored at", "text")]),
+    "histo": ("Histology", [("operator", "Done by", "text"), ("dataAt", "Scans at", "text")]),
+}
+FOV_SETTINGS = [("depth", "Depth (µm)"), ("zoom", "Zoom"), ("planes", "Planes"),
+                ("frames", "Frames / plane"), ("res", "Resolution")]
+RESTRICTION_TARGET = 90
+BEHAVIOUR_TASKS = {"Lever": ["Threshold", "Sound frequency (Hz)", "Table angle"]}
+
+
+def ration_of(d):
+    """The day's ration — 2.0 stores it as "ration", 1.0 in a custom field."""
+    v = d.get("ration") if d.get("ration") is not None else d.get("f_a847sm")
+    return "" if v in (None, "") else v
+
+
+def note_of(d):
+    """Same reading as diaryNoteOf in the app."""
+    if d.get("note") is not None:
+        return plain(d.get("note"))
+    if d.get("label") is not None:
+        return ": ".join(x for x in (d.get("label"), d.get("text")) if x)
+    return plain(d.get("text") or "")
+
+
 # ── workspace model ───────────────────────────────────────────────────────────
 class Workspace:
     """Reads an Arbor workspace the way the app does: resolving the links that
@@ -301,6 +341,35 @@ class Workspace:
         return None
 
     @staticmethod
+    def restrictions(a):
+        return sorted((r for r in (a.get("restrictions") or []) if r and r.get("start")),
+                      key=lambda r: str(r["start"]))
+
+    @staticmethod
+    def restriction_at(a, date):
+        d = str(date)[:10]
+        live = [r for r in Workspace.restrictions(a)
+                if str(r["start"])[:10] <= d and (not r.get("end") or str(r["end"])[:10] >= d)]
+        return live[-1] if live else None
+
+    @staticmethod
+    def weighing_context(a, date):
+        """Why a weighing was taken — worked out as weighingContext does."""
+        d = as_date(date)
+        if Workspace.restriction_at(a, date):
+            return "restriction weighing"
+        if isinstance(d, dt.date):
+            for e in a.get("diary") or []:
+                s = as_date(e.get("date")) if e.get("type") == "surgery" else None
+                if isinstance(s, dt.date) and abs((s - d).days) <= 3:
+                    return "pre-op weighing" if d < s else "post-op weighing"
+        return "routine weighing"
+
+    @staticmethod
+    def fovs(a):
+        return [f for f in (a.get("fovs") or []) if f and f.get("id")]
+
+    @staticmethod
     def pct_baseline(a):
         w = Workspace.weight_entries(a)
         if not w:
@@ -382,6 +451,8 @@ class Workspace:
         return sorted(out)
 
     def diary_label(self, key):
+        if key in RECORD_KINDS:
+            return RECORD_KINDS[key][0]
         t = self.diary_types.get(key)
         return (t or {}).get("label") or (key or "").title()
 
@@ -408,14 +479,80 @@ class Workspace:
             pl = next((p for p in self.plans if p.get("id") == plid), None)
             for st in ((pl or {}).get("stages") or []):
                 if st.get("id") == wanted:
-                    return f"{ex.get('title') or 'experiment'} > {st.get('label') or ''}".strip()
+                    return f"{ex.get('title') or 'experiment'} › {st.get('label') or ''}".strip()
         return ex.get("title") or ""
 
-    def diary_detail(self, e):
+    @staticmethod
+    def kind_summary(e, a):
+        """The record's one-line summary — KIND_SUMMARY in the app, part for part."""
+        d = e.get("data") or {}
+        k = e.get("type")
+        has = lambda v: v not in (None, "")
+        n = lambda v: f"{v:g}" if isinstance(v, float) else str(v)
+        if k == "weight":
+            r = ration_of(d)
+            if not has(d.get("grams")) and r == "":
+                # a 1.0 feeding round ticked without numbers
+                parts = ["no weight written" if e.get("done") else ""]
+            else:
+                parts = [n(d["grams"]) + "g" if has(d.get("grams")) else "", f"fed {n(r)}g" if r != "" else ""]
+        elif k == "training":
+            st = d.get("settings") or {}
+            parts = [d.get("task"), d.get("stage"), f"{n(d['trials'])} trials" if has(d.get("trials")) else "",
+                     f"{n(d['success'])}%" if has(d.get("success")) else "",
+                     f"{n(d['length'])} min" if d.get("length") else "",
+                     f"angle {n(st['angle'])}" if st.get("angle") is not None else "",
+                     "imaged" if d.get("imaged") else ""]
+        elif k == "microscopy":
+            f = d.get("fovs") or []
+            parts = [d.get("purpose"), f"{len(f)} FOV{'' if len(f) == 1 else 's'}" if f else "",
+                     d.get("status") if d.get("status") and d.get("status") != "raw" else ""]
+        elif k == "surgery":
+            parts = ["head-post" if d.get("headpost") else "", "window" if d.get("window") else "",
+                     f"{n(d['duration'])} min" if d.get("duration") else "", d.get("operator"),
+                     "⚠ " + d["complications"] if d.get("complications") else ""]
+        elif k == "postop":
+            parts = ["post-op given" if d.get("given") is True else "not given" if d.get("given") is False else "",
+                     d.get("condition")]
+        elif k == "perfusion":
+            pbs = as_date(d.get("pbs"))
+            parts = [d.get("operator"), "→ PBS " + pbs.strftime("%d/%m") if isinstance(pbs, dt.date) else "",
+                     "not processed" if d.get("notProcessed") else ""]
+        elif k == "histology":
+            sl = d.get("slides") or []
+            parts = [d.get("plane"), f"{n(d['thickness'])}µm" if d.get("thickness") else "",
+                     f"{len(sl)} slide{'' if len(sl) == 1 else 's'}, {sum(len(x.get('aps') or []) for x in sl)} slices" if sl else "",
+                     d.get("storage")]
+        elif k == "histo":
+            parts = [", ".join(" ".join(x for x in (f.get("region"), f.get("dir") if f.get("dir") != "labelled" else "") if x)
+                               for f in (d.get("findings") or []))]
+        else:
+            return None
+        parts = [str(x) for x in parts if x is not None and str(x).strip() != ""]
+        if k == "weight" and has(d.get("grams")):
+            b = Workspace.baseline_at(a, e.get("date"))
+            w = Workspace.weight_entries(a)
+            cur = float(d["grams"])
+            is_self = b and ((not b[2] and w and w[0] is e) or
+                             (b[2] and b[1] == str(e.get("date"))[:10] and b[0] == cur))
+            if b and not is_self:
+                delta = cur - b[0]
+                pct = f" ({'+' if delta >= 0 else ''}{delta / b[0] * 100:.1f}%)" if b[0] else ""
+                parts.append(f"{'+' if delta >= 0 else ''}{delta:.1f}g{pct} vs baseline")
+        note = note_of(d)
+        if note:
+            parts.append(note)
+        return " · ".join(parts)
+
+    def diary_detail(self, e, a=None):
+        if a is not None and e.get("type") in RECORD_KINDS:
+            return Workspace.kind_summary(e, a)
         """The entry's own fields, as 'Label: value' pairs — the same fields the
         app shows under an entry."""
         data = e.get("data") or {}
-        t = self.diary_types.get(e.get("type")) or {}
+        kind = RECORD_KINDS.get(e.get("type"))
+        t = ({"fields": [{"key": k, "label": l, "type": ty} for k, l, ty in kind[1]]} if kind
+             else self.diary_types.get(e.get("type")) or {})
         bits = []
         for f in t.get("fields") or []:
             v = data.get(f.get("key"))
@@ -551,7 +688,7 @@ def write_overview(wb, w, sheets, source_label):
         ("Animals", len(w.animals)),
         ("— alive", len(alive)),
         ("— alive and in use", len(in_use)),
-        ("Diary entries", diary_n),
+        ("Animal records", diary_n),
         ("Projects", len(w.projects)),
         ("Experiments", len(w.experiments)),
         ("Scheduled items", len(w.schedule)),
@@ -677,6 +814,130 @@ def table_sheets(w):
     return out
 
 
+def kind_sheets(w):
+    """One sheet per record kind — the same sheets the app's export makes."""
+    def recs(kind):
+        return [(a, e, e.get("data") or {}) for a in w.animals
+                for e in (a.get("diary") or []) if e.get("type") == kind]
+
+    def planned(e):
+        return "" if Workspace.entry_happened(e) else "planned"
+
+    def num(v):
+        return "" if v in (None, "") else v
+
+    def fov_name(a, fid):
+        return next((f.get("name") or "" for f in Workspace.fovs(a) if f.get("id") == fid), "")
+
+    out = []
+    rows = []
+    for a, e, d in recs("weight"):
+        g = d.get("grams")
+        if g in (None, "") and ration_of(d) == "":
+            continue
+        b = Workspace.baseline_at(a, e.get("date"))
+        pct = round(1000 * float(g) / b[0]) / 10 if (b and b[0] and g not in (None, "")) else ""
+        rows.append([a.get("name") or "", e.get("date") or "", e.get("time") or "", num(g),
+                     ration_of(d), pct, Workspace.weighing_context(a, e.get("date")), note_of(d)])
+    out.append(Sheet("Weighings", ["Animal", "Date", "Time", "Weight (g)", "Ration (g)", "% of baseline",
+                                   "Why", "Note"], rows, sort=[0, 1, 2]))
+
+    rows = []
+    for a in w.animals:
+        for r in Workspace.restrictions(a):
+            b = Workspace.baseline_at(a, r["start"])
+            rows.append([a.get("name") or "", r.get("start") or "", r.get("end") or "",
+                         r.get("target") or RESTRICTION_TARGET, b[0] if b else "", b[1] if b else "",
+                         r.get("endReason") or ""])
+    out.append(Sheet("Food restrictions", ["Animal", "Start", "End", "Target %", "Baseline (g)",
+                                           "Baseline date", "Ended because"], rows, sort=[0, 1]))
+
+    rows = []
+    for a, e, d in recs("surgery"):
+        # an injection not tied to a surgery belongs to the first one, as in injectionsOfSurgery
+        first = min((x for x in (a.get("diary") or []) if x.get("type") == "surgery"),
+                    key=lambda x: str(x.get("date") or ""))
+        injs = [i for i in Workspace.injections(a)
+                if ((i.get("surgeryId") == e.get("id")) if i.get("surgeryId") else first is e)]
+        rows.append([a.get("name") or "", e.get("date") or "", e.get("time") or "", planned(e),
+                     num(d.get("duration")), d.get("operator") or "", d.get("complications") or "",
+                     yes(d.get("headpost")), yes(d.get("window")),
+                     "; ".join((i.get("virus") or "?") + (" → " + i["siteRegion"] if i.get("siteRegion") else "")
+                               for i in injs), note_of(d)])
+    out.append(Sheet("Surgeries", ["Animal", "Date", "Time", "Status", "Duration (min)", "Operator",
+                                   "Complications", "Head-post", "Window", "Injections", "Note"],
+                     rows, sort=[0, 1], wide=[9]))
+
+    rows = [[a.get("name") or "", e.get("date") or "",
+             "Yes" if d.get("given") is True else "No" if d.get("given") is False else "",
+             d.get("condition") or "", note_of(d)] for a, e, d in recs("postop")]
+    out.append(Sheet("Post-op checks", ["Animal", "Date", "Post-op given", "Condition", "Note"],
+                     rows, sort=[0, 1]))
+
+    rows = [[a.get("name") or "", e.get("date") or "", e.get("time") or "", planned(e), d.get("task") or "",
+             d.get("stage") or "", num(d.get("trials")), num(d.get("success")), num(d.get("length")),
+             ", ".join(f"{k}={v}" for k, v in (d.get("settings") or {}).items()), yes(d.get("imaged")),
+             d.get("dataAt") or "", note_of(d)] for a, e, d in recs("training")]
+    out.append(Sheet("Behaviour sessions", ["Animal", "Date", "Time", "Status", "Task", "Stage", "Trials",
+                                            "Success %", "Length (min)", "Settings", "Imaged", "Data at", "Note"],
+                     rows, sort=[0, 1, 2], wide=[12]))
+
+    rows = []
+    for a, e, d in recs("microscopy") + [x for x in recs("training") if x[2].get("imaged")]:
+        beh = e.get("type") == "training"
+        rows.append([a.get("name") or "", e.get("date") or "", e.get("time") or "", planned(e),
+                     "functional" if beh else d.get("purpose") or "", yes(beh),
+                     ", ".join(n for n in (fov_name(a, f.get("id")) for f in (d.get("fovs") or [])) if n),
+                     d.get("laser") or "", d.get("channels") or "", d.get("status") or "",
+                     d.get("dataAt") or "", note_of(d)])
+    out.append(Sheet("Imaging sessions", ["Animal", "Date", "Time", "Status", "Purpose", "During behaviour",
+                                          "FOVs", "Laser", "Channels", "Analysis", "Data at", "Note"],
+                     rows, sort=[0, 1, 2], wide=[11]))
+
+    rows = []
+    for a in w.animals:
+        for f in Workspace.fovs(a):
+            den = f.get("dendrites") or []
+            n = sum(1 for e in (a.get("diary") or []) if Workspace.entry_happened(e)
+                    and any(x.get("id") == f["id"] for x in ((e.get("data") or {}).get("fovs") or [])))
+            rows.append([a.get("name") or "", f.get("name") or ""] + [num(f.get(k)) for k, _ in FOV_SETTINGS]
+                        + [", ".join(x.get("name") or "" for x in den),
+                           ", ".join(x.get("name") or "" for x in den if x.get("reconstructed")), n])
+    out.append(Sheet("FOVs", ["Animal", "FOV"] + [l for _, l in FOV_SETTINGS]
+                     + ["Dendrites", "Reconstructed", "Times imaged"], rows, sort=[0, 1]))
+
+    rows = [[a.get("name") or "", e.get("date") or "", planned(e), d.get("operator") or "",
+             d.get("pbs") or "", yes(d.get("notProcessed")), note_of(d)] for a, e, d in recs("perfusion")]
+    out.append(Sheet("Perfusions", ["Animal", "Date", "Status", "Done by", "Moved to PBS", "Not processed",
+                                    "Note"], rows, sort=[0, 1]))
+
+    rows = []
+    for a, e, d in recs("histology"):
+        head = [a.get("name") or "", e.get("date") or "", d.get("operator") or "", d.get("plane") or "",
+                num(d.get("thickness")), d.get("storage") or ""]
+        slides = d.get("slides") or []
+        for x in slides:
+            aps = x.get("aps") or []
+            rows.append(head + [x.get("n"), len(aps), ", ".join(str(v) for v in aps), note_of(d)])
+        if not slides:
+            rows.append(head + ["", "", "", note_of(d)])
+    out.append(Sheet("Slicing", ["Animal", "Date", "Sliced by", "Plane", "Thickness (µm)", "Stored at",
+                                 "Slide", "Slices", "APs", "Note"], rows, sort=[0, 1, 6]))
+
+    rows = []
+    for a, e, d in recs("histo"):
+        head = [a.get("name") or "", e.get("date") or "", d.get("operator") or "", d.get("dataAt") or ""]
+        finds = d.get("findings") or []
+        for x in finds:
+            rows.append(head + [x.get("region") or "", x.get("dir") or "", x.get("slides") or "",
+                                x.get("note") or "", note_of(d)])
+        if not finds:
+            rows.append(head + ["", "", "", "", note_of(d)])
+    out.append(Sheet("Histology", ["Animal", "Date", "Done by", "Scans at", "Region", "Finding",
+                                   "On slides", "Finding note", "Note"], rows, sort=[0, 1]))
+    return out
+
+
 def animal_fields_sheet(w):
     """Whatever the lab added to the animal window, beside the built-in columns."""
     cols = [(sec, f) for sec in (w.config.get("animalSections") or [])
@@ -735,15 +996,16 @@ def build_sheets(w):
             diary.append([
                 a.get("name") or "", e.get("date") or "", e.get("time") or "",
                 e.get("endTime") or "", w.diary_label(e.get("type")),
-                w.diary_detail(e), yes(e.get("done")),
+                w.diary_detail(e, a), yes(Workspace.entry_happened(e)),
                 w.belongs_to(e),
                 ms_to_dt(e.get("created")),
             ])
     sheets.append(Sheet(
-        "Diary entries",
-        ["Animal", "Date", "Time", "End time", "Type", "Details", "Done",
+        "All records",
+        ["Animal", "Date", "Time", "End time", "Kind", "Details", "Done",
          "Part of", "Logged"],
         diary, sort=[0, 1, 2], wide=[5]))
+    sheets.extend(kind_sheets(w))
 
     inj = []
     for a in w.animals:
@@ -755,12 +1017,13 @@ def build_sheets(w):
                     x.get("siteRegion") or "", x.get("ap"), x.get("ml"),
                     d.get("dv"), d.get("volume"),
                     x.get("partnerRegion") or "", x.get("pAp"), x.get("pMl"), x.get("pDv"),
+                    x.get("verified") or "",
                 ])
     sheets.append(Sheet(
         "Injections",
         ["Animal", "Injection #", "Depth #", "Virus", "Virus type", "Site region",
          "AP", "ML", "DV", "Volume (nl)", "Target region", "Target AP", "Target ML",
-         "Target DV"],
+         "Target DV", "Histology"],
         inj, sort=[0, 1, 2]))
 
     timeline = []
@@ -846,10 +1109,20 @@ def build_sheets(w):
              for s in (w.config.get("siteLib") or [])]
     sheets.append(Sheet("Injection sites", ["Name", "AP", "ML", "DV"], sites, sort=[0]))
 
-    tasks = [[t.get("name") or "",
-              ", ".join(p.get("label") or p.get("key") or "" for p in (t.get("params") or []))]
-             for t in (w.config.get("taskLib") or [])]
-    sheets.append(Sheet("Behavioural tasks", ["Task", "Parameters"], tasks,
+    # Lever's settings are designed into Arbor (BEHAVIOUR_TASKS in the app);
+    # any other task carries its own short list in the task library
+    lib = {t.get("name"): t for t in (w.config.get("taskLib") or []) if t.get("name")}
+    used = {e.get("data", {}).get("task") for a in w.animals for e in (a.get("diary") or [])
+            if e.get("type") == "training" and (e.get("data") or {}).get("task")}
+    names = sorted(set(BEHAVIOUR_TASKS) | set(lib) | used, key=natural_key)
+    tasks = []
+    for n in names:
+        sets = BEHAVIOUR_TASKS.get(n) or [p.get("label") or p.get("key") or "" for p in (lib.get(n, {}).get("params") or [])
+                                          if not re.match(r"(?i)^(time|trials|success)", p.get("label") or "")]
+        sessions = sum(1 for a in w.animals for e in (a.get("diary") or [])
+                       if e.get("type") == "training" and (e.get("data") or {}).get("task") == n)
+        tasks.append([n, ", ".join(sets), sessions])
+    sheets.append(Sheet("Behavioural tasks", ["Task", "Settings", "Sessions"], tasks,
                         sort=[0], wide=[1]))
 
     inv = [[k, (v or {}).get("status") or "", plain((v or {}).get("note"))]
@@ -949,7 +1222,7 @@ def main():
 
     rows = sum(len(s.rows) for s in sheets)
     print(f"{path}  ·  {len(sheets)} sheets, {rows} rows  ·  "
-          f"{len(w.animals)} animals, {sum(len(a.get('diary') or []) for a in w.animals)} diary entries")
+          f"{len(w.animals)} animals, {sum(len(a.get('diary') or []) for a in w.animals)} animal records")
 
 
 def keep_recent(folder, keep):
