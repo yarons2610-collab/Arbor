@@ -854,11 +854,15 @@ def kind_sheets(w):
 
     rows = []
     for a, e, d in recs("surgery"):
-        # an injection not tied to a surgery belongs to the first one, as in injectionsOfSurgery
-        first = min((x for x in (a.get("diary") or []) if x.get("type") == "surgery"),
-                    key=lambda x: str(x.get("date") or ""))
-        injs = [i for i in Workspace.injections(a)
-                if ((i.get("surgeryId") == e.get("id")) if i.get("surgeryId") else first is e)]
+        # as surgeryOfInjection: the surgery it names, else the first one on or
+        # after the day it was planned (the first at all, if never dated)
+        surgs = sorted((x for x in (a.get("diary") or []) if x.get("type") == "surgery" and x.get("date")),
+                       key=lambda x: str(x.get("date")))
+
+        def surgery_of(i):
+            hit = next((x for x in surgs if i.get("surgeryId") and x.get("id") == i.get("surgeryId")), None)
+            return hit or next((x for x in surgs if str(x.get("date"))[:10] >= (i.get("plannedAt") or "")), None)
+        injs = [i for i in Workspace.injections(a) if surgery_of(i) is e]
         rows.append([a.get("name") or "", e.get("date") or "", e.get("time") or "", planned(e),
                      num(d.get("duration")), d.get("operator") or "", d.get("complications") or "",
                      yes(d.get("headpost")), yes(d.get("window")),

@@ -204,6 +204,17 @@
     padding:1px 8px;font-size:10.5px;cursor:pointer;text-transform:none;letter-spacing:0;font-family:inherit}
   .ov-btn:hover{color:var(--ink);border-color:var(--ink-faint)}
   .ov-inj{padding-left:2px}
+  .ov-surg{margin-top:3px}
+  .ov-surg .ov-inj{padding-left:18px}
+  /* the procedure, surgery by surgery */
+  .surg-grp{border:1px solid var(--line2);border-radius:10px;padding:8px 10px 10px;margin-bottom:10px}
+  .surg-plan{border-style:dashed}
+  .surg-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-bottom:8px}
+  .surg-head .datebtn{flex:0 0 auto;width:auto}
+  .surg-tag{font-family:var(--mono);font-size:10px;color:var(--amber);border:1px solid var(--amber);border-radius:5px;padding:0 5px}
+  .surg-note{font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+  .surg-head .ov-link{margin-left:auto}
+  .surg-tick{font-size:12px}
   .ov-exp{margin-bottom:3px}
   .ov-link{border:0;background:none;color:var(--ink);padding:0;cursor:pointer;font:inherit;text-decoration:underline;
     text-decoration-color:var(--line2);text-underline-offset:3px}
@@ -7787,8 +7798,8 @@ function syncPlanEntries(ex,a){
   // was filled in stays, as the animal's own record of work actually done
   const dropped=(a.diary||[]).filter(e=>e.fromPlan===ex.id&&!want.has(e.planStage)&&!diaryRowHasContent(e));
   if(dropped.length){
-    removeShared("diary",dropped,a);
-    a.diary=(a.diary||[]).filter(e=>!dropped.includes(e));
+    removeShared("diary",dropped,a); releaseSurgeries(a,dropped);
+    a.diary=(a.diary||[]).filter(e=>!dropped.includes(e)); syncProcedure(a);
     n+=dropped.length;
   }
   return n;
@@ -7816,7 +7827,7 @@ function stopPlanFor(ex,a){
   if(!ex||!a) return;
   const rows=(a.diary||[]).filter(e=>e.fromPlan===ex.id);
   const empty=rows.filter(e=>!diaryRowHasContent(e));
-  if(empty.length) removeShared("diary",empty,a);
+  if(empty.length){ removeShared("diary",empty,a); releaseSurgeries(a,empty); }
   a.diary=(a.diary||[]).filter(e=>{
     if(e.fromPlan!==ex.id) return true;
     if(diaryRowHasContent(e)){ delete e.fromPlan; delete e.planStage; return true; }
@@ -7881,7 +7892,7 @@ function releaseScheduledEntries(owns){
   DB.animals.forEach(a=>{
     if(!Array.isArray(a.diary))return;
     const dropped=a.diary.filter(e=>owns(e)&&!diaryRowHasContent(e));
-    if(dropped.length) removeShared("diary",dropped,a);
+    if(dropped.length){ removeShared("diary",dropped,a); releaseSurgeries(a,dropped); }
     a.diary=a.diary.filter(e=>{
       if(!owns(e))return true;
       if(diaryRowHasContent(e)){
@@ -13431,17 +13442,43 @@ const KIND_FORMS={
     html:({a,d})=>`<div class="kf-imaging">${imagingPartHTML(a,d)}</div>`,
     read:(host,{a},data)=>Object.assign(data,readImagingPart(host,a))
   },
+  /* The surgery is where the procedure happens, so its record holds that
+     part of it: head-post and window fitted here, and the injections given
+     here — the same injections the animal's Details shows under this
+     surgery's date, edited in either place. */
   surgery:{
-    html:({a,e,d})=>{
-      const injs=e?injectionsOfSurgery(a,e):[];
-      return `<div class="kf-row">
+    html:({d})=>`<div class="kf-row">
           <label class="kf-check"><input type="checkbox" class="kf-hp" ${d.headpost?"checked":""}> head-post fitted</label>
           <label class="kf-check"><input type="checkbox" class="kf-win" ${d.window?"checked":""}> window fitted</label></div>
-        <div class="kf-note">${injs.length?"Injections in this surgery: "+injs.map(i=>esc((i.virus||"?")+(i.siteRegion?" → "+i.siteRegion:""))).join(" · "):"No injections recorded against this surgery yet"} — injections are edited in the animal's Details.</div>
-        <datalist id="kf_people">${labPeople().map(n=>`<option value="${escAttr(n)}">`).join("")}</datalist>`;
+        <div class="kf-proc">${procedureSectionHTML("kfp","surgery")}</div>
+        <datalist id="kf_people">${labPeople().map(n=>`<option value="${escAttr(n)}">`).join("")}</datalist>`,
+    wire:(host,ctx)=>{
+      host.querySelectorAll('.dg-field[data-key="operator"]').forEach(i=>i.setAttribute("list","kf_people"));
+      const hpEl=host.querySelector(".kf-hp"), winEl=host.querySelector(".kf-win");
+      const ed=host._proc=mountProcedureEditor("kfp",(ctx.a&&ctx.a.surgeryDetail)||{},
+        focus=>toast(`The ${focus==="site"?"site":"virus"} library is in Materials — save this record first`),
+        {mode:"surgery",animal:ctx.a,offerTubeUse:true,
+         surgery:{id:ctx.id,date:ctx.date,headpost:hpEl.checked,window:winEl.checked}});
+      hpEl.addEventListener("change",()=>ed.setFixture("headpost",hpEl.checked));
+      winEl.addEventListener("change",()=>ed.setFixture("window",winEl.checked));
     },
-    wire:host=>{ host.querySelectorAll('.dg-field[data-key="operator"]').forEach(i=>i.setAttribute("list","kf_people")); },
-    read:(host,ctx,data)=>{ data.headpost=!!host.querySelector(".kf-hp").checked; data.window=!!host.querySelector(".kf-win").checked; }
+    read:(host,ctx,data)=>{
+      data.headpost=!!host.querySelector(".kf-hp").checked; data.window=!!host.querySelector(".kf-win").checked;
+      const a=ctx.a, ed=host._proc; if(!a||!ed) return;
+      const snap=ed.getSnapshot(), sd=a.surgeryDetail=a.surgeryDetail||{};
+      sd.injections=snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion);
+      ["winAp","winMl","winDiam"].forEach(k=>{ sd[k]=snap[k]; });
+      sd.bySurgery=true;
+      // a planned head-post or window this surgery would carry out: ticked,
+      // it was done here; left unticked, it waits for a later surgery
+      const day=String(ctx.date).slice(0,10), plan=Object.assign({},sd.planned||{});
+      const list=[...surgeryEntries(a).filter(e=>e.id!==ctx.id),{id:ctx.id,date:day}]
+        .sort((x,y)=>String(x.date).localeCompare(String(y.date)));
+      PROC_FIXTURES.forEach(k=>{ if(!(k in plan)) return;
+        const hit=firstSurgeryFrom(list,plan[k]); if(!hit||hit.id!==ctx.id) return;
+        if(data[k]) delete plan[k]; else plan[k]=addDaysISO(day,1).slice(0,10); });
+      if(Object.keys(plan).length) sd.planned=plan; else delete sd.planned;
+    }
   },
   perfusion:{
     html:({d})=>`<div class="kf-row">
@@ -13510,7 +13547,9 @@ function lastRecordData(type,a){
   return (list.pop()||{}).data||{};
 }
 const KIND_DEFAULTS={
-  surgery:()=>({operator:(DB.me&&DB.me.name)||"",postopDays:POSTOP_DAYS}),
+  // what the procedure plans is what a new surgery starts out doing
+  surgery:a=>{ const pl=((a&&a.surgeryDetail)||{}).planned||{};
+    return {operator:(DB.me&&DB.me.name)||"",postopDays:POSTOP_DAYS,headpost:"headpost" in pl,window:"window" in pl}; },
   perfusion:()=>({operator:(DB.me&&DB.me.name)||""}),
   histo:()=>({operator:(DB.me&&DB.me.name)||""}),
   histology:()=>{ const l=lastRecordData("histology");
@@ -13794,7 +13833,7 @@ function pctOfBaseline(a){
    animal back is a person's decision, made in its window. */
 function reconcileAnimal(a){
   if(!a) return false;
-  let changed=false;
+  let changed=syncProcedure(a);
   const end=entriesWithRole(a,"endOfLife").filter(entryHappened);
   if(end.length&&a.alive!==false){
     const d=String(end[0].date).slice(0,10);
@@ -14545,12 +14584,19 @@ function animalOverviewHTML(a){
   const det=a.surgeryDetail||null;
   const injs=animalInjections(a);
   const surg=surgeriesOf(a), done=surg.filter(x=>!x.planned), next=surg.find(x=>x.planned);
+  // surgery by surgery — what each one did — then what is still planned
+  const injLine=i=>`<div class="ov-inj">${esc(i.virus||"(no virus named)")}${i.siteRegion?" — "+esc(i.siteRegion):""}${
+        i.partnerRegion?" → "+esc(i.partnerRegion):""}</div>`;
+  const plan=(det&&det.planned)||{}, unplaced=injs.filter(i=>!surgeryOfInjection(a,i));
   const proc=(det||surg.length)?[
-      join(det&&det.headpost?"head-post":"", det&&det.window?"cranial window":"",
-        done.length?`🔪 ${esc(fmtDMY(done[done.length-1].date))} ${dim(F("postOp").text)}`:"",
-        next?`<span style="color:var(--amber)">surgery booked ${esc(fmtDMY(next.date))}</span>`:""),
-      ...injs.map(i=>`<div class="ov-inj">${esc(i.virus||"(no virus named)")}${i.siteRegion?" — "+esc(i.siteRegion):""}${
-        i.partnerRegion?" → "+esc(i.partnerRegion):""}${injectionDate(a,i)?" "+dim(fmtDMY(injectionDate(a,i))):""}</div>`)
+      done.length?join(dim(F("postOp").text)):"",
+      ...surg.map(x=>{ const ed=x.e&&x.e.data||{};
+        return `<div class="ov-surg">${join(`🔪 <b>${esc(fmtDMY(x.date))}</b>`,
+          x.planned?`<span style="color:var(--amber)">booked</span>`:"",
+          ed.headpost?"head-post":"", ed.window?"cranial window":"")}${
+          (x.e?injectionsOfSurgery(a,x.e):[]).map(injLine).join("")}</div>`; }),
+      (Object.keys(plan).length||unplaced.length)?`<div class="ov-surg">${join(`<span style="color:var(--amber)">planned</span>`,
+        "headpost" in plan?"head-post":"", "window" in plan?"cranial window":"")}${unplaced.map(injLine).join("")}</div>`:""
     ].filter(Boolean).join(""):"";
 
   // where it sits, and how far along each plan it is
@@ -14777,12 +14823,15 @@ function applyTemplateToGroup(ex,g){
     if(procedureMatches(a,tpl)) return;
     const sd=a.surgeryDetail=a.surgeryDetail||{injections:[]};
     sd.injections=sd.injections||[];
-    if(tpl.headpost) sd.headpost=true;
-    if(tpl.window){ sd.window=true; ["winAp","winMl","winDiam"].forEach(k=>{ if(sd[k]==null||sd[k]==="") sd[k]=tpl[k]; }); }
+    // planned from today: the next surgery carries them out, not one already done
+    const today=todayDateStr(), plan=sd.planned=Object.assign({},sd.planned||{});
+    if(tpl.headpost&&!sd.headpost) plan.headpost=today;
+    if(tpl.window&&!sd.window){ plan.window=today; ["winAp","winMl","winDiam"].forEach(k=>{ if(sd[k]==null||sd[k]==="") sd[k]=tpl[k]; }); }
     (tpl.injections||[]).forEach(t=>{
       if(!sd.injections.some(i=>(!t.virus||i.virus===t.virus)&&(!t.siteRegion||i.siteRegion===t.siteRegion)))
-        sd.injections.push(Object.assign(JSON.parse(JSON.stringify(t)),{id:uid("inj_")}));
+        sd.injections.push(Object.assign(JSON.parse(JSON.stringify(t)),{id:uid("inj_"),plannedAt:today}));
     });
+    sd.bySurgery=true; syncProcedure(a);
     if(!sd.fromTemplate) sd.fromTemplate=tpl.id;
     sd.templateAt=Object.assign({},sd.templateAt||{},{[tpl.id]:todayDateStr()});
     n++;
@@ -15137,8 +15186,8 @@ function diaryEntryDetailHTML(e,a){
     const det=a.surgeryDetail||null;
     const injs=injectionsOfSurgery(a,e);
     const bits=[];
-    if(det&&det.headpost) bits.push("head-post");
-    if(det&&det.window) bits.push("cranial window");
+    if(e.data&&e.data.headpost) bits.push("head-post");
+    if(e.data&&e.data.window) bits.push("cranial window");
     if(bits.length) rows.push(arow("Fitted", bits.join(" · ")));
     if(injs.length){
       rows.push(arowHTML("Injections",injs.map(i=>{
@@ -15802,7 +15851,9 @@ function paintDiary(container,a,opts){
     }, 15);
     bindTimeButton(host.querySelector(".dg-f-endtime"), ()=>endTimeValue, v=>{ endTimeValue=v||""; }, 15);
     // the kind's own part, made live
-    { const kf=KIND_FORMS[type]; if(kf&&kf.wire) kf.wire(host,{a,e:editing||null,d:(editing&&editing.data)||{},date:(editing&&editing.date)||selDate}); }
+    // a new record's id is fixed now, so what its form adds can name it
+    const recId=editing?editing.id:uid("d_");
+    { const kf=KIND_FORMS[type]; if(kf&&kf.wire) kf.wire(host,{a,id:recId,e:editing||null,d:(editing&&editing.data)||{},date:(editing&&editing.date)||selDate}); }
     host.querySelector(".dg-save").onclick=()=>{
       const entryDate=(dtValue||selDate).slice(0,10);
       const entryTime=hasTime(dtValue)?dtValue.slice(11,16):null;
@@ -15813,7 +15864,7 @@ function paintDiary(container,a,opts){
       const entryEndTime=(entryTime&&endTimeValue&&endTimeValue>entryTime)?endTimeValue:null;
       // the kind's plain fields, then whatever its own part holds
       let data=readTypeData(host,type,a);
-      { const kf=KIND_FORMS[type]; if(kf&&kf.read) kf.read(host,{a,e:editing||null,date:entryDate},data); }
+      { const kf=KIND_FORMS[type]; if(kf&&kf.read) kf.read(host,{a,id:recId,e:editing||null,date:entryDate},data); }
       data.note=host.querySelector(".dg-f-note").value.trim();
       const dt=host.querySelector(".dg-f-done");
       const doneVal=dt?dt.classList.contains("on"):!!(editing&&editing.done);
@@ -15835,7 +15886,7 @@ function paintDiary(container,a,opts){
         editing.data=data; editing.date=entryDate; editing.time=entryTime;
         editing.endTime=entryEndTime; editing.edited=Date.now(); editing.done=doneVal;
       } else {
-        a.diary.push({id:uid("d_"),type,date:entryDate,time:entryTime,endTime:entryEndTime,data,
+        a.diary.push({id:recId,type,date:entryDate,time:entryTime,endTime:entryEndTime,data,
           created:Date.now(),edited:null,...(doneVal?{done:true}:{})});
       }
       finishSave();
@@ -15975,7 +16026,8 @@ function paintDiary(container,a,opts){
       const entry=editingId?a.diary.find(x=>x.id===editingId):null; if(!entry)return;
       const finish=rows=>{ const ids=new Set(rows.map(x=>x.id));
         removeShared("diary",rows,a);          // shared ones leave the file too
-        a.diary=a.diary.filter(x=>!ids.has(x.id));
+        releaseSurgeries(a,rows);
+        a.diary=a.diary.filter(x=>!ids.has(x.id)); syncProcedure(a);
         formType=null; editingId=null; persist(); notifyChange(); flushSyncRender();
         toast(ids.size>1?`Deleted ${ids.size} entries`:"Entry deleted");
         // Same rule Cancel and Save already follow: opened from the Timeline to
@@ -16023,8 +16075,8 @@ function paintDiary(container,a,opts){
       const entry=a.diary.find(x=>x.id===delBtn.dataset.id); if(!entry)return;
       // the same delete the form's button performs — shared ones leave the file too
       if(!confirm("Delete this record?")) return;
-      removeShared("diary",[entry],a);
-      a.diary=a.diary.filter(x=>x.id!==entry.id);
+      removeShared("diary",[entry],a); releaseSurgeries(a,[entry]);
+      a.diary=a.diary.filter(x=>x.id!==entry.id); syncProcedure(a);
       persist(); notifyChange(); toast("Entry deleted");
       if(opts.closeOnDone){ closeModal(); return; }
       draw();
@@ -16181,16 +16233,103 @@ function animalSiteText(a){ const v=animalSites(a); return v.length?v.join(", ")
    existing animal reads correctly with nothing migrated and nothing guessed
    beyond the obvious. */
 function surgeryEntries(a){ return entriesWithRole(a,"surgery"); }
+// the surgery that did it: the one it names, or — said by nothing — the first
+// surgery on or after the day it was planned (the first surgery at all, for a
+// part that was never dated, which is every injection recorded before this)
 function surgeryOfInjection(a,inj){
   const list=surgeryEntries(a); if(!list.length) return null;
   if(inj&&inj.surgeryId){ const hit=list.find(e=>e.id===inj.surgeryId); if(hit) return hit; }
-  return list[0];
+  return firstSurgeryFrom(list,inj&&inj.plannedAt);
 }
+function firstSurgeryFrom(list,from){ return list.find(e=>String(e.date).slice(0,10)>=(from||""))||null; }
 function injectionsOfSurgery(a,e){
   if(!e) return [];
-  const list=surgeryEntries(a), isFirst=list.length&&list[0].id===e.id;
-  return animalInjections(a).filter(inj=>
-    inj.surgeryId?inj.surgeryId===e.id:isFirst);
+  return animalInjections(a).filter(inj=>{ const s=surgeryOfInjection(a,inj); return !!s&&s.id===e.id; });
+}
+/* ---- what each surgery did, and what is still to do ----
+   A head-post, a window and an injection are each done IN a surgery, and so
+   have a date. The surgery record holds its head-post and window ticks; an
+   injection names its surgery (inj.surgeryId). What no surgery has done yet is
+   the plan: sd.planned.headpost / .window (the day it was planned, "" for
+   "whenever"), and injections naming no surgery (inj.plannedAt). The first
+   surgery logged on or after that day takes the planned part over — booking
+   the surgery is what carries the plan out.
+   sd.headpost / sd.window stay the animal's one answer, done or planned,
+   because the filters, the brain view and the templates read them; they are
+   derived here and never edited on their own. Before v301 the animal said
+   "head-post: No" while its surgery record said "head-post fitted". */
+const PROC_FIXTURES=["headpost","window"];
+function syncProcedure(a){
+  const sd=a&&a.surgeryDetail; if(!sd) return false;
+  const list=surgeryEntries(a); let changed=false;
+  const plan=Object.assign({},sd.planned||{});
+  // once, for a procedure written before surgeries held it: its yes was
+  // done in the first surgery, or is still to do if there is none
+  if(!sd.bySurgery){
+    PROC_FIXTURES.forEach(k=>{ if(sd[k]&&!(k in plan)&&!list.some(e=>e.data&&e.data[k])) plan[k]=""; });
+    sd.bySurgery=true; changed=true;
+  }
+  PROC_FIXTURES.forEach(k=>{
+    if(k in plan){ const s=firstSurgeryFrom(list,plan[k]);
+      if(s){ s.data=s.data||{}; s.data[k]=true; delete plan[k]; changed=true; } }
+    const v=list.some(e=>e.data&&e.data[k])||(k in plan);
+    if(!!sd[k]!==v){ sd[k]=v; changed=true; }
+  });
+  (sd.injections||[]).forEach(inj=>{
+    if(inj.surgeryId&&list.some(e=>e.id===inj.surgeryId)) return;
+    const s=firstSurgeryFrom(list,inj.plannedAt);
+    if(s){ inj.surgeryId=s.id; delete inj.plannedAt; changed=true; }
+    else if(inj.surgeryId){ delete inj.surgeryId; changed=true; }   // its surgery is gone
+  });
+  const had=JSON.stringify(sd.planned||{}), now=JSON.stringify(plan);
+  if(had!==now){ changed=true; if(Object.keys(plan).length) sd.planned=plan; else delete sd.planned; }
+  return changed;
+}
+// a surgery taken off the record gives back what it did: its head-post,
+// window and injections are the plan again, from that surgery's day. Called
+// before the rows leave the diary, while their injections still find them.
+function releaseSurgeries(a,rows){
+  const sd=a&&a.surgeryDetail; if(!sd) return;
+  const gone=(rows||[]).filter(e=>entryHasRole(e,"surgery")); if(!gone.length) return;
+  const others=surgeryEntries(a).filter(x=>!gone.includes(x));
+  gone.forEach(e=>{
+    const day=String(e.date).slice(0,10);
+    PROC_FIXTURES.forEach(k=>{ if(e.data&&e.data[k]&&!others.some(x=>x.data&&x.data[k]))
+      sd.planned=Object.assign({},sd.planned||{},{[k]:day}); });
+    (sd.injections||[]).forEach(inj=>{ if(surgeryOfInjection(a,inj)===e){ delete inj.surgeryId; inj.plannedAt=day; } });
+  });
+}
+/* The procedure's surgeries ARE the diary's surgery records: a date moved or a
+   tick changed in Details is written to the record, and a surgery added there
+   becomes one. Only what was changed in Details is written, so a record edited
+   in the diary meanwhile keeps everything else. */
+function writeProcedureSurgeries(a,list){
+  const K=roleType("surgery"); if(!list||!K) return;
+  a.diary=a.diary||[];
+  list.forEach(x=>{
+    const e=a.diary.find(d=>d.id===x.id), o=x.o||{};
+    if(e){
+      const d=e.data=e.data||{}; let ch=false;
+      if(x.date!==o.date){ e.date=x.date; ch=true; }
+      if((x.time||"")!==(o.time||"")){ e.time=x.time||null; if(!e.time) e.endTime=null; ch=true; }
+      PROC_FIXTURES.forEach(k=>{ if(!!x[k]!==!!o[k]){ d[k]=!!x[k]; ch=true; } });
+      if(ch) e.edited=Date.now();
+    } else if(x.isNew){
+      a.diary.push({id:x.id,type:K,date:x.date,time:x.time||null,endTime:null,
+        data:Object.assign(KIND_DEFAULTS.surgery(a),{headpost:!!x.headpost,window:!!x.window}),created:Date.now(),edited:null});
+    }
+  });
+}
+// the same procedure as a plan, for an animal that has had none of it done —
+// a duplicate, which shares the procedure but not the surgeries
+function procedureAsPlan(sd){
+  if(!sd) return null;
+  const out=JSON.parse(JSON.stringify(sd)), plan={};
+  PROC_FIXTURES.forEach(k=>{ if(out[k]) plan[k]=""; });
+  (out.injections||[]).forEach(i=>{ delete i.surgeryId; delete i.plannedAt; });
+  if(Object.keys(plan).length) out.planned=plan; else delete out.planned;
+  out.bySurgery=true;
+  return out;
 }
 function injectionDate(a,inj){ const e=surgeryOfInjection(a,inj); return e?e.date:null; }
 function surgerySummary(a){
@@ -16585,10 +16724,15 @@ function mountBrainViewer(host,getSurgery,opts){
    other. `p` is an id prefix (e.g. "am", "pm") so two instances never clash
    if they ever coexist in the DOM. */
 const REGOPTS=`<option value="">— target —</option>`+REGIONS.map(r=>`<option>${r}</option>`).join("")+`<option value="__custom">custom (coords)</option>`;
-function procedureSectionHTML(p){
-  return `<div class="drow">
+/* mode: "template" — a library procedure, with no animal and no dates;
+   "animal" — an animal's whole procedure, laid out surgery by surgery, each
+   with its date, its head-post/window and its injections, then what is still
+   planned; "surgery" — one surgery's part of it, inside that surgery's record. */
+function procedureSectionHTML(p,mode){
+  mode=mode||"template";
+  return `${mode!=="template"?"":`<div class="drow">
       <div class="fld" style="flex:1"><label>Head-post</label><div class="seg" id="${p}_hp"><button data-v="1">Yes</button><button data-v="0">No</button></div></div>
-      <div class="fld" style="flex:1"><label>Cranial window</label><div class="seg" id="${p}_win"><button data-v="1">Yes</button><button data-v="0">No</button></div></div></div>
+      <div class="fld" style="flex:1"><label>Cranial window</label><div class="seg" id="${p}_win"><button data-v="1">Yes</button><button data-v="0">No</button></div></div></div>`}
     <div id="${p}_wincoord" style="display:flex;gap:6px;align-items:center;margin:-2px 0 10px">
       <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 auto">window center</span>
       <select id="${p}_winsite" style="flex:0 0 auto;max-width:160px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:12px">
@@ -16598,10 +16742,12 @@ function procedureSectionHTML(p){
       <input id="${p}_winml" placeholder="ML" style="flex:0 0 auto;width:56px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
       <input id="${p}_windiam" placeholder="⌀ mm" style="flex:0 0 auto;width:64px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px">
     </div>
-    <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:6px 0 6px">Injections</div>
+    ${mode==="animal"?`<div id="${p}_injs"></div>
+    <button class="btn ghost" id="${p}_addsurg" style="margin-top:6px;font-size:12px">＋ Add surgery</button>`
+    :`<div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin:6px 0 6px">Injections${mode==="surgery"?" in this surgery":""}</div>
     <div id="${p}_injs"></div>
-    <button class="btn ghost" id="${p}_addinj" style="margin-top:6px;font-size:12px">＋ Add injection</button>
-    <div style="margin-top:12px"><div id="${p}_brainview"></div></div>`;
+    <button class="btn ghost" id="${p}_addinj" style="margin-top:6px;font-size:12px">＋ Add injection</button>`}
+    ${mode==="surgery"?"":`<div style="margin-top:12px"><div id="${p}_brainview"></div></div>`}`;
 }
 // initial: {headpost, window, winAp, winMl, winDiam, injections}. goToLibraryFn(focus):
 // called instead of handling library navigation internally, so the caller can snapshot its
@@ -16621,9 +16767,46 @@ function winDefaultSite(){
 }
 function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   opts=opts||{};
+  const mode=opts.mode||"template", an=opts.animal||null, today=todayDateStr();
   let hp=!!initial.headpost, win=!!initial.window;
+  if(mode==="surgery"){ hp=!!opts.surgery.headpost; win=!!opts.surgery.window; }
   let winAp=initial.winAp!=null?initial.winAp:"", winMl=initial.winMl!=null?initial.winMl:"", winDiam=initial.winDiam!=null?initial.winDiam:"3";
-  const injs=(initial.injections||[]).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],depths:[],...x}));
+  // copied whole: an injection's depths and expression sites are arrays, and
+  // editing a shared one would write into the animal before Save (or after Cancel)
+  const injs=JSON.parse(JSON.stringify(initial.injections||[])).map(x=>({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],depths:[],...x}));
+  /* An animal's procedure, surgery by surgery: working copies of its surgery
+     records (date, time, head-post, window), written back on Save, and the
+     plan — what no surgery has done yet. The same rule as syncProcedure decides
+     where an undated part sits, so what is shown is what Save will store. */
+  const plan=Object.assign({},initial.planned||{});
+  const surgs=mode!=="animal"?[]:(initial.surgeries?JSON.parse(JSON.stringify(initial.surgeries))
+    :surgeryEntries(an||{}).map(e=>({id:e.id,date:String(e.date).slice(0,10),time:e.time||"",
+      headpost:!!(e.data&&e.data.headpost),window:!!(e.data&&e.data.window),done:entryHappened(e)}))
+      .map(x=>Object.assign(x,{o:{date:x.date,time:x.time,headpost:x.headpost,window:x.window}})));
+  const sortedSurgs=()=>surgs.slice().sort((x,y)=>(x.date+(x.time||"")).localeCompare(y.date+(y.time||"")));
+  // surgery mode sees the animal's other surgeries plus this one, at its date
+  const surgList=()=>mode==="animal"?sortedSurgs():mode==="surgery"
+    ?[...surgeryEntries(an||{}).filter(e=>e.id!==opts.surgery.id).map(e=>({id:e.id,date:String(e.date).slice(0,10),time:e.time||""})),
+      {id:opts.surgery.id,date:String(opts.surgery.date).slice(0,10),time:""}]
+      .sort((x,y)=>(x.date+(x.time||"")).localeCompare(y.date+(y.time||""))):[];
+  function groupOf(inj,list){
+    list=list||surgList();
+    if(inj.surgeryId&&list.some(x=>x.id===inj.surgeryId)) return inj.surgeryId;
+    const hit=list.find(x=>x.date>=(inj.plannedAt||"")); return hit?hit.id:"";
+  }
+  function seatPlan(){
+    const l=sortedSurgs();
+    PROC_FIXTURES.forEach(k=>{ if(!(k in plan))return; const hit=l.find(x=>x.date>=(plan[k]||"")); if(hit){ hit[k]=true; delete plan[k]; } });
+  }
+  if(mode==="animal"){
+    // a procedure from before surgeries held it, or a template just applied:
+    // its yes is done in the first surgery, or planned if there is none
+    if(!initial.bySurgery) PROC_FIXTURES.forEach(k=>{ if(initial[k]&&!(k in plan)&&!surgs.some(x=>x[k])) plan[k]=""; });
+    seatPlan();
+  }
+  // the animal's answer: done in a surgery, or planned; elsewhere, the switch itself
+  function fx(k){ return mode==="animal"?(surgs.some(x=>x[k])||(k in plan)):(k==="headpost"?hp:win); }
+  let dirty=false;
   const IST="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 6px;font-size:11px";
   function siteLibOpts(){ return (DB.config.siteLib||[]).map(s=>`<option value="__s:${escAttr(s.name)}">${esc(s.name)} (${s.ap>=0?"+":""}${s.ap}, ${s.ml>=0?"+":""}${s.ml}, ${s.dv})</option>`).join(""); }
   function virusLibOpts(){ return activeViruses().map(v=>`<option value="__v:${escAttr(v.name)}">${esc(v.name)}</option>`).join(""); }
@@ -16643,10 +16826,10 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
              that surgery's own diary entry rather than stored twice. A
              template being written in the library has no animal and no date,
              and says nothing instead of pretending. */""}
-        ${(()=>{ const an=opts.animal; if(!an)return "";
-          const sg=surgeryOfInjection(an,inj);
-          if(!sg) return `<span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)" title="No surgery is logged for this animal yet — log one in the diary and these injections belong to it">no surgery logged</span>`;
-          return `<span style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)" title="Done in the surgery logged on this date">🔪 ${esc(fmtDMY(sg.date))}</span>`;
+        ${(()=>{ if(mode!=="animal")return ""; const l=sortedSurgs(); if(!l.length)return "";
+          const g=groupOf(inj,l);
+          return `<select class="inj-surg" data-i="${i}" title="The surgery this injection was given in" style="${IST};flex:0 0 auto">${
+            l.map(x=>`<option value="${escAttr(x.id)}"${x.id===g?" selected":""}>🔪 ${esc(fmtDMY(x.date))}</option>`).join("")}<option value=""${g?"":" selected"}>planned</option></select>`;
         })()}
         ${colorBtnHTML(inj.color,{attrs:`data-i="${i}" data-f="color"`,fallback:INJ_COLORS[i%INJ_COLORS.length],title:"Marker colour for this injection"})}
         <select data-i="${i}" data-f="type" style="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:5px 7px;font-size:12px;flex:0 0 auto">
@@ -16725,9 +16908,47 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
       </div>
     </div>`;
   }
-  function paintInjs(){ document.getElementById(`${p}_injs`).innerHTML=injs.map((inj,i)=>injRow(inj,i)).join("")||`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">no injections — add one below</div>`; }
-  function curSurgery(){ return {headpost:hp,window:win,winAp,winMl,winDiam,injections:injs}; }
-  function updateWinCoordVisibility(){ document.getElementById(`${p}_wincoord`).style.display = win?"flex":"none"; }
+  const NONE=t=>`<div style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">${t}</div>`;
+  const ADDINJ=sid=>`<button type="button" class="btn ghost inj-add" data-sid="${escAttr(sid)}" style="margin-top:2px;font-size:11.5px">＋ Add injection</button>`;
+  const TICK=(sid,k,on)=>`<label class="kf-check surg-tick"><input type="checkbox" class="surg-fx" data-sid="${escAttr(sid)}" data-k="${k}"${on?" checked":""}> ${k==="headpost"?"head-post":"window"}</label>`;
+  function rowsOf(pred){ return injs.map((inj,i)=>pred(inj)?injRow(inj,i):"").join(""); }
+  function paintInjs(){
+    const host=document.getElementById(`${p}_injs`);
+    if(mode==="template"){ host.innerHTML=injs.map((inj,i)=>injRow(inj,i)).join("")||NONE("no injections — add one below"); return; }
+    if(mode==="surgery"){ const l=surgList(), sid=opts.surgery.id;
+      host.innerHTML=rowsOf(inj=>groupOf(inj,l)===sid)||NONE("none yet — add one below"); return; }
+    const l=sortedSurgs(), planned=injs.filter(inj=>!groupOf(inj,l));
+    const blocks=l.map(x=>{
+      const when=x.date+(x.time?"T"+x.time:"");
+      const booked=x.isNew?x.date>today:!x.done;
+      return `<div class="surg-grp" data-sid="${escAttr(x.id)}">
+        <div class="surg-head">
+          <button type="button" class="datebtn datebtn-sm surg-date" data-sid="${escAttr(x.id)}" title="The surgery's date — the same as on its record"><span style="opacity:.6;margin-right:6px">🔪</span>${esc(fmtWhenFull(when))}</button>
+          ${booked?`<span class="surg-tag">booked</span>`:""}
+          ${TICK(x.id,"headpost",x.headpost)}${TICK(x.id,"window",x.window)}
+          ${x.isNew?`<button type="button" class="ov-link surg-del" data-sid="${escAttr(x.id)}" title="Not saved yet — take it out">✕ remove</button>`
+            :(opts.openSurgery?`<button type="button" class="ov-link surg-open" data-sid="${escAttr(x.id)}" title="Operator, duration, complications, post-op days">open record ↗</button>`:"")}
+        </div>
+        ${rowsOf(inj=>groupOf(inj,l)===x.id)}
+        ${ADDINJ(x.id)}</div>`;
+    }).join("");
+    const planOn=!l.length||planned.length||Object.keys(plan).length;
+    const planBlock=!planOn?"":`<div class="surg-grp surg-plan" data-sid="">
+        <div class="surg-head"><b>Planned</b><span class="surg-note">${l.length?"not done in a surgery yet — the next surgery takes it over":"no surgery yet — the first one added takes this over"}</span>
+          ${TICK("","headpost","headpost" in plan)}${TICK("","window","window" in plan)}</div>
+        ${rowsOf(inj=>!groupOf(inj,l))}
+        ${ADDINJ("")}</div>`;
+    host.innerHTML=blocks+planBlock;
+  }
+  function curSurgery(){ return {headpost:fx("headpost"),window:fx("window"),winAp,winMl,winDiam,injections:injs}; }
+  function updateWinCoordVisibility(){ document.getElementById(`${p}_wincoord`).style.display = fx("window")?"flex":"none"; }
+  // head-post / window changed somewhere other than the template's switches
+  function fixturesChanged(k){
+    updateWinCoordVisibility();
+    if(_bv) _bv.viewState.fixtureOverride[k]=fx(k);
+    if(k==="window"&&fx("window")) applyDefaultWinSite();
+    updatePreview();
+  }
   // Head-post/window Yes-No resets the 3D fixture's display override to match
   // (No hides it, Yes shows it) — but only as a one-time trigger, not a lock:
   // the brain viewer's own "Show" dropdown can still be flipped independently
@@ -16736,10 +16957,11 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
     if(kind==="headpost")hp=val; else win=val;
     document.querySelectorAll(`#${p}_${kind==="headpost"?"hp":"win"} button`).forEach(x=>x.classList.toggle("on",(x.dataset.v==="1")===val));
     if(kind==="window")updateWinCoordVisibility();
-    _bv.viewState.fixtureOverride[kind]=val;
+    if(_bv) _bv.viewState.fixtureOverride[kind]=val;
   }
-  const _bv=mountBrainViewer(document.getElementById(`${p}_brainview`), curSurgery);
-  function updatePreview(){ _bv.refresh(); }
+  const bvHost=document.getElementById(`${p}_brainview`);
+  const _bv=bvHost?mountBrainViewer(bvHost, curSurgery):null;
+  function updatePreview(){ dirty=true; if(_bv) _bv.refresh(); }
   function readInjFields(){
     // flush every visible input/select value back into the injs array before any repaint
     document.querySelectorAll(`#${p}_injs [data-i][data-f]`).forEach(el=>{
@@ -16772,6 +16994,17 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
   });
   injsHost.addEventListener("change",e=>{
     const el=e.target;
+    if(el.classList.contains("surg-fx")){
+      const k=el.dataset.k, sid=el.dataset.sid;
+      if(!sid){ if(el.checked) plan[k]=today; else delete plan[k]; }
+      else { const x=surgs.find(y=>y.id===sid); if(x) x[k]=el.checked; }
+      fixturesChanged(k); return;
+    }
+    if(el.classList.contains("inj-surg")){
+      const inj=injs[+el.dataset.i]; if(!inj)return; readInjFields();
+      if(el.value){ inj.surgeryId=el.value; delete inj.plannedAt; } else { delete inj.surgeryId; inj.plannedAt=today; }
+      paintInjs(); updatePreview(); return;
+    }
     if(depthField(el))return;
     if(el.classList.contains("inj-es-sitepick")){
       // carries data-ei like the other expression-site sub-fields, so this has
@@ -16813,6 +17046,19 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
     const oslib=e.target.closest(".inj-open-slib"), ovlib=e.target.closest(".inj-open-vlib");
     const esAdd=e.target.closest(".inj-es-add"), esDel=e.target.closest(".inj-es-del");
     const depthAdd=e.target.closest(".inj-depth-add"), depthDel=e.target.closest(".inj-depth-del");
+    const add=e.target.closest(".inj-add"), sdate=e.target.closest(".surg-date"), sopen=e.target.closest(".surg-open"), sdel=e.target.closest(".surg-del");
+    if(add){ readInjFields(); addInjection(add.dataset.sid); return; }
+    if(sopen){ readInjFields(); opts.openSurgery(sopen.dataset.sid); return; }
+    if(sdel){ readInjFields(); const sid=sdel.dataset.sid, x=surgs.find(y=>y.id===sid); if(!x)return;
+      surgs.splice(surgs.indexOf(x),1);
+      // what it would have done goes back to the plan
+      PROC_FIXTURES.forEach(k=>{ if(x[k]&&!surgs.some(y=>y[k])) plan[k]=x.date; });
+      injs.forEach(inj=>{ if(inj.surgeryId===sid){ delete inj.surgeryId; inj.plannedAt=x.date; } });
+      seatPlan(); paintInjs(); PROC_FIXTURES.forEach(fixturesChanged); return; }
+    if(sdate){ const x=surgs.find(y=>y.id===sdate.dataset.sid); if(!x)return; readInjFields();
+      openCalendar(sdate, x.date+(x.time?"T"+x.time:""), v=>{ if(!v)return;
+        x.date=v.slice(0,10); x.time=hasTime(v)?v.slice(11,16):""; seatPlan(); paintInjs(); PROC_FIXTURES.forEach(fixturesChanged); }, 15);
+      return; }
     if(del){ readInjFields(); injs.splice(+del.dataset.i,1); paintInjs(); updatePreview(); }
     else if(up){ const i=+up.dataset.i; if(i>0){ readInjFields(); [injs[i-1],injs[i]]=[injs[i],injs[i-1]]; paintInjs(); updatePreview(); } }
     else if(dn){ const i=+dn.dataset.i; if(i<injs.length-1){ readInjFields(); [injs[i+1],injs[i]]=[injs[i],injs[i+1]]; paintInjs(); updatePreview(); } }
@@ -16823,14 +17069,27 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
     else if(depthAdd){ readInjFields(); const i=+depthAdd.dataset.i; (injs[i].depths=injs[i].depths||[]).push({dv:"",volume:""}); paintInjs(); updatePreview(); }
     else if(depthDel){ readInjFields(); const i=+depthDel.dataset.i, di=+depthDel.dataset.di; injs[i].depths.splice(di,1); paintInjs(); updatePreview(); }
   });
-  document.getElementById(`${p}_addinj`).onclick=()=>{ injs.push({virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],depths:[]}); paintInjs(); updatePreview(); };
+  // a new injection belongs where it was added: to that surgery, or to the plan
+  function addInjection(sid){
+    const inj={virus:"",type:"retro",siteRegion:"",ap:"",ml:"",dv:"",partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:"",expressionSites:[],depths:[]};
+    if(sid) inj.surgeryId=sid; else if(mode==="animal") inj.plannedAt=today;
+    injs.push(inj); paintInjs(); updatePreview();
+  }
+  const addInjBtn=document.getElementById(`${p}_addinj`);
+  if(addInjBtn) addInjBtn.onclick=()=>{ readInjFields(); addInjection(mode==="surgery"?opts.surgery.id:""); };
+  const addSurgBtn=document.getElementById(`${p}_addsurg`);
+  if(addSurgBtn) addSurgBtn.onclick=()=>{ readInjFields();
+    openCalendar(addSurgBtn, today+"T"+DEFAULT_ENTRY_TIME, v=>{ if(!v)return;
+      surgs.push({id:uid("d_"),date:v.slice(0,10),time:hasTime(v)?v.slice(11,16):"",headpost:false,window:false,isNew:true});
+      seatPlan(); paintInjs(); PROC_FIXTURES.forEach(fixturesChanged); }, 15); };
 
-  function bindSeg(fid,setter){ document.getElementById(fid).onclick=e=>{const b=e.target.closest("button");if(!b)return;
+  function bindSeg(fid,setter){ if(!document.getElementById(fid)) return; document.getElementById(fid).onclick=e=>{const b=e.target.closest("button");if(!b)return;
     setter(b.dataset.v==="1"); document.querySelectorAll(`#${fid} button`).forEach(x=>x.classList.toggle("on",x===b)); updatePreview();}; }
   bindSeg(`${p}_hp`,v=>setFixtureData("headpost",v)); bindSeg(`${p}_win`,v=>{ setFixtureData("window",v); if(v)applyDefaultWinSite(); });
   document.querySelectorAll(`#${p}_hp button`).forEach(b=>b.classList.toggle("on",(b.dataset.v==="1")===hp));
   document.querySelectorAll(`#${p}_win button`).forEach(b=>b.classList.toggle("on",(b.dataset.v==="1")===win));
   updateWinCoordVisibility();
+  if(_bv) PROC_FIXTURES.forEach(k=>{ _bv.viewState.fixtureOverride[k]=fx(k); });
 
   const winApEl=document.getElementById(`${p}_winap`), winMlEl=document.getElementById(`${p}_winml`), winDiamEl=document.getElementById(`${p}_windiam`);
   winApEl.value=winAp; winMlEl.value=winMl; winDiamEl.value=winDiam;
@@ -16859,15 +17118,32 @@ function mountProcedureEditor(p, initial, goToLibraryFn, opts){
     winApEl.value=winAp; winMlEl.value=winMl;
     if(winSiteEl) winSiteEl.value=site.value;
   }
-  if(win) applyDefaultWinSite();
+  if(fx("window")) applyDefaultWinSite();
   winApEl.addEventListener("input",()=>{winAp=winApEl.value; updatePreview();});
   winMlEl.addEventListener("input",()=>{winMl=winMlEl.value; updatePreview();});
   winDiamEl.addEventListener("input",()=>{winDiam=winDiamEl.value; updatePreview();});
 
-  paintInjs(); updatePreview();
+  paintInjs(); if(_bv) _bv.refresh();
 
   return {
-    getSnapshot(){ readInjFields(); return {headpost:hp, window:win, winAp, winMl, winDiam, injections:injs.map(x=>({...x}))}; },
+    getSnapshot(){
+      readInjFields();
+      const out={headpost:fx("headpost"), window:fx("window"), winAp, winMl, winDiam, injections:JSON.parse(JSON.stringify(injs))};
+      ["fromTemplate","templateAt"].forEach(k=>{ if(initial[k]!=null) out[k]=JSON.parse(JSON.stringify(initial[k])); });
+      // every injection says where it sits, so a surgery added earlier later
+      // cannot quietly take over parts that were already done
+      const l=surgList();
+      if(mode==="animal"){
+        out.injections.forEach(inj=>{ const g=groupOf(inj,l); if(g){ inj.surgeryId=g; delete inj.plannedAt; } else delete inj.surgeryId; });
+        out.planned=JSON.parse(JSON.stringify(plan)); out.bySurgery=true;
+        out.surgeries=JSON.parse(JSON.stringify(surgs));
+      }
+      if(mode==="surgery") out.injections.forEach(inj=>{ if(groupOf(inj,l)===opts.surgery.id){ inj.surgeryId=opts.surgery.id; delete inj.plannedAt; } });
+      return out;
+    },
+    // the surgery record's own ticks drive this one's window centre
+    setFixture(k,v){ if(k==="headpost") hp=!!v; else win=!!v; fixturesChanged(k); },
+    isDirty:()=>dirty,
     refresh: updatePreview
   };
 }
@@ -16943,7 +17219,7 @@ function animalModal(id,draft,opts){
         </select>
         <button type="button" id="am_procsave" style="border:1px solid var(--line2);background:var(--panel2);color:var(--ink-dim);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer">💾 Save as template</button>
       </div>
-      ${procedureSectionHTML("am")}
+      <div id="am_procbody">${procedureSectionHTML("am","animal")}</div>
     </div></div>
     ${renderAnimalSections(a)}
     <div id="am_sec_add" class="am-sec-add"></div>
@@ -16955,6 +17231,7 @@ function animalModal(id,draft,opts){
      Overview and Diary write as they go, like the diary always did; Details is
      the form, kept by Save. The form stays in the page while the other tabs
      are shown, so switching away and back loses nothing typed into it. */
+  let hubShowTab=null;   // set below for an existing animal: the procedure opens a surgery's record with it
   if(hub){
     const root=document.getElementById("modal");
     let diaryPainted=false;
@@ -16971,9 +17248,13 @@ function animalModal(id,draft,opts){
       // asked to open on a particular day
       if(name==="diary"&&(!diaryPainted||diaryOpts)){
         diaryPainted=true;
-        paintDiary(document.getElementById("am_diaryhost"),a,Object.assign({onChange:()=>{}},diaryOpts||{}));
+        // a surgery saved in the diary is the procedure's too: show it in
+        // Details at once, unless something there is being edited unsaved
+        paintDiary(document.getElementById("am_diaryhost"),a,Object.assign({onChange:()=>{
+          if(procEditor&&!procEditor.isDirty()) remountProcedure(); }},diaryOpts||{}));
       }
     };
+    hubShowTab=showTab;
     const paintOverview=()=>{
       const host=document.getElementById("am_overview"); if(!host)return;
       host.innerHTML=animalOverviewHTML(a);
@@ -17123,7 +17404,15 @@ function animalModal(id,draft,opts){
   /* Mounted whether or not the section is on screen, so turning it back on is
      instant and nothing has to be rebuilt mid-edit. What it reads is only
      written back when the section is actually shown — see formRecord. */
-  const procEditor=mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary, {offerTubeUse:true,animal:a});
+  const procOpts={mode:"animal",offerTubeUse:true,animal:a,
+    openSurgery:sid=>{ if(hubShowTab) hubShowTab("diary",{editId:sid}); }};
+  let procEditor=mountProcedureEditor("am", view.surgeryDetail||{}, goToLibrary, procOpts);
+  function remountProcedure(){
+    const host=document.getElementById("am_procbody"); if(!host) return;
+    teardown3D(host);
+    host.innerHTML=procedureSectionHTML("am","animal");
+    procEditor=mountProcedureEditor("am", a.surgeryDetail||{}, goToLibrary, procOpts);
+  }
 
   // these live inside the Procedure section, so they are simply not there
   // when it has been put away
@@ -17144,8 +17433,10 @@ function animalModal(id,draft,opts){
       excluded:exCb.checked, excludedReason:document.getElementById("am_exreason").value.trim(),
       // remembered so the template can say which animals were built from it;
       // animals set up before this carry no mark and simply don't appear
+      // the surgeries stay as they are on screen; the template's parts go to
+      // the first of them, or are planned if there is none
       surgeryDetail:{headpost:tpl.headpost,window:tpl.window,winAp:tpl.winAp,winMl:tpl.winMl,winDiam:tpl.winDiam,
-        injections:tpl.injections.map(x=>({...x})),fromTemplate:tpl.id},
+        injections:tpl.injections.map(x=>({...x})),fromTemplate:tpl.id,surgeries:procEditor.getSnapshot().surgeries},
       comments:comBody.innerHTML, commentsRich:true
     };
     closeModal();
@@ -17171,7 +17462,9 @@ function animalModal(id,draft,opts){
     const snap=procOn?procEditor.getSnapshot():null;
     const cleanInjs=snap?snap.injections.filter(x=>x.virus||x.siteRegion||x.ap!==""||x.partnerRegion):[];
     const surgery=!procOn?(a?a.surgeryDetail||null:null)
-      :(snap.headpost||snap.window||cleanInjs.length)?{headpost:snap.headpost,window:snap.window,winAp:snap.winAp,winMl:snap.winMl,winDiam:snap.winDiam,injections:cleanInjs}:null;
+      :(snap.headpost||snap.window||cleanInjs.length||Object.keys(snap.planned||{}).length)
+        ?Object.assign({},snap,{injections:cleanInjs,surgeries:undefined}):null;
+    if(surgery) delete surgery.surgeries;
     return {name:document.getElementById("am_name").value.trim(),
       cage:document.getElementById("am_cage").value.trim(),
       sex:document.getElementById("am_sex").value.trim(),strain:document.getElementById("am_strain").value.trim(),
@@ -17185,11 +17478,15 @@ function animalModal(id,draft,opts){
   }
   document.getElementById("am_save").onclick=()=>{
     const rec=formRecord(); if(!rec.name){toast("Name needed");return;}
+    const surgs=shown(PROC_SEC)?procEditor.getSnapshot().surgeries:null;
     if(id){
       Object.assign(a,rec);
+      writeProcedureSurgeries(a,surgs); syncProcedure(a);
     } else {
       const newId=uid("a_");
-      DB.animals.push({id:newId,created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],...rec});
+      const fresh={id:newId,created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],...rec};
+      DB.animals.push(fresh);
+      writeProcedureSurgeries(fresh,surgs); syncProcedure(fresh);
       applyPendingExperiments(newId,pendingExp);
     }
     persist(); closeModal(); render(); toast(id?"Animal updated":"Animal added");
@@ -17208,7 +17505,8 @@ function animalModal(id,draft,opts){
     DB.animals.push({id:newId,created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],tasks:[],
       ...rec, name:(rec.name||"(unnamed)")+" (copy)",
       sacrificed:"", alive:true, deathKind:null, excluded:false, excludedReason:"",
-      surgeryDetail:rec.surgeryDetail?JSON.parse(JSON.stringify(rec.surgeryDetail)):null});
+      // the copy shares the procedure but none of the surgeries: all of it is planned
+      surgeryDetail:procedureAsPlan(rec.surgeryDetail)});
     [...DB.experiments,...DB.projects].forEach(st=>{
       if((st.links||[]).some(l=>l.kind==="animal"&&l.id===id)) st.links.push({kind:"animal",id:newId});
       const gid=(st.groups||{})[id]; if(gid) st.groups[newId]=gid;
