@@ -4254,6 +4254,18 @@ function deadIn(stamps){
 }
 function isDeletedHere(c,id){ return deadIn(DB)(c,id); }
 function resetRecordBaseline(){ recordBaseline=idsOf(DB); }
+/* What the app itself removes on purpose — a retired tag list, the empty rows
+   and converted comments the 2.0 migration takes out — is marked deleted then
+   and there, the same as a deletion someone makes. Left unmarked, the next sync
+   filled them back in from the Gist (absence is never a deletion), the next
+   load took them out again, and the guard below saw "5 tags disappeared" every
+   time. Marking once is idempotent: an id already dead is left as it is. */
+function markRetired(coll,id){
+  if(!id||isDeletedHere(coll,id)) return;
+  const dels=DB.deletions=(DB.deletions&&typeof DB.deletions==="object")?DB.deletions:{};
+  const r=stampAt(((DB.revivals||{})[coll]||{})[id]);
+  (dels[coll]=dels[coll]||{})[id]=Math.max(Date.now(),r+1);
+}
 /* Called from persist(), once per change somebody made. Whatever left the
    workspace since the last save left it because of that change, and is marked;
    whatever came back is marked revived. A stamp always outranks the one it
@@ -4269,7 +4281,9 @@ function recordDeletions(){
   let refused=null;
   Object.keys(now).forEach(c=>{
     const before=recordBaseline[c]||new Set(), after=now[c];
-    const gone=[]; before.forEach(id=>{ if(!after.has(id)) gone.push(id); });
+    // an id already marked deleted left on purpose (markRetired, or a deletion
+    // that arrived by sync) — it is neither a new deletion nor a mass removal
+    const gone=[]; before.forEach(id=>{ if(!after.has(id)&&!isDeletedHere(c,id)) gone.push(id); });
     const min=c==="diary"?MASS_MIN_DIARY:MASS_MIN;
     if(gone.length&&!allowMassRemoval&&gone.length>=min&&gone.length>=before.size*MASS_FRACTION){
       refused={key:c,gone:gone.length,had:before.size};
@@ -4840,7 +4854,7 @@ function migrate(){                       // backfill fields added in later vers
     DB._cohortsRenamedToTags=true;
   }
   // the tag library itself, once every animal's label has been folded away
-  if(DB.tags) delete DB.tags;
+  if(DB.tags){ (Array.isArray(DB.tags)?DB.tags:[]).forEach(t=>t&&markRetired("tags",t.id)); delete DB.tags; }
   // Sharing, phase 0. Identity first: every id minted below carries it.
   ensureIdentity();
   rememberIdentityChange();
@@ -5151,7 +5165,8 @@ function migrateV2(){
         drop.push(e); return;
       }
     });
-    if(drop.length){ removeShared("diary",drop,a); a.diary=a.diary.filter(e=>!drop.includes(e)); changed=true; }
+    if(drop.length){ removeShared("diary",drop,a); drop.forEach(e=>markRetired("diary",e.id));
+      a.diary=a.diary.filter(e=>!drop.includes(e)); changed=true; }
     // the "Two Photon → FOVs" table becomes the animal's fields of view
     animalSections().forEach(sec=>(sec.fields||[]).forEach(f=>{
       if(!isRetiredFovTable(f)) return;
@@ -5205,9 +5220,10 @@ function migrateV2(){
     const running=tasks.some(t=>t.repeat&&(!t.repeat.until||String(t.repeat.until).slice(0,10)>=today));
     const recent=last>=weekAgo;
     const lastUntil=tasks.map(t=>t.repeat&&t.repeat.until?String(t.repeat.until).slice(0,10):null).filter(Boolean).sort().pop();
-    const ended=a.alive===false?(a.sacrificed||last):(running||recent)?null:(lastUntil&&lastUntil<today?lastUntil:last);
+    // the end is the first day off: the day after the last feeding
+    const ended=a.alive===false?(a.sacrificed||last):(running||recent)?null:addDaysISO(lastUntil&&lastUntil<today?lastUntil:last,1).slice(0,10);
     const baseW=w.filter(e=>String(e.date)<=start).pop()||w[0];
-    a.restrictions=animalRestrictions(a).filter(x=>!(x.start<=start&&(!x.end||x.end>=start))).concat([{
+    a.restrictions=animalRestrictions(a).filter(x=>!(x.start<=start&&(!x.end||x.end>start))).concat([{
       id:rid,start,target:RESTRICTION_TARGET,end:ended,endReason:ended?"from the 1.0 feeding tasks":"",ration:null,at:0,by:a.by||meId()}]);
     if(baseW&&!animalBaselines(a).length) setAnimalBaseline(a,baseW.date,+baseW.data.grams,"restriction start (from 1.0)");
     v2Report("rs:"+a.id,`${a.name}: restriction from ${fmtDMY(start)}${ended?" to "+fmtDMY(ended):" — ongoing"}, baseline ${baseW?baseW.data.grams+" g ("+fmtDMY(baseW.date)+")":"not found — set it in the animal's window"}, made from ${tasks.length} feeding task${tasks.length===1?"":"s"} (${[...new Set(tasks.map(t=>bidiIso(t.title)))].join(", ")}).`);
@@ -5226,7 +5242,7 @@ function migrateV2(){
     v2Report("round:"+t.id,`"${bidiIso(t.title||"task")}" no longer makes a record per animal — what was filled in stays on each animal.`);
   });
   if(coverTasks.length){
-    coverTasks.forEach(t=>deleteTask(t.id));
+    coverTasks.forEach(t=>{ markRetired("schedule",t.id); deleteTask(t.id); });
     v2Report("rounds",`${coverTasks.length} feeding task${coverTasks.length===1?"":"s"} (${bidiIso("האכלות")}) retired — the daily feeding now comes from the restrictions themselves.`);
     changed=true;
   }
@@ -13726,7 +13742,9 @@ function animalRestrictions(a){
 // The restriction in force on a day, if any.
 function restrictionAt(a,date){
   const d=String(date||todayDateStr()).slice(0,10);
-  const live=animalRestrictions(a).filter(r=>r.start<=d&&(!r.end||r.end>=d));
+  // the end is the first day off restriction: ending one today takes the
+  // animal off today's feeding at once, rather than tomorrow
+  const live=animalRestrictions(a).filter(r=>r.start<=d&&(!r.end||r.end>d));
   return live.length?live[live.length-1]:null;
 }
 /* Starting one sets the animal's baseline from the start weighing, so "% of
@@ -14143,7 +14161,7 @@ function restrictionBoardEl(list){
   const today=todayDateStr(), monthAgo=addDaysISO(today,-30).slice(0,10);
   const on=list.map(a=>({a,st:restrictionStatus(a,today)})).filter(x=>x.st)
     .sort((x,y)=>(y.st.belowFloor-x.st.belowFloor)||String(x.a.name).localeCompare(String(y.a.name),undefined,{numeric:true}));
-  const ended=list.flatMap(a=>animalRestrictions(a).filter(r=>r.end&&r.end<today&&r.end>=monthAgo).map(r=>({a,r})))
+  const ended=list.flatMap(a=>animalRestrictions(a).filter(r=>r.end&&r.end<=today&&r.end>=monthAgo).map(r=>({a,r})))
     .sort((x,y)=>y.r.end.localeCompare(x.r.end));
   const el=document.createElement("div"); el.className="rb";
   const fed=on.filter(x=>x.st.todayDone).length, low=on.filter(x=>x.st.belowFloor).length;
@@ -14476,7 +14494,7 @@ function animalOverviewHTML(a){
 function restrictionSectionHTML(a){
   const dim=t=>`<span class="ov-dim">${t}</span>`;
   const st=restrictionStatus(a,todayDateStr());
-  const past=animalRestrictions(a).filter(r=>r.end&&r.end<todayDateStr());
+  const past=animalRestrictions(a).filter(r=>r.end&&r.end<=todayDateStr());
   const pastHTML=past.length?`<div class="ov-sub">Earlier</div>`+past.map(r=>
     `<div>${esc(fmtDMY(r.start))} – ${esc(fmtDMY(r.end))}${r.endReason?" "+dim(esc(r.endReason)):""}</div>`).join(""):"";
   if(!st){

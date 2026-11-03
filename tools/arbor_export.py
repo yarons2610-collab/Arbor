@@ -349,7 +349,7 @@ class Workspace:
     def restriction_at(a, date):
         d = str(date)[:10]
         live = [r for r in Workspace.restrictions(a)
-                if str(r["start"])[:10] <= d and (not r.get("end") or str(r["end"])[:10] >= d)]
+                if str(r["start"])[:10] <= d and (not r.get("end") or str(r["end"])[:10] > d)]  # end = first day off
         return live[-1] if live else None
 
     @staticmethod
