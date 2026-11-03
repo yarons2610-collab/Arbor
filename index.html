@@ -13167,8 +13167,8 @@ function animalQuestions(){ return animalQuestionsCache||(animalQuestionsCache=(
     {id:"rs_unfed", group:"Food restriction", label:"not fed today",   test:a=>{ const st=rs(a); return !!st&&!st.todayDone; }},
     {id:"pr_had",   group:"Procedure", label:"had surgery",    test:a=>surgeriesOf(a).some(x=>!x.planned)},
     {id:"pr_booked",group:"Procedure", label:"surgery booked", test:a=>surgeriesOf(a).some(x=>x.planned&&x.date>=today())},
-    {id:"pr_postop",group:"Procedure", label:`in post-op (first ${POSTOP_DAYS} days)`,
-      test:a=>surgeriesOf(a).some(x=>{ if(x.planned) return false; const n=calDayDelta(x.date,today()); return n>=0&&n<=POSTOP_DAYS; })},
+    {id:"pr_postop",group:"Procedure", label:"in post-op",
+      test:a=>surgeriesOf(a).some(x=>{ if(x.planned) return false; const n=calDayDelta(x.date,today()); return n>=0&&n<postopDaysOf(x); })},
     {id:"pr_virus", group:"Procedure", label:"virus is", pick:()=>all(animalViruses), test:(a,v)=>animalViruses(a).includes(v)},
     {id:"pr_site",  group:"Procedure", label:"site is",  pick:()=>all(animalSites),   test:(a,v)=>animalSites(a).includes(v)},
     {id:"bh_task",  group:"Behaviour", label:"task is",  pick:()=>behaviourTaskNames(), test:(a,v)=>sessions(a).some(e=>e.data&&e.data.task===v)},
@@ -13292,7 +13292,8 @@ const RECORD_KINDS=[
     fields:[{key:"grams",label:"Weight (g)",type:"number"},{key:"ration",label:"Ration (g)",type:"number"}]},
   {key:"surgery", label:"Surgery", icon:"🔪", color:"#f2b756", timeline:true, core:true, defaultDuration:120,
     fields:[{key:"duration",label:"Duration (min)",type:"number"},{key:"operator",label:"Operator",type:"text"},
-            {key:"complications",label:"Complications",type:"text"}]},
+            {key:"complications",label:"Complications",type:"text"},
+            {key:"postopDays",label:"Post-op days (incl. surgery day)",type:"number"}]},
   {key:"postop", label:"Post-op check", icon:"🩹", color:"#ff5f6d", timeline:false, core:true,
     fields:[{key:"given",label:"Post-op given",type:"yesno"},
             {key:"condition",label:"Condition",type:"select",options:["good","watch","poor"]}]},
@@ -13509,7 +13510,7 @@ function lastRecordData(type,a){
   return (list.pop()||{}).data||{};
 }
 const KIND_DEFAULTS={
-  surgery:()=>({operator:(DB.me&&DB.me.name)||""}),
+  surgery:()=>({operator:(DB.me&&DB.me.name)||"",postopDays:POSTOP_DAYS}),
   perfusion:()=>({operator:(DB.me&&DB.me.name)||""}),
   histo:()=>({operator:(DB.me&&DB.me.name)||""}),
   histology:()=>{ const l=lastRecordData("histology");
@@ -13912,8 +13913,12 @@ function restrictionStatus(a,date){
    two days later, then ready to slice). The timeline, the warnings and the
    bell all read this one list. */
 const POSTOP_TIME="10:00", BRAIN_TIME="10:00", POSTOP_DAYS=3, PBS_AFTER=2;
+/* Post-op is given on the surgery day and the days after it: three days in
+   all unless the surgery says otherwise. Day 0 is the surgery day. */
+function postopDaysOf(s){ const e=s&&(s.e||s), v=e&&e.data&&+e.data.postopDays; return v>0?Math.round(v):POSTOP_DAYS; }
+function postopDayLabel(n){ return n===0?"surgery day":`day ${n}`; }
 
-/* ---- post-op: three daily checks after every surgery that happened ---- */
+/* ---- post-op: given on the surgery day and the days after (postopDaysOf) ---- */
 function postopId(a,s,n){ return "d_po_"+String(s.id).replace(/^d_/,"")+"_"+n; }
 /* A surgery's check on day n: the one 2.0 made for it, else any post-op
    record on that day — a check written in 1.0 has an id of its own, and was
@@ -13932,7 +13937,7 @@ function postopDueOn(date){
     if(a.alive===false&&a.sacrificed&&a.sacrificed<=d) return;
     entriesWithRole(a,"surgery").filter(entryHappened).forEach(s=>{
       const n=calDayDelta(String(s.date).slice(0,10),d);
-      if(n>=1&&n<=POSTOP_DAYS) out.push({a,s,n,rec:postopRecord(a,s,n)});
+      if(n>=0&&n<postopDaysOf(s)) out.push({a,s,n,rec:postopRecord(a,s,n)});
     });
   });
   return out.sort((x,y)=>String(x.a.name||"").localeCompare(String(y.a.name||""),undefined,{numeric:true}));
@@ -14016,16 +14021,16 @@ function animalWarnings(a,date){
     if(!st.todayDone&&d===todayDateStr()) out.push({level:"amber",text:"not weighed and fed today",fix:"feeding",date:d});
     if(st.phase==="maintaining"&&st.readyDate===d) out.push({level:"ok",text:"reached target today — ready for behaviour"});
   }
-  postopDueOn(d).filter(x=>x.a===a&&!postopDone(x.rec)).forEach(x=>out.push({level:"amber",text:`post-op check day ${x.n} due`,fix:"postop",date:d}));
+  postopDueOn(d).filter(x=>x.a===a&&!postopDone(x.rec)).forEach(x=>out.push({level:"amber",text:`post-op due (${postopDayLabel(x.n)})`,fix:"postop",date:d}));
   // a missed check stays a red mark until it is done
   entriesWithRole(a,"surgery").filter(entryHappened).forEach(s=>{
-    for(let n=1;n<=POSTOP_DAYS;n++){
+    for(let n=0;n<postopDaysOf(s);n++){
       const due=addDaysISO(String(s.date).slice(0,10),n).slice(0,10);
       if(due>=V2_START&&due<d&&calDayDelta(due,d)<=WARN_WINDOW_DAYS&&!postopDone(postopRecord(a,s,n)))
-        out.push({level:"red",text:`post-op check day ${n} (${fmtDMY(due).slice(0,5)}) missed`,fix:"postop",date:due});
+        out.push({level:"red",text:`post-op ${postopDayLabel(n)} (${fmtDMY(due).slice(0,5)}) missed`,fix:"postop",date:due});
     }
     // what the last check saw, while it is recent: "watch" asks for attention, "poor" is a red flag
-    const last=[...Array(POSTOP_DAYS)].map((_,i)=>postopRecord(a,s,POSTOP_DAYS-i)).find(r=>r&&r.data&&r.data.condition);
+    const last=[...Array(postopDaysOf(s))].map((_,i)=>postopRecord(a,s,postopDaysOf(s)-1-i)).find(r=>r&&r.data&&r.data.condition);
     if(last&&calDayDelta(String(last.date).slice(0,10),d)<=WARN_WINDOW_DAYS){
       const c=last.data.condition;
       if(c==="poor") out.push({level:"red",text:`post-op condition poor (${fmtDMY(last.date).slice(0,5)})`});
@@ -14119,12 +14124,12 @@ function brainSectionHTML(a){
 function postopSectionHTML(a){
   const due=[];
   entriesWithRole(a,"surgery").filter(entryHappened).forEach(s=>{
-    for(let n=1;n<=POSTOP_DAYS;n++){
+    for(let n=0;n<postopDaysOf(s);n++){
       const dd=addDaysISO(String(s.date).slice(0,10),n).slice(0,10);
-      if(calDayDelta(dd,todayDateStr())<=7&&dd<=addDaysISO(todayDateStr(),POSTOP_DAYS).slice(0,10)) due.push({n,dd,done:postopDone(postopRecord(a,s,n))});
+      if(calDayDelta(dd,todayDateStr())<=7&&dd<=addDaysISO(todayDateStr(),postopDaysOf(s)).slice(0,10)) due.push({n,dd,done:postopDone(postopRecord(a,s,n))});
     }
   });
-  return due.length?`<div class="ov-dim">post-op: ${due.map(x=>`day ${x.n} ${x.done?"✓":x.dd<V2_START?"—":x.dd<todayDateStr()?"<b style='color:var(--overdue)'>missed</b>":x.dd===todayDateStr()?"today":fmtDMY(x.dd).slice(0,5)}`).join(" · ")}</div>`:"";
+  return due.length?`<div class="ov-dim">post-op: ${due.map(x=>`${postopDayLabel(x.n)} ${x.done?"✓":x.dd<V2_START?"—":x.dd<todayDateStr()?"<b style='color:var(--overdue)'>missed</b>":x.dd===todayDateStr()?"today":fmtDMY(x.dd).slice(0,5)}`).join(" · ")}</div>`:"";
 }
 function animalNotesHTML(a){
   const notes=(DB.notes||[]).filter(n=>(n.links||[]).some(l=>l.kind==="animal"&&l.id===a.id))
@@ -14138,12 +14143,12 @@ function openPostopModal(date){
   const rows=postopDueOn(date);
   if(!rows.length){ toast("No post-op checks that day"); return; }
   modal(`<h3>🩹 Post-op checks — ${esc(fmtDMY(date))}</h3>
-    <div class="ov-dim" style="font-size:12px;margin:-4px 0 10px">The ${POSTOP_DAYS} days after each surgery. Tick when post-op was given; the condition is optional.</div>
+    <div class="ov-dim" style="font-size:12px;margin:-4px 0 10px">Post-op is given on the surgery day and the days after it (set per surgery). Tick when it was given; the condition is optional.</div>
     <div class="pg-wrap"><table class="pg-tbl fd-tbl"><thead><tr><th>Animal</th><th>Day</th><th>Given</th><th>Condition</th><th>Note</th></tr></thead><tbody>
     ${rows.map(({a,s,n,rec})=>{ const d=(rec&&rec.data)||{};
       return `<tr class="po-row" data-a="${escAttr(a.id)}" data-s="${escAttr(s.id)}" data-n="${n}">
         <td><button type="button" class="ov-link fd-open" data-a="${escAttr(a.id)}">${esc(a.name)}</button></td>
-        <td class="fd-num">${n}/${POSTOP_DAYS}</td>
+        <td class="fd-num">${postopDayLabel(n)} <span class="ov-dim">of ${postopDaysOf(s)}</span></td>
         <td><input type="checkbox" class="po-given" style="width:auto" ${d.given?"checked":""}></td>
         <td><select class="po-cond">${["","good","watch","poor"].map(v=>`<option value="${v}" ${d.condition===v?"selected":""}>${v||"—"}</option>`).join("")}</select></td>
         <td><input class="po-note" value="${escAttr(d.note||"")}" style="width:160px"></td></tr>`; }).join("")}
