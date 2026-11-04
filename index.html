@@ -7767,9 +7767,11 @@ function uploadTitles(u){
   const what=u.what||"upload", topic=u.topic?`נושא ${u.topic}`:"";
   return {prep:["Prepare",topic,what].filter(Boolean).join(" · "),due:["Upload",topic,what].filter(Boolean).join(" · ")};
 }
-// lectures: the repeating items linked to a course, and the ones missed
-function courseLectures(ws){ return (ws.lectures||[]).map(taskOf).filter(Boolean); }
-function courseOfLecture(t){ return workstreamList().find(w=>w.wsKind==="course"&&(w.lectures||[]).includes(t.id))||null; }
+// lectures: a course's own repeating tasks — what its "Part of" says, one home.
+// Events are private and never part of a course (Yaron, 04/11/2026); a course
+// event is turned into a task when it is linked.
+function courseLectures(ws){ return taskList().filter(t=>t.experimentId===ws.id&&t.repeat&&t.repeat.every); }
+function courseOfLecture(t){ const c=t&&t.experimentId?expById(t.experimentId):null; return c&&c.wsKind==="course"?c:null; }
 function lectureKey(t,when){ return t.id+"|"+when; }
 function lectureState(ws,t,when){ return ((ws&&ws.missed)||{})[lectureKey(t,when)]||""; }
 function toCatchUp(ws){
@@ -7846,6 +7848,10 @@ function migrateAreas(){
   });
   if((DB.projects||[]).some(isArea)) DB.projects=DB.projects.filter(x=>!isArea(x));
   taskList().forEach(t=>{ if(t.routine) delete t.routine; });
+  // v307 linked lectures by id; their "Part of" is now what says so
+  workstreamList().filter(w=>Array.isArray(w.lectures)).forEach(w=>{
+    w.lectures.forEach(id=>{ const t=taskOf(id); if(t&&!t.projectId&&!t.experimentId){ t.isEvent=false; t.experimentId=w.id; } });
+    delete w.lectures; });
 }
 
 /* ── CHECKLIST — one for a project, an experiment and a workstream ──
@@ -8888,16 +8894,24 @@ function workstreamModal(ws,after){
   /* ---- a course you take ---- */
   function drawLectures(){
     const host=$("ws_lectures"); if(!host) return;
-    ws.lectures=(ws.lectures||[]).filter(id=>taskOf(id));
-    const reps=taskList().filter(t=>t.repeat&&t.repeat.every&&!ws.lectures.includes(t.id))
-      .sort((a,b)=>String(a.title||"").localeCompare(String(b.title||"")));
+    const reps=taskList().filter(t=>t.repeat&&t.repeat.every&&t.experimentId!==ws.id&&!t.projectId&&!(t.experimentId&&expById(t.experimentId)))
+      .sort((a,b)=>(!!a.isEvent-!!b.isEvent)||String(a.title||"").localeCompare(String(b.title||"")));
     const label=t=>`${t.title||"(untitled)"} · ${repeatLabel(t.repeat,t.when)}${t.when&&hasTime(t.when)?" "+t.when.slice(11,16):""}`;
     host.innerHTML=`${courseLectures(ws).map(t=>`<div class="pin-row" data-t="${escAttr(t.id)}"><span class="pin-icon">🗓</span>
-        <span dir="auto">${esc(label(t))}</span><button type="button" class="ov-link lc-del" style="margin-left:auto" title="Unlink — the Timeline item stays">✕</button></div>`).join("")
-        ||`<span class="pc-empty">none linked yet</span>`}
-      <select id="ws_addlec" style="${IN};margin-top:5px;width:100%"><option value="">＋ link a weekly item from the Timeline…</option>${reps.map(t=>`<option value="${escAttr(t.id)}">${esc(label(t))}</option>`).join("")}</select>`;
-    host.querySelector("#ws_addlec").addEventListener("change",e=>{ if(!e.target.value) return; ws.lectures.push(e.target.value); persist(); drawLectures(); drawCatchup(); });
-    host.querySelectorAll(".lc-del").forEach(b=>b.onclick=()=>{ const id=b.closest(".pin-row").dataset.t; ws.lectures=ws.lectures.filter(x=>x!==id); persist(); drawLectures(); drawCatchup(); });
+        <button type="button" class="ov-link lc-open" dir="auto">${esc(label(t))}</button>
+        <button type="button" class="ov-link lc-del" style="margin-left:auto" title="Not a lecture of this course — the Timeline item stays">✕</button></div>`).join("")
+        ||`<span class="pc-empty">none yet — a weekly task whose "Part of" is this course is one of its lectures</span>`}
+      <div style="display:flex;gap:6px;margin-top:5px;flex-wrap:wrap">
+        <select id="ws_addlec" style="${IN};flex:1;min-width:200px"><option value="">＋ make a weekly Timeline item one of its lectures…</option>${
+          reps.map(t=>`<option value="${escAttr(t.id)}">${esc(label(t))}${t.isEvent?" — event, becomes a task":""}</option>`).join("")}</select>
+        <button type="button" class="btn ghost" id="ws_newlec" style="font-size:12px">＋ New lecture</button></div>`;
+    host.querySelector("#ws_addlec").addEventListener("change",e=>{ const t=taskOf(e.target.value); if(!t) return;
+      if(t.isEvent&&!confirm(`"${t.title}" is an event. Events are private, so it becomes a task of ${ws.title||"this course"}. Go ahead?`)){ e.target.value=""; return; }
+      t.isEvent=false; t.eventTypeId=null; t.experimentId=ws.id; t.projectId=null; persist(); drawLectures(); drawCatchup(); });
+    host.querySelectorAll(".lc-open").forEach(b=>b.onclick=()=>{ const t=taskOf(b.closest(".pin-row").dataset.t); if(t){ save(); closeModal(); taskEditor(t,()=>workstreamModal(ws,after)); } });
+    host.querySelectorAll(".lc-del").forEach(b=>b.onclick=()=>{ const t=taskOf(b.closest(".pin-row").dataset.t); if(!t) return; t.experimentId=null; persist(); drawLectures(); drawCatchup(); });
+    host.querySelector("#ws_newlec").onclick=()=>{ save(); closeModal();
+      const t=addTask({title:ws.title||"",experimentId:ws.id,when:todayDateStr()+"T"+DEFAULT_ENTRY_TIME,repeat:{every:"week",until:null}}); taskEditor(t,()=>workstreamModal(ws,after)); };
   }
   // the last three weeks' lectures, each markable as missed; a missed one stays
   // here, however old, until it is caught up
@@ -9002,7 +9016,7 @@ function workstreamModal(ws,after){
   // its other scheduled work; what a row above owns is shown with that row
   function drawTasks(){
     const host=$("ws_tasks"); if(!host) return;
-    const own=ownedTaskIds(), list=tasksFor(ws.id).filter(t=>!own.has(t.id)&&!(parts.has("weekly")&&t.repeat&&t.repeat.every));
+    const own=ownedTaskIds(), list=tasksFor(ws.id).filter(t=>!own.has(t.id)&&!((parts.has("weekly")||parts.has("lectures"))&&t.repeat&&t.repeat.every));
     host.innerHTML=`${list.length?`<div class="step-list" style="border-top:none;padding-top:0">${sortAndGroupItems(list).map(stepRowHTML).join("")}</div>`:`<span class="pc-empty">none</span>`}
       <button type="button" class="btn ghost" id="ws_addtask" style="margin-top:4px;font-size:12px">＋ Task</button>`;
     host.querySelectorAll(".step-line").forEach(el=>{ const t=taskOf(el.dataset.id); if(!t) return;
@@ -9814,13 +9828,14 @@ function partOfOptionsHTML({valueOf,selected,exclude,noWork}){
       const head=skip(pr.id)?"":`<option value="${pv}"${mark(pv)}>${esc(pr.name||"(unnamed project)")}</option>`;
       return (head||kids.length)?head+kids.map(e=>expOpt(e,true)).join(""):"";
     }).join("");
-  // the one heading that stays: nothing clickable says the same thing, and
-  // without it these would sit at the same indent as the projects above
+  // then what is not in a project, grouped the way Home groups it
+  const group=(label,list)=>{ if(!list.length) return;
+    const opts=list.map(e=>expOpt(e,false)).join("");
+    html+=(DB.projects.length||label!=="Not in a project")?`<optgroup label="${label}">${opts}</optgroup>`:opts; };
   const loose=DB.experiments.filter(e=>!e.projectId&&!skip(e.id)).sort(byTitle);
-  if(loose.length){
-    const opts=loose.map(e=>expOpt(e,false)).join("");
-    html+=DB.projects.length?`<optgroup label="Not in a project">${opts}</optgroup>`:opts;
-  }
+  group("Studies",loose.filter(e=>isWorkstream(e)&&e.wsKind==="course"));
+  group("Teaching",loose.filter(e=>isWorkstream(e)&&e.wsKind==="teaching"));
+  group("Not in a project",loose.filter(e=>!isStudyWork(e)));
   return html;
 }
 function expProjOptionsHTML(exclude,noWork){
