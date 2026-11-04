@@ -7713,7 +7713,13 @@ function convertToWorkstream(ex,kind){
   if(!ex.goal&&ex.question) ex.goal=ex.question;
   persist(); return true;
 }
-function convertToExperiment(ws){ delete ws.kind; persist(); }
+// an experiment lives in a project, never an area: one in an area leaves it
+// and waits for its project to be chosen
+function convertToExperiment(ws){
+  delete ws.kind;
+  const pr=ws.projectId?projById(ws.projectId):null; if(isArea(pr)) ws.projectId=null;
+  persist(); return !!pr&&isArea(pr);
+}
 function experimentHasAnimals(ex){
   return (ex.links||[]).some(l=>l.kind==="animal")||Object.keys(ex.groups||{}).length>0||Object.keys(ex.planRuns||{}).length>0;
 }
@@ -8957,7 +8963,8 @@ function workstreamModal(ws,after){
   }
   drawTasks();
   mountRefsEditor(document.getElementById("ws_links"),ws,()=>{});
-  document.getElementById("ws_toexp").onclick=()=>{ save(); convertToExperiment(ws); closeModal(); experimentModal(ws,after); toast("Now an experiment"); };
+  document.getElementById("ws_toexp").onclick=()=>{ save(); const left=convertToExperiment(ws); closeModal(); experimentModal(ws,after);
+    toast(left?"Now an experiment — an experiment belongs to a project, so choose one":"Now an experiment"); };
   document.getElementById("ws_del").onclick=()=>{
     if(!confirm(`Delete "${ws.title||"this workstream"}"? Its tasks stay, just unassigned.`)) return;
     deleteExperiment(ws.id); closeModal(); if(after) after(); };
