@@ -692,7 +692,7 @@ def write_overview(wb, w, sheets, source_label):
         ("Animal records", diary_n),
         ("Projects", len(w.projects)),
         ("Experiments", sum(1 for e in w.experiments if not is_workstream(e))),
-        ("Workstreams", sum(1 for e in w.experiments if is_workstream(e))),
+        ("Programs and courses", sum(1 for e in w.experiments if is_workstream(e))),
         ("Scheduled items", len(w.schedule)),
         ("— today or later", upcoming),
         ("Notes", len(w.notes)),
@@ -854,10 +854,6 @@ def dmy(iso):
 # the workstream kinds and their own fields — WS_KINDS in the app
 WS_KINDS = {
     "tool": ("Program", [("codeAt", "Lives at", "text")]),
-    "method": ("Method / protocol", [("protocolId", "Protocol it refines", "protocol"),
-                                     ("changing", "What is being changed", "text")]),
-    "writing": ("Writing", [("form", "What it is", "select"), ("venue", "Journal / venue", "text"),
-                            ("draftAt", "Draft at", "text")]),
     "course": ("Course you take", [("semester", "Semester", "text"), ("grade", "Grade", "text")]),
     "teaching": ("Course you teach", [("room", "Room", "text")]),
 }
@@ -1116,45 +1112,33 @@ def build_sheets(w):
             Workspace.proj_name(p) if p else "", e.get("title") or "", entity_status(e), e.get("summary") or "",
             e.get("question") or "", e.get("deadline") or "", e.get("endDate") or "",
             ", ".join(w.animals_of_exp(e)),
-            titles([x for x in wss if e.get("id") in (x.get("serves") or [])]),
             plain(e.get("description")), plain(e.get("outcome")),
         ])
     sheets.append(Sheet(
         "Experiments",
         ["Project", "Title", "Status", "Where it stands", "Question", "Deadline", "End", "Animals",
-         "Uses", "Description", "Outcome"],
-        exps, sort=[0, 1], wide=[4, 7, 9, 10]))
+         "Description", "Outcome"],
+        exps, sort=[0, 1], wide=[4, 7, 8, 9]))
 
     rows = []
-    protos = {r.get("id"): r.get("title") or "" for r in (w.db.get("protocols") or [])}
     for e in wss:
         p = w.project_of_exp(e)
         k = WS_KINDS.get(e.get("wsKind")) or WS_KINDS["tool"]
         kd = e.get("kindData") or {}
-        details = "; ".join(f"{lab}: {protos.get(kd[key], '') if typ == 'protocol' else kd[key]}"
-                            for key, lab, typ in k[1] if kd.get(key))
-        miles = sorted(e.get("milestones") or [], key=lambda m: str(m.get("date") or ""))
-        rows.append([
-            Workspace.proj_name(p) if p else "", e.get("title") or "", k[0], entity_status(e),
-            e.get("summary") or "", e.get("goal") or "", e.get("deadline") or "", e.get("endDate") or "",
-            titles([w.exp_by_id[i] for i in (e.get("serves") or []) if i in w.exp_by_id]),
-            details,
-            "; ".join(((dmy(m["date"]) + " ") if m.get("date") else "") + (m.get("text") or "") for m in miles),
-        ])
-    sheets.append(Sheet(
-        "Workstreams",
-        ["Project", "Title", "Kind", "Status", "Where it stands", "Goal", "Start", "End", "Serves",
-         "Details", "Milestones"],
-        rows, sort=[0, 1], wide=[5, 9, 10]))
+        rows.append([Workspace.proj_name(p) if p else "", e.get("title") or "", k[0], entity_status(e),
+                     e.get("summary") or "", "; ".join(f"{lab}: {kd[key]}" for key, lab, typ in k[1] if kd.get(key))])
+    sheets.append(Sheet("Programs and courses", ["Project", "Title", "Kind", "Status", "Where it stands", "Details"],
+                        rows, sort=[0, 1], wide=[4, 5]))
 
     projs = []
     for p in [p for p in w.projects if p.get("kind") != "area"]:
         mine = [e for e in w.experiments if e.get("projectId") == p.get("id")]
         projs.append([p.get("name") or "", entity_status(p), p.get("summary") or "", p.get("question") or "",
                       titles([e for e in mine if not is_workstream(e)]),
-                      titles([e for e in mine if is_workstream(e)]), plain(p.get("notes"))])
+                      titles([e for e in mine if is_workstream(e) and e.get("wsKind") not in ("course", "teaching")]),
+                      plain(p.get("notes"))])
     sheets.append(Sheet("Projects", ["Name", "Status", "Where it stands", "Question", "Experiments",
-                                     "Workstreams", "Notes"],
+                                     "Programs", "Notes"],
                         projs, sort=[0], wide=[3, 4, 5, 6]))
 
     # what is inside a program, a course and a teaching course — "Work items" in
@@ -1193,7 +1177,8 @@ def build_sheets(w):
     tasks = {t.get("id"): t for t in w.schedule}
     checks = []
     for kind, x in [("Project", p) for p in w.projects] + \
-            [("Workstream" if is_workstream(e) else "Experiment", e) for e in w.experiments]:
+            [((WS_KINDS.get(e.get("wsKind")) or WS_KINDS["tool"])[0] if is_workstream(e) else "Experiment", e)
+             for e in w.experiments]:
         for it in x.get("checklist") or []:
             t = tasks.get(it.get("taskId")) if it.get("taskId") else None
             done = (t.get("when") in (t.get("doneOccurrences") or [])) if t and t.get("when") else bool(it.get("done")) if not t else False

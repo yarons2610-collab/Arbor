@@ -6011,11 +6011,12 @@ function quickFindHits(q){
       go(()=>taskEditor(x,()=>render())));
   });
   DB.experiments.forEach(ex=>{
-    // a workstream is found by what it is for, too — its goal, where it stands, its milestones
+    // a program or a course is found by what is in it, too
     const ws=isWorkstream(ex);
-    const r=score(ex.title,ex.question,ex.goal,ex.summary,...(ex.milestones||[]).map(m=>m.text),...(ex.checklist||[]).map(c=>c.text)); if(!isFinite(r))return;
+    const r=score(ex.title,ex.question,ex.summary,...(ex.checklist||[]).map(c=>c.text),...(ex.ideas||[]).map(c=>c.text),
+      ...(ex.deliverables||[]).map(c=>c.text),...(ex.uploads||[]).map(c=>(c.topic?"נושא "+c.topic+" ":"")+(c.what||""))); if(!isFinite(r))return;
     const pr=ex.projectId?projById(ex.projectId):null;
-    add(ws?"Workstream":"Experiment",ws?wsKind(ex).icon:"🧪",ex.title,pr?pr.name:"",r,go(()=>experimentModal(ex,()=>render())));
+    add(ws?wsKind(ex).label:"Experiment",ws?wsKind(ex).icon:"🧪",ex.title,pr?pr.name:"",r,go(()=>experimentModal(ex,()=>render())));
   });
   (DB.projects||[]).forEach(pr=>{
     const r=score(pr.name,pr.question); if(!isFinite(r))return;
@@ -6321,7 +6322,7 @@ function colorUsage(){
   // box colour and an injection marker stand for a real thing rather than a
   // category, so listing them said nothing and buried the ones that matter.
   (DB.config.eventTypes||[]).forEach(x=>add(x.color,"Event category",x.name));
-  (DB.experiments||[]).forEach(x=>add(x.color,isWorkstream(x)?"Workstream":"Experiment",x.title));
+  (DB.experiments||[]).forEach(x=>add(x.color,isWorkstream(x)?wsKind(x).label:"Experiment",x.title));
   (DB.projects||[]).forEach(x=>add(x.color,"Project",x.name));
   taskList().forEach(t=>{ if(t.color) add(t.color,t.isEvent?"Event":"Task",t.title); });
   return out;
@@ -7676,31 +7677,25 @@ function deleteExperiment(id){
   releaseScheduledEntries(e=>e.fromPlan===id);
   DB.experiments=DB.experiments.filter(x=>x.id!==id); persist();
 }
-/* ── WORKSTREAMS ──
-   Under a project there is work that is not an experiment: a program being
-   written for one (Spinmatch), a protocol being refined, a paper, a course.
-   An experiment is about animals — arms, plans, cohorts. A workstream is
-   about a result — a goal, where it stands, milestones, and the experiments
-   it serves. It lives in DB.experiments, marked kind:"workstream", so
-   sharing, sync, colours, the Timeline and "Part of" all hold it already;
-   everything about animals asks experimentsOnly() and never sees one.
-   Its kind is specific (Yaron, 03/11/2026): each has what that work needs. */
+/* ── PROGRAMS AND COURSES ──
+   What is not an experiment: a program in a project (Spinmatch, Spinetrack),
+   a course you take, a course you teach. Each is a record in DB.experiments
+   marked kind:"workstream" (an internal word only — "workstream" was dropped
+   from the app on 04/11/2026 once programs were the only thing in a project
+   that was not an experiment), so sharing, sync, colours, the Timeline and
+   "Part of" hold them already; everything about animals asks
+   experimentsOnly() and never sees one. */
 function isWorkstream(x){ return !!x&&x.kind==="workstream"; }
 function experimentsOnly(){ return (DB.experiments||[]).filter(x=>!isWorkstream(x)); }
 function workstreamList(){ return (DB.experiments||[]).filter(isWorkstream); }
-// each kind lists only its own parts. A program, a method and a writing
-// sit in a project; a course you take or teach sits in Studies or Teaching.
+// each kind lists only its own parts. A program sits in a project; a course
+// you take or teach sits in Studies or Teaching. (Methods and writing were
+// tried on 03/11 and dropped: protocols live in the Library, and writing was
+// not his.)
 const WS_KINDS={
   tool:{label:"Program",icon:"💻",start:"Started",end:"Target",
     fields:[{key:"codeAt",label:"Lives at",ph:"its Claude Code project — folder or link"}],
     parts:["ideas","checklist","tasks","links"]},
-  method:{label:"Method / protocol",icon:"🧪",start:"Started",end:"Target",
-    fields:[{key:"protocolId",label:"Protocol it refines",type:"protocol"},{key:"changing",label:"What is being changed",ph:"e.g. window size, glue, anaesthesia"}],
-    parts:["goal","dates","serves","checklist","milestones","tasks","links"]},
-  writing:{label:"Writing",icon:"✍",start:"Started",end:"Due",
-    fields:[{key:"form",label:"What it is",type:"select",options:["paper","grant","thesis chapter","poster","talk","review"]},
-            {key:"venue",label:"Journal / venue"},{key:"draftAt",label:"Draft at",ph:"link or folder"}],
-    parts:["goal","dates","checklist","milestones","tasks","links"]},
   course:{label:"Course you take",icon:"📘",study:true,
     fields:[{key:"semester",label:"Semester",ph:"e.g. winter 2026–27"},{key:"grade",label:"Grade"}],
     parts:["lectures","catchup","deliverables","tasks","checklist","links"]},
@@ -7713,21 +7708,18 @@ function wsKind(ws){ return WS_KINDS[ws&&ws.wsKind]||WS_KINDS.tool; }
 const ENTITY_STATUSES=[["active","Active"],["paused","Paused"],["done","Done"]];
 function entityStatus(x){ return (x&&ENTITY_STATUSES.some(([v])=>v===x.status))?x.status:"active"; }
 function addWorkstream(init){
-  const ws={id:uid("st_"),kind:"workstream",wsKind:"tool",color:null,title:"",goal:"",summary:"",status:"active",
-    serves:[],milestones:[],checklist:[],links:[],deadline:null,endDate:null,created:Date.now(),projectId:null,...(init||{})};
+  const ws={id:uid("st_"),kind:"workstream",wsKind:"tool",color:null,title:"",summary:"",status:"active",
+    checklist:[],links:[],created:Date.now(),projectId:null,...(init||{})};
   DB.experiments.push(ws); persist(); return ws;
 }
-// the workstreams that say they serve this experiment — read from their side,
-// so the link is written once and shown in both windows
-function workstreamsServing(ex){ return workstreamList().filter(ws=>(ws.serves||[]).includes(ex.id)); }
 /* An experiment that turns out not to be one (Spinmatch was filed as an
    experiment). Nothing is thrown away: what only an experiment has stays in
    the record, unseen, and comes back if it is turned back. */
 function convertToWorkstream(ex,kind){
   if(experimentHasAnimals(ex)) return false;
   ex.kind="workstream"; ex.wsKind=ex.wsKind||kind||"tool";
-  ex.serves=ex.serves||[]; ex.milestones=ex.milestones||[]; ex.checklist=ex.checklist||[];
-  if(!ex.goal&&ex.question) ex.goal=ex.question;
+  ex.checklist=ex.checklist||[];
+  if(!ex.summary&&ex.question) ex.summary=ex.question;
   persist(); return true;
 }
 // a course is never in a project, and an experiment always is: one turned
@@ -7844,7 +7836,7 @@ function migrateAreas(){
       let ws=DB.experiments.find(x=>x.id===id);
       if(!ws){
         ws={id,kind:"workstream",wsKind:/stud|course|לימוד|קורס/i.test(ar.name||"")?"course":"teaching",
-          title:ar.name||"",color:ar.color||null,summary:ar.summary||"",goal:String(ar.notes||"").trim(),status:"active",
+          title:ar.name||"",color:ar.color||null,summary:ar.summary||String(ar.notes||"").trim(),status:"active",
           checklist:ar.checklist||[],links:ar.links||[],created:ar.created||Date.now(),projectId:null,by:ar.by||meId()};
         DB.experiments.push(ws);
       }
@@ -8843,27 +8835,18 @@ function workstreamModal(ws,after){
     </div>
     <div class="drow">
       <div class="fld" style="flex:1" ${study?"hidden":""}><label>Project</label><select id="ws_proj">${ws.projectId?"":`<option value="" selected>— choose its project</option>`}${projOpts}</select></div>
-      <div class="fld" style="flex:1"><label>Kind</label><select id="ws_kind">${family.map(([k,d])=>
+      <div class="fld" style="flex:1" ${family.length<2?"hidden":""}><label>Kind</label><select id="ws_kind">${family.map(([k,d])=>
         `<option value="${k}" ${(ws.wsKind||"tool")===k?"selected":""}>${d.icon} ${esc(d.label)}</option>`).join("")}</select></div>
     </div>
     ${statusRowHTML(ws,"ws")}
-    ${parts.has("goal")?`<div class="fld"><label>Goal</label><textarea id="ws_goal" rows="2" placeholder="what done looks like">${esc(ws.goal||"")}</textarea></div>`:""}
     <div class="drow ws-kfields">${K.fields.map(f=>`<div class="fld" style="flex:1;min-width:160px"><label>${esc(f.label)}</label>${kindField(f)}</div>`).join("")}</div>
-    ${parts.has("dates")?`<div class="drow">
-      <div class="fld" style="flex:1"><label>${esc(K.start)}</label>
-        <button type="button" id="ws_start" class="datebtn ${ws.deadline?"":"datebtn-empty"}">${ws.deadline?fmtWhenFull(ws.deadline):"📅 "+K.start.toLowerCase()}</button></div>
-      <div class="fld" style="flex:1"><label>${esc(K.end)}</label>
-        <button type="button" id="ws_end" class="datebtn ${ws.endDate?"":"datebtn-empty"}">${ws.endDate?fmtWhenFull(ws.endDate):"📅 "+K.end.toLowerCase()}</button></div>
-    </div>`:""}
     ${sec("lectures","Lectures","ws_lectures")}
     ${sec("catchup","Missed and catching up","ws_catchup")}
     ${sec("deliverables","Deliverables","ws_deliv")}
     ${sec("weekly","Every week","ws_weekly")}
     ${sec("uploads","Uploads","ws_uploads")}
-    ${sec("serves","Serves","ws_serves")}
     ${sec("ideas","Ideas","ws_ideas")}
     ${sec("checklist","Checklist","ws_check")}
-    ${sec("milestones","Milestones","ws_miles")}
     ${sec("tasks",parts.has("weekly")?"Meetings and one-offs":"Tasks","ws_tasks")}
     ${sec("links","Notes &amp; references","ws_links")}
     ${shareRowHTML("experiments",ws)}
@@ -8876,7 +8859,6 @@ function workstreamModal(ws,after){
   const save=()=>{
     ws.title=$("ws_name").value;
     ws.color=($("ws_color_auto").checked&&!study)?null:$("ws_color").value;
-    if($("ws_goal")) ws.goal=$("ws_goal").value;
     persist();
   };
   const reopen=()=>{ save(); closeModal(); workstreamModal(ws,after); };
@@ -8884,7 +8866,7 @@ function workstreamModal(ws,after){
   wsColor.addEventListener("change",()=>{ wsAuto.checked=false; save(); });
   wsAuto.addEventListener("change",()=>{ save(); if(wsAuto.checked) setColorBtn(wsColor,expShade(ws)); });
   $("ws_proj").addEventListener("change",e=>{ ws.projectId=e.target.value||null; persist();
-    refreshShareRow($("modal"),"experiments",ws,null,null); if(parts.has("serves")) drawServes(); });
+    refreshShareRow($("modal"),"experiments",ws,null,null); });
   // another kind asks other things: what was typed for the old one is kept
   $("ws_kind").addEventListener("change",e=>{ ws.wsKind=e.target.value; persist(); reopen(); });
   document.querySelectorAll(".ws-kf").forEach(el=>el.addEventListener("change",()=>{
@@ -8895,10 +8877,6 @@ function workstreamModal(ws,after){
     if(el.dataset.key==="protocolId"&&el.value){ ws.links=ws.links||[];
       const l={kind:"protocol",id:el.value}; if(!ws.links.some(x=>sameLink(x,l))) ws.links.push(l); mountRefsEditor($("ws_links"),ws,()=>{}); }
     persist(); }));
-  if(parts.has("dates")){
-    bindDateButton($("ws_start"),()=>ws.deadline||"",v=>{ ws.deadline=v||null; persist(); });
-    bindDateButton($("ws_end"),()=>ws.endDate||"",v=>{ ws.endDate=v||null; persist(); });
-  }
   const IN="background:var(--bg2);border:1px solid var(--line2);color:var(--ink);border-radius:6px;padding:4px 7px;font-size:12px";
   const dateBtn=(cls,d,ph)=>`<button type="button" class="datebtn datebtn-sm ${cls} ${d?"":"datebtn-empty"}">${d?esc(fmtDMY(d)):ph||"📅"}</button>`;
   const tick=(on,cls)=>`<button type="button" class="step-dot ${cls}${on?" done":""}" title="${on?"Done — click to undo":"Mark done"}">${on?"✓":""}</button>`;
@@ -9021,34 +8999,6 @@ function workstreamModal(ws,after){
       ws.ideas=ws.ideas.filter(y=>y!==x); persist(); drawIdeas(); mountChecklist($("ws_check"),ws,false,()=>drawTasks()); });
     host.querySelectorAll(".id-del").forEach(el=>el.onclick=()=>{ const x=itemOf(el); ws.ideas=ws.ideas.filter(y=>y!==x); persist(); drawIdeas(); });
   }
-  // the experiments it is for — its own project's first; each shows it as "Uses"
-  function drawServes(){
-    const host=$("ws_serves"); if(!host) return; ws.serves=(ws.serves||[]).filter(id=>expById(id));
-    const exps=experimentsOnly().sort((a,b)=>((b.projectId===ws.projectId)-(a.projectId===ws.projectId))||String(a.title||"").localeCompare(String(b.title||"")));
-    host.innerHTML=`<div class="linklist">${ws.serves.map(id=>{ const ex=expById(id);
-        return `<span class="linkchip"><span class="lk-open ws-openexp" data-id="${escAttr(id)}">🧫 ${esc(entityLabel(ex))}</span><button class="lk-del ws-unserve" data-id="${escAttr(id)}" title="Remove">✕</button></span>`; }).join("")
-        ||`<span class="pc-empty">no experiment yet</span>`}</div>
-      <select id="ws_addserve" style="margin-top:5px"><option value="">＋ an experiment it is for…</option>${exps.filter(ex=>!ws.serves.includes(ex.id)).map(ex=>
-        `<option value="${escAttr(ex.id)}">${esc(entityLabel(ex))}${ex.projectId&&ex.projectId!==ws.projectId?` (${esc(entityLabel(projById(ex.projectId)||{name:""}))})`:""}</option>`).join("")}</select>`;
-    host.querySelector("#ws_addserve").addEventListener("change",e=>{ if(!e.target.value) return; ws.serves.push(e.target.value); persist(); drawServes(); });
-    host.querySelectorAll(".ws-unserve").forEach(b=>b.onclick=()=>{ ws.serves=ws.serves.filter(x=>x!==b.dataset.id); persist(); drawServes(); });
-    host.querySelectorAll(".ws-openexp").forEach(b=>b.onclick=()=>{ const ex=expById(b.dataset.id); if(ex){ save(); closeModal(); experimentModal(ex,()=>workstreamModal(ws,after)); } });
-  }
-  // dated achievements, newest first
-  function drawMiles(){
-    const host=$("ws_miles"); if(!host) return; ws.milestones=ws.milestones||[];
-    const list=ws.milestones.slice().sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
-    host.innerHTML=`${list.map(m=>`<div class="ms-row" data-id="${escAttr(m.id)}">
-        <button type="button" class="datebtn datebtn-sm ms-date">${m.date?esc(fmtDMY(m.date)):"📅"}</button>
-        <input class="ms-text" value="${escAttr(m.text||"")}"><button type="button" class="ov-link ms-del" title="Remove">✕</button></div>`).join("")}
-      <input class="ms-new" placeholder="＋ something reached — press Enter (dated today)" style="width:100%;margin-top:4px">`;
-    host.querySelector(".ms-new").addEventListener("keydown",e=>{ if(e.key!=="Enter") return; const v=e.target.value.trim(); if(!v) return;
-      ws.milestones.push({id:uid("ms_"),date:todayDateStr(),text:v}); persist(); drawMiles(); });
-    host.querySelectorAll(".ms-row").forEach(r=>{ const m=ws.milestones.find(x=>x.id===r.dataset.id); if(!m) return;
-      r.querySelector(".ms-text").addEventListener("change",e=>{ m.text=e.target.value; persist(); });
-      bindDateButton(r.querySelector(".ms-date"),()=>m.date||"",v=>{ if(v){ m.date=v.slice(0,10); persist(); drawMiles(); } },15,true);
-      r.querySelector(".ms-del").onclick=()=>{ ws.milestones=ws.milestones.filter(x=>x!==m); persist(); drawMiles(); }; });
-  }
   // its other scheduled work; what a row above owns is shown with that row
   function drawTasks(){
     const host=$("ws_tasks"); if(!host) return;
@@ -9059,7 +9009,7 @@ function workstreamModal(ws,after){
       wireStepDotEl(el,drawTasks); el.onclick=()=>{ save(); closeModal(); taskEditor(t,()=>workstreamModal(ws,after)); }; });
     host.querySelector("#ws_addtask").onclick=()=>{ save(); closeModal(); const k=addTask({experimentId:ws.id}); taskEditor(k,()=>workstreamModal(ws,after)); };
   }
-  drawLectures(); drawCatchup(); drawDeliverables(); drawWeekly(); drawUploads(); drawIdeas(); drawServes(); drawMiles(); drawTasks();
+  drawLectures(); drawCatchup(); drawDeliverables(); drawWeekly(); drawUploads(); drawIdeas(); drawTasks();
   if($("ws_check")) mountChecklist($("ws_check"),ws,false,()=>drawTasks());
   if($("ws_links")) mountRefsEditor($("ws_links"),ws,()=>{});
   const toExp=$("ws_toexp"); if(toExp) toExp.onclick=()=>{ save(); const left=convertToExperiment(ws); closeModal(); experimentModal(ws,after);
@@ -9090,7 +9040,6 @@ function experimentModal(st,after){
     ${statusRowHTML(st,"sm")}
     <div class="fld"><label>Research question</label>
       <textarea id="sm_q" rows="2">${esc(st.question||"")}</textarea></div>
-    <div id="sm_uses"></div>
     <div class="fld"><label>Plan for animals in no group</label>
       <div style="display:flex;gap:6px;align-items:center">
         <select id="sm_plan" style="flex:1"><option value="">— none</option>${
@@ -9129,7 +9078,7 @@ function experimentModal(st,after){
     <div class="fld"><label>Notes &amp; references</label><div id="sm_links"></div></div>
     ${shareRowHTML("experiments",st)}
     <div class="drow" style="margin-top:16px;gap:8px"><button class="btn danger" id="sm_del">Delete experiment</button>
-      <button class="btn ghost" id="sm_tows" title="Not an experiment — a program, a method, a paper or a course for the project">Make it a workstream</button></div>
+      <button class="btn ghost" id="sm_tows" title="Not an experiment — a program written for the project">Make it a program</button></div>
     <div class="actions"><button class="btn accent" id="sm_save">Done</button></div>`,{wide:true});
   wireShareRow(document.getElementById("modal"),st,null,"experiments");
   // The plan is the heart of the experiment — worth seeing in full rather
@@ -9420,15 +9369,10 @@ function experimentModal(st,after){
   mountRefsEditor(document.getElementById("sm_links"),st,()=>{ drawGroupDefs(); drawGroups(); });
   wireStatusRow(st,"sm");
   mountChecklist(document.getElementById("sm_check"),st,false,()=>{});
-  // the workstreams that serve it, from their own "Serves"
-  { const uses=workstreamsServing(st), host=document.getElementById("sm_uses");
-    if(uses.length) host.innerHTML=`<div class="fld"><label>Uses</label><div class="linklist">${uses.map(ws=>
-      `<span class="linkchip"><span class="lk-open sm-openws" data-id="${escAttr(ws.id)}">${wsKind(ws).icon} ${esc(entityLabel(ws))}${ws.summary?` <span class="ov-dim">— ${esc(ws.summary)}</span>`:""}</span></span>`).join("")}</div></div>`;
-    host.querySelectorAll(".sm-openws").forEach(b=>b.onclick=()=>{ const ws=expById(b.dataset.id); if(ws){ save(); closeModal(); workstreamModal(ws,()=>experimentModal(st,after)); } }); }
   document.getElementById("sm_tows").onclick=()=>{
     if(experimentHasAnimals(st)){ toast("It has animals — an experiment with animals stays an experiment"); return; }
-    if(!confirm(`Make "${st.title||"this"}" a workstream?\n\nIts tasks, notes and references stay. Nothing is deleted — what only an experiment has is kept, and comes back if you turn it back.`)) return;
-    save(); convertToWorkstream(st); closeModal(); workstreamModal(st,after); toast("Now a workstream"); };
+    if(!confirm(`Make "${st.title||"this"}" a program?\n\nIts tasks, notes and references stay. Nothing is deleted — what only an experiment has is kept, and comes back if you turn it back.`)) return;
+    save(); convertToWorkstream(st,"tool"); closeModal(); workstreamModal(st,after); toast("Now a program"); };
   document.getElementById("sm_del").onclick=()=>{
     if(!confirm(`Delete "${st.title||"this experiment"}"? Its tasks stay, just unassigned.`))return;
     deleteExperiment(st.id); closeModal(); if(after)after(); };
@@ -9550,10 +9494,10 @@ function projectModal(pr,after){
         ${ck.n?`<span class="ov-dim pin-ck">☑ ${ck.done}/${ck.n}</span>`:""}</div>`; };
     host.innerHTML=(kids.map(row).join("")||`<span class="pc-empty">nothing yet</span>`)+`<div style="display:flex;gap:6px;margin-top:6px">
         <button type="button" class="btn ghost" id="pm_newexp" style="font-size:12px">＋ Experiment</button>
-        <button type="button" class="btn ghost" id="pm_newws" style="font-size:12px">＋ Workstream</button></div>`;
+        <button type="button" class="btn ghost" id="pm_newws" style="font-size:12px">＋ Program</button></div>`;
     host.querySelectorAll(".pin-row").forEach(r=>r.querySelector(".pin-open").onclick=()=>{ const x=expById(r.dataset.id); if(x){ save(); closeModal(); experimentModal(x,()=>projectModal(pr,after)); } });
     host.querySelector("#pm_newexp").onclick=()=>{ save(); closeModal(); const ex=addExperiment(); ex.projectId=pr.id; persist(); experimentModal(ex,()=>projectModal(pr,after)); };
-    host.querySelector("#pm_newws").onclick=()=>{ save(); closeModal(); const ws=addWorkstream({projectId:pr.id}); workstreamModal(ws,()=>projectModal(pr,after)); };
+    host.querySelector("#pm_newws").onclick=()=>{ save(); closeModal(); const ws=addWorkstream({projectId:pr.id,wsKind:"tool"}); workstreamModal(ws,()=>projectModal(pr,after)); };
   }
   drawInside();
   mountLinkEditor(document.getElementById("pm_animals"),pr,()=>{},{only:["animal"]});
@@ -10039,10 +9983,9 @@ function drawExperimentCard(ex){
     const kids=sortAndGroupItems(rawKids);
     const open=openSteps.has(ex.id), grp=stepGroupTally(ex);
     const pr=ex.projectId?projById(ex.projectId):null;
-    // a workstream is drawn by the same card: its kind instead of arms, its
-    // goal instead of a question, the experiments it serves
-    const ws=isWorkstream(ex), ck=checklistProgress(ex);
-    const serves=ws?(ex.serves||[]).map(expById).filter(Boolean):[];
+    // a program is drawn by the same card: its ideas and checklist instead of
+    // arms and a question
+    const ws=isWorkstream(ex), ck=checklistProgress(ex), ideas=(ex.ideas||[]).length;
     card.classList.toggle("ws-card",ws);
     card.innerHTML=`<div class="pc-bar" style="background:${ex.color||"#7db4ff"}"></div>
       <div class="pc-body">
@@ -10052,13 +9995,12 @@ function drawExperimentCard(ex){
           ${statusChipHTML(ex)}
           ${!ws&&stepDone(ex)?`<span class="exp-tick" title="has a result">✓</span>`:""}
           <button type="button" class="exp-open">Edit</button>
-          <button type="button" class="exp-sub" title="Add a task to this ${ws?"workstream":"experiment"}">＋ Task</button>
+          <button type="button" class="exp-sub" title="Add a task to this ${ws?wsKind(ex).label.toLowerCase():"experiment"}">＋ Task</button>
         </div>
         ${ex.summary?`<div class="pc-note st-sum">${esc(ex.summary)}</div>`:""}
-        ${ws?(ex.goal?`<div class="pc-note">${esc(ex.goal)}</div>`:""):(ex.question?`<div class="pc-note">${esc(ex.question)}</div>`:"")}
+        ${!ws&&ex.question?`<div class="pc-note">${esc(ex.question)}</div>`:""}
         <div class="exp-meta">
-          ${ws?`<span class="em-kind">${esc(wsKind(ex).label)}</span>`:""}
-          ${serves.length?`<span class="em-serves" title="The experiments it is for">for ${serves.map(x=>esc(entityLabel(x))).join(", ")}</span>`:""}
+          ${ideas?`<span class="em-ck" title="Ideas">💡 ${ideas}</span>`:""}
           ${ck.n?`<span class="em-ck" title="Checklist">☑ ${ck.done}/${ck.n}</span>`:""}
           ${pr?`<span class="exp-proj" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer" title="Open project"><span style="width:6px;height:6px;border-radius:50%;background:${pr.color||"#7db4ff"};flex:0 0 auto"></span>${esc(pr.name||"(unnamed project)")}</span>`:""}
           ${ex.deadline?`<span class="em-date">${esc(stepSpan(ex))}</span>`:""}
@@ -10150,13 +10092,13 @@ function renderExperiments(){
       ${ck.n?`<span class="count" title="The project's checklist">☑ ${ck.done}/${ck.n}</span>`:""}
       ${pr?`<span style="margin-left:auto;display:flex;gap:6px">
         <button type="button" class="exp-open pj-newexp" title="A new experiment in ${escAttr(name)}">＋ Experiment</button>
-        <button type="button" class="exp-open pj-newws" title="Work in ${escAttr(name)} that is not an experiment — a program, a method, a paper, a course">＋ Workstream</button>
+        <button type="button" class="exp-open pj-newws" title="A program written for ${escAttr(name)}">＋ Program</button>
         <button type="button" class="exp-open pj-edit">Edit</button></span>`
         :`<span class="count">open one and choose its project</span>`}`;
     if(pr){
       h.querySelector(".pj-edit").onclick=()=>projectModal(pr,()=>renderExperiments());
       h.querySelector(".pj-newexp").onclick=()=>{ const ex=addExperiment(); ex.projectId=pr.id; persist(); experimentModal(ex,()=>renderExperiments()); };
-      h.querySelector(".pj-newws").onclick=()=>{ const ws=addWorkstream({projectId:pr.id}); workstreamModal(ws,()=>renderExperiments()); };
+      h.querySelector(".pj-newws").onclick=()=>{ const ws=addWorkstream({projectId:pr.id,wsKind:"tool"}); workstreamModal(ws,()=>renderExperiments()); };
     }
     return h;
   };
@@ -10172,7 +10114,7 @@ function renderExperiments(){
     h.innerHTML=`<b>${title}</b><span class="ov-dim">${sub}</span>${btn?`<button type="button" class="exp-open" style="margin-left:auto">${btn}</button>`:""}`;
     if(btn) h.querySelector("button").onclick=onAdd; host.appendChild(h); };
   const homeStart=host.children.length;
-  kindHead("Projects","research — experiments, and the programs, methods and writing that serve them");
+  kindHead("Projects","research — its experiments, and the programs written for it");
   // a project with experiments or programs in it comes before one without, and
   // a finished one last
   const emptyProj=pr=>!DB.experiments.some(x=>x.projectId===pr.id);
@@ -10182,7 +10124,7 @@ function renderExperiments(){
     host.appendChild(sectionHead(pr.color||"#7db4ff",pr.name||"(unnamed project)",pr));
     // what the project is doing first; its loose tasks and links after
     drawGrid(exps,wss.length?"Experiments":"");
-    drawGrid(wss,"Programs and other work");
+    drawGrid(wss,"Programs");
     if(pr.links&&pr.links.length){
       const catHost=document.createElement("div"); catHost.innerHTML=projCatsHTML(pr); host.appendChild(catHost);
       wireProjCats(catHost,pr,()=>renderExperiments());
@@ -10210,7 +10152,7 @@ function renderExperiments(){
       }
     }
     if(!members.length&&!own.length) host.appendChild(Object.assign(document.createElement("div"),
-      {className:"empty",textContent:"Nothing in this project yet — add an experiment or a workstream."}));
+      {className:"empty",textContent:"Nothing in this project yet — add an experiment or a program."}));
   });
   const unfiled=DB.experiments.filter(ex=>!ex.projectId&&!isStudyWork(ex)).sort(order);
   if(unfiled.length){
@@ -13328,7 +13270,7 @@ function renderLibrary(){
       <option value="none" ${libProjFilter==="none"?"selected":""}>Unattached</option>
       ${experimentsOnly().length?`<optgroup label="Experiments">${experimentsOnly().map(ex=>
         `<option value="${ex.id}" ${libProjFilter===ex.id?"selected":""}>${esc(entityLabel(ex))}</option>`).join("")}</optgroup>`:""}
-      ${workstreamList().length?`<optgroup label="Workstreams">${workstreamList().map(ex=>
+      ${workstreamList().length?`<optgroup label="Programs and courses">${workstreamList().map(ex=>
         `<option value="${ex.id}" ${libProjFilter===ex.id?"selected":""}>${esc(entityLabel(ex))}</option>`).join("")}</optgroup>`:""}
       ${DB.projects.length?`<optgroup label="Projects">${DB.projects.map(pr=>
         `<option value="${pr.id}" ${libProjFilter===pr.id?"selected":""}>${esc(entityLabel(pr))}</option>`).join("")}</optgroup>`:""}
@@ -19487,13 +19429,10 @@ function exportFullDatabaseExcel(){
 
   const exps=experimentsOnly().map(ex=>{ const pr=ex.projectId?projById(ex.projectId):null;
     return [pr?(pr.name||"(unnamed)"):"",ex.title||"",entityStatus(ex),ex.summary||"",ex.question||"",ex.deadline||"",ex.endDate||"",
-      animalsForStep(ex).map(a=>a.name).sort(byText).join(", "),
-      workstreamsServing(ex).map(w=>w.title||"(unnamed)").sort(byText).join(", "),plain(ex.description),plain(ex.outcome)]; });
+      animalsForStep(ex).map(a=>a.name).sort(byText).join(", "),plain(ex.description),plain(ex.outcome)]; });
   const wss=workstreamList().map(ws=>{ const pr=ws.projectId?projById(ws.projectId):null, K=wsKind(ws), kd=ws.kindData||{};
-    return [pr?(pr.name||"(unnamed)"):"",ws.title||"",K.label,entityStatus(ws),ws.summary||"",ws.goal||"",ws.deadline||"",ws.endDate||"",
-      (ws.serves||[]).map(expById).filter(Boolean).map(x=>x.title||"(unnamed)").sort(byText).join(", "),
-      K.fields.map(f=>{ const v=kd[f.key]; if(!v) return ""; return `${f.label}: ${f.type==="protocol"?linkName({kind:"protocol",id:v}):v}`; }).filter(Boolean).join("; "),
-      (ws.milestones||[]).slice().sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))).map(m=>`${m.date?fmtDMY(m.date)+" ":""}${m.text||""}`).join("; ")]; });
+    return [pr?(pr.name||"(unnamed)"):"",ws.title||"",K.label,entityStatus(ws),ws.summary||"",
+      K.fields.map(f=>{ const v=kd[f.key]; return v?`${f.label}: ${v}`:""; }).filter(Boolean).join("; ")]; });
   // what is inside a program, a course and a teaching course, one row each; a
   // date is its task's, so it reads the same as the Timeline
   const tday=id=>{ const t=linkedTask(id); return t&&t.when?String(t.when).slice(0,10):""; };
@@ -19507,9 +19446,9 @@ function exportFullDatabaseExcel(){
   const weekendRows=Object.entries(DB.config.weekendFeeding||{}).map(([f,who])=>[f,who]);
   const projs=projectsOnly().map(pr=>[pr.name||"",entityStatus(pr),pr.summary||"",pr.question||"",
     experimentsOnly().filter(ex=>ex.projectId===pr.id).map(ex=>ex.title||"(unnamed)").sort(byText).join(", "),
-    workstreamList().filter(ex=>ex.projectId===pr.id).map(ex=>ex.title||"(unnamed)").sort(byText).join(", "),plain(pr.notes)]);
+    workstreamList().filter(ex=>ex.projectId===pr.id&&!isStudyWork(ex)).map(ex=>ex.title||"(unnamed)").sort(byText).join(", "),plain(pr.notes)]);
   // every checklist, wherever it lives; a dated item is a task, so its date is the task's
-  const checks=[...(DB.projects||[]).map(x=>["Project",x]),...DB.experiments.map(x=>[isWorkstream(x)?"Workstream":"Experiment",x])]
+  const checks=[...(DB.projects||[]).map(x=>["Project",x]),...DB.experiments.map(x=>[isWorkstream(x)?wsKind(x).label:"Experiment",x])]
     .flatMap(([k,x])=>(x.checklist||[]).map(it=>{ const t=checklistTask(it);
       return [k,entityLabel(x),t?t.title||"":it.text||"",yes(checklistDone(it)),t&&t.when?String(t.when).slice(0,10):""]; }));
 
@@ -19538,7 +19477,7 @@ function exportFullDatabaseExcel(){
     ["Animal records",diaryN],
     ["Projects",(DB.projects||[]).length],
     ["Experiments",experimentsOnly().length],
-    ["Workstreams",workstreamList().length],
+    ["Programs and courses",workstreamList().length],
     ["Scheduled items",taskList().length],
     ["— today or later",upcoming],
     ["Notes",(DB.notes||[]).length],
@@ -19618,9 +19557,9 @@ function exportFullDatabaseExcel(){
       "Target region","Target AP","Target ML","Target DV","Histology"],inj,0,1,2),
     sheet("Timeline",["When","Until","Duration (min)","Kind","Title","Repeats","Project","Experiment","Materials",
       "Occurrences done","Notes"],timeline,0,4),
-    sheet("Experiments",["Project","Title","Status","Where it stands","Question","Deadline","End","Animals","Uses","Description","Outcome"],exps,0,1),
-    sheet("Workstreams",["Project","Title","Kind","Status","Where it stands","Goal","Start","End","Serves","Details","Milestones"],wss,0,1),
-    sheet("Projects",["Name","Status","Where it stands","Question","Experiments","Workstreams","Notes"],projs,0),
+    sheet("Experiments",["Project","Title","Status","Where it stands","Question","Deadline","End","Animals","Description","Outcome"],exps,0,1),
+    sheet("Programs and courses",["Project","Title","Kind","Status","Where it stands","Details"],wss,0,1),
+    sheet("Projects",["Name","Status","Where it stands","Question","Experiments","Programs","Notes"],projs,0),
     sheet("Work items",["Of","Kind","Item kind","Item","Detail","Prepare from","Due","Done"],workRows,0,2,6),
     sheet("Weekend feeding",["Weekend (Friday)","Who"],weekendRows,0),
     sheet("Checklists",["Kind","Of","Item","Done","Date"],checks,0,1),
