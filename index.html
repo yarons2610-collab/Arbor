@@ -238,6 +238,17 @@
   .pin-row{display:flex;align-items:center;gap:7px;padding:4px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
   .pin-icon{flex:0 0 18px;text-align:center}
   .pin-sum{flex:1;min-width:120px}
+  .pj-kind{display:flex;align-items:baseline;gap:10px;margin:22px 0 2px;padding-bottom:6px;border-bottom:1px solid var(--line2)}
+  .pj-kind b{font-size:15px}
+  .st-chip.st-turn{color:var(--amber);border-color:var(--amber)}
+  .ar-list{margin:4px 0 8px}
+  .rt-list{display:grid;gap:4px}
+  .rt-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:4px 6px;border-radius:7px;border:1px solid transparent}
+  .rt-row.sel{border-color:var(--line2);background:var(--panel2)}
+  .rt-row.past{opacity:.6}
+  .rt-row .rt-pick{flex:0 0 170px;text-align:left}
+  .rt-row input,.rt-row select{width:auto;flex:1 1 120px;min-width:0;padding:4px 7px;font-size:12px}
+  .pj-sub{font-family:var(--mono);font-size:10px;color:var(--ink-faint);text-transform:uppercase;margin:10px 0 6px}
   .ov-surg{margin-top:3px}
   .ov-surg .ov-inj{padding-left:18px}
   /* the procedure, surgery by surgery */
@@ -1477,7 +1488,7 @@
   <div class="top" id="topBar">
     <div class="brand"><h1>Arbor</h1><span class="sub">Segev · Schiller lab</span></div>
     <div class="tabs" id="tabs">
-      <button class="tab" data-v="projects">Experiments</button>
+      <button class="tab" data-v="projects">Projects</button>
       <button class="tab on" data-v="timeline">Timeline</button>
       <button class="tab" data-v="materials">Materials</button>
       <button class="tab" data-v="library">Library</button>
@@ -3439,6 +3450,15 @@ function mergeFields(theirs,mine,base,id,isDiary){
         out[k]=merged; return;
       }
     }
+    if(k==="routine"&&theirs[k]&&mine[k]&&typeof theirs[k]==="object"&&typeof mine[k]==="object"){
+      // one turn per date: two people filling different weeks keep both
+      const w=(was[k]||{}).occ||{}, t=theirs[k].occ||{}, m=mine[k].occ||{}, occ={};
+      new Set([...Object.keys(t),...Object.keys(m)]).forEach(d=>{
+        const mineCh=JSON.stringify(m[d])!==JSON.stringify(w[d]);
+        const pick=mineCh?m[d]:t[d]; if(pick) occ[d]=pick; });
+      const kind=(JSON.stringify(mine[k].kind)!==JSON.stringify((was[k]||{}).kind))?mine[k].kind:theirs[k].kind;
+      out[k]=Object.assign({},theirs[k],{kind,occ}); return;
+    }
     if(k==="roster"){
       // merged whether or not this device changed it: the file's copy is
       // pruned of private animals, so taking theirs wholesale would drop mine
@@ -5388,6 +5408,9 @@ function calColor(x){ return x.kind==="task"?taskColorOf(x.src):stepColor(x.src)
 // just ends up with a set of zero or one. Time passing puts nothing in this
 // set by itself; only the checkmark does.
 function occDone(t,when){
+  // a feeding duty is done when that day's feedings are — read, never ticked
+  if(when&&isRoutine(t)&&routineKind(t)==="feeding"){ const f=feedingOn(when);
+    return String(when).slice(0,10)<=todayDateStr()&&(!f||f.done===f.rows.length); }
   return !!when && (t.doneOccurrences||[]).includes(when);
 }
 function setOccDone(t,when,val){
@@ -5988,7 +6011,7 @@ function quickFindHits(q){
   });
   (DB.projects||[]).forEach(pr=>{
     const r=score(pr.name,pr.question); if(!isFinite(r))return;
-    add("Project","📁",pr.name,"",r,go(()=>projectModal(pr,()=>render())));
+    add(isArea(pr)?"Area":"Project","📁",pr.name,"",r,go(()=>projectModal(pr,()=>render())));
   });
   DB.animals.forEach(a=>(a.diary||[]).forEach(e=>{
     const def=diaryTypeDef(e.type);
@@ -6074,6 +6097,7 @@ function openCalItem(x){
     paintDiary(document.getElementById("calDiaryEditHost"),a,{editId:e.id,onChange:renderTimeline,closeOnDone:true});
     return;
   }
+  if(x.kind==="task"&&isRoutine(x.src)){ routineModal(x.src,x.deadline,()=>renderTimeline()); return; }
   if(x.kind==="task"){ taskEditor(x.src,()=>{ renderTimeline(); },x.deadline,x.endDate); return; }
   // an experiment's own deadline — same as the task/diary branches above,
   // opens its own editor directly rather than navigating to a list page
@@ -6822,9 +6846,9 @@ function upcomingNotifications(wantEvents){
   // honest to say about being "due". Easy to bring back if that changes: this
   // is the one line that added it.
   const tasks=[
-    ...taskList().filter(t=>!!t.isEvent===!!wantEvents).flatMap(t=>taskOccurrences(t,taskLookback,taskHorizon)
+    ...taskList().filter(t=>!!t.isEvent===!!wantEvents&&drawsAsTask(t)).flatMap(t=>taskOccurrences(t,taskLookback,taskHorizon)
       .filter(o=>!occDone(t,o.when))
-      .map(o=>({kind:"task",t:{id:t.id,title:t.title,deadline:o.when,endDate:o.endDate,experimentId:t.experimentId},
+      .map(o=>({kind:"task",t:{id:t.id,title:occTitle(t,o.when),deadline:o.when,endDate:o.endDate,experimentId:t.experimentId},
                 overdue:dueClass(o.when,"",o.endDate)==="overdue"})))
   ].sort((x,y)=>x.t.deadline.localeCompare(y.t.deadline));
   if(wantEvents) return {tasks,diaryItems:[]};
@@ -6893,7 +6917,7 @@ function openNotificationsModal(wantEvents){
     if(oh){ closeModal(); const fx=oh.dataset.fix, dt=oh.dataset.date;
       if(fx==="postop"&&dt) openPostopModal(dt); else if(fx==="feeding"&&dt) openFeedingModal(dt); else animalModal(oh.dataset.a); return; }
     const ot=e.target.closest(".ntf-opentask"), oa=e.target.closest(".ntf-openanimal");
-    if(ot){ closeModal(); const tk=taskOf(ot.dataset.id); if(tk)taskEditor(tk,()=>render(),ot.dataset.when||null,ot.dataset.end||null); else { const ex=expById(ot.dataset.id); if(ex)experimentModal(ex,()=>render()); } }
+    if(ot){ closeModal(); const tk=taskOf(ot.dataset.id); if(tk&&isRoutine(tk)){ routineModal(tk,ot.dataset.when,()=>render()); return; } if(tk)taskEditor(tk,()=>render(),ot.dataset.when||null,ot.dataset.end||null); else { const ex=expById(ot.dataset.id); if(ex)experimentModal(ex,()=>render()); } }
     else if(oa){ closeModal(); animalSearch=oa.dataset.name; switchTo("animals"); }   // one-off jump, not a saved search — see openCalItem's own note
   });
 }
@@ -7692,6 +7716,167 @@ function convertToWorkstream(ex,kind){
 function convertToExperiment(ws){ delete ws.kind; persist(); }
 function experimentHasAnimals(ex){
   return (ex.links||[]).some(l=>l.kind==="animal")||Object.keys(ex.groups||{}).length>0||Object.keys(ex.planRuns||{}).length>0;
+}
+
+/* ── AREAS AND ROUTINES ──
+   Two kinds of top-level container (Yaron, 04/11/2026). A PROJECT has an aim
+   and ends; it holds experiments and workstreams. An AREA is the lab's
+   ongoing life — Lab life, Seminars, Teaching — and never ends; it holds
+   routines, and may hold workstreams (a course for a term). An area is a
+   record in DB.projects marked kind:"area", so colour, sharing, notes and
+   the checklist are a project's; it never holds an experiment or an animal.
+
+   A ROUTINE is a repeating Timeline item whose "Part of" is an area. The
+   schedule stays the task's own — nothing is stored twice — and t.routine
+   adds what it is and, per occurrence (keyed by its date), whose turn it is
+   and, for a meeting, the talk and what it is about.
+
+   A routine stores no animals and no records. A feeding duty COVERS whoever
+   is on restriction that day, worked out from the animals (feedingOn), and
+   what is typed in it is saved into each animal's own record; its occurrence
+   is done when that day's feedings are. A talk is ABOUT a project,
+   experiment or workstream, which shows it without owning it. One home for
+   every fact; everywhere else it only appears. */
+function isArea(x){ return !!x&&x.kind==="area"; }
+function projectsOnly(){ return (DB.projects||[]).filter(x=>!isArea(x)); }
+function areaList(){ return (DB.projects||[]).filter(isArea); }
+function addArea(init){ return Object.assign(addProject(),{kind:"area"},init||{}); }
+function projectHasResearch(pr){ return DB.experiments.some(x=>x.projectId===pr.id&&!isWorkstream(x)); }
+const ROUTINE_KINDS=[["meeting","🗣","Meeting","who presents, and what the talk is about"],
+  ["feeding","⚖","Feeding duty","covers the animals on restriction that day"],
+  ["other","↻","Other","just whose turn"]];
+function isRoutine(t){ const pr=t&&t.projectId?projById(t.projectId):null; return !!(t&&t.repeat&&t.repeat.every&&isArea(pr)); }
+function routineKind(t){ const k=(t&&t.routine&&t.routine.kind)||"other"; return ROUTINE_KINDS.some(x=>x[0]===k)?k:"other"; }
+function routineIcon(t){ return (ROUTINE_KINDS.find(x=>x[0]===routineKind(t))||ROUTINE_KINDS[2])[1]; }
+function routineOcc(t,when){ return ((t&&t.routine&&t.routine.occ)||{})[String(when||"").slice(0,10)]||{}; }
+function setRoutineOcc(t,when,patch){
+  const d=String(when).slice(0,10); t.routine=t.routine||{kind:routineKind(t)};
+  const occ=t.routine.occ=Object.assign({},t.routine.occ||{});
+  const v=Object.assign({},occ[d]||{},patch);
+  Object.keys(v).forEach(k=>{ if(v[k]==null||v[k]===""||(Array.isArray(v[k])&&!v[k].length)) delete v[k]; });
+  if(Object.keys(v).length) occ[d]=v; else delete occ[d];
+}
+function feedingRoutines(){ return taskList().filter(t=>isRoutine(t)&&routineKind(t)==="feeding"); }
+// the feeding duty that covers a day, if any — its time is that day's
+// feeding time, and its turn is who is feeding
+function feedingDutyOn(date){
+  const d=String(date).slice(0,10);
+  for(const t of feedingRoutines()){ const o=taskOccurrences(t,d,d)[0]; if(o) return {t,when:o.when}; }
+  return null;
+}
+// what a routine occurrence is called on the Timeline and in the bell
+function occTitle(t,when){
+  if(!isRoutine(t)) return t.title;
+  const o=routineOcc(t,when);
+  return [t.title,o.who,o.title?"“"+o.title+"”":""].filter(Boolean).join(" · ");
+}
+// a feeding duty is drawn as the day's feeding, which already carries its name
+function drawsAsTask(t){ return !(isRoutine(t)&&routineKind(t)==="feeding"); }
+// everything said at a meeting about this project / experiment / workstream
+function talksAbout(id,fromISO,toISO){
+  const out=[];
+  taskList().filter(t=>isRoutine(t)&&routineKind(t)==="meeting").forEach(t=>{
+    Object.entries((t.routine&&t.routine.occ)||{}).forEach(([d,o])=>{
+      if((o.about||[]).includes(id)&&(!fromISO||d>=fromISO)&&(!toISO||d<=toISO)) out.push({t,date:d,o});
+    });
+  });
+  return out.sort((x,y)=>x.date.localeCompare(y.date));
+}
+// the "At meetings" line of a window: recent and coming talks about it
+function talksAboutHTML(id){
+  const today=todayDateStr(), list=talksAbout(id,addDaysISO(today,-60).slice(0,10));
+  if(!list.length) return "";
+  return `<div class="fld"><label>At meetings</label>${list.map(x=>`<div class="pin-row">
+      <span class="pin-icon">🗣</span><button type="button" class="ov-link talk-open" data-t="${escAttr(x.t.id)}" data-d="${escAttr(x.date)}">${esc(x.t.title||"meeting")} · ${esc(fmtDMY(x.date))}</button>
+      ${x.o.who?`<span class="ov-dim">${esc(x.o.who)}</span>`:""}${x.o.title?`<span class="pin-sum">“${esc(x.o.title)}”</span>`:""}
+      ${x.date<today?`<span class="st-chip">past</span>`:""}</div>`).join("")}</div>`;
+}
+function wireTalksAbout(root,reopen){
+  root.querySelectorAll(".talk-open").forEach(b=>b.onclick=()=>{ const t=taskOf(b.dataset.t); if(!t) return;
+    if(reopen) reopen(); closeModal(); routineModal(t,b.dataset.d,()=>render()); });
+}
+// people a turn can name: the lab members Arbor knows, and every name used before
+function turnPeople(){
+  const set=new Set(labPeople());
+  taskList().forEach(t=>Object.values((t.routine&&t.routine.occ)||{}).forEach(o=>{ if(o.who) set.add(o.who); }));
+  return [...set].filter(Boolean).sort((a,b)=>a.localeCompare(b));
+}
+/* One routine: its upcoming occurrences, whose turn each is, and — for a
+   meeting — the talk and what it is about; for a feeding duty, the day's
+   feeding list itself, the same rows as the feeding window, saved into each
+   animal. The schedule is the Timeline item's own, edited in its editor. */
+// an area's routines, one line each: when next, and whose turn
+function areaRoutinesEl(ar,after){
+  const el=document.createElement("div"); el.className="ar-list";
+  const today=todayDateStr();
+  const list=taskList().filter(t=>t.projectId===ar.id&&isRoutine(t)).sort((a,b)=>String(a.title||"").localeCompare(String(b.title||"")));
+  el.innerHTML=list.map(t=>{ const nx=taskOccurrences(t,today,addDays(today,120))[0], oc=nx?routineOcc(t,nx.when):{};
+    return `<div class="pin-row" data-t="${escAttr(t.id)}"><span class="pin-icon">${routineIcon(t)}</span>
+      <button type="button" class="ov-link rt-open">${esc(t.title||"(unnamed routine)")}</button>
+      <span class="ov-dim">${esc(repeatLabel(t.repeat,t.when))}${t.when&&hasTime(t.when)?" "+esc(t.when.slice(11,16)):""}</span>
+      ${nx?`<span class="ov-dim">next ${esc(fmtDMY(nx.when))}</span>`:`<span class="st-chip">ended</span>`}
+      ${oc.who?`<span class="st-chip st-turn">${esc(oc.who)}</span>`:""}${oc.title?`<span class="pin-sum">“${esc(oc.title)}”</span>`:""}</div>`; }).join("")
+    ||`<div class="pc-empty" style="margin:4px 0">No routines yet — a repeating Timeline item whose "Part of" is ${esc(ar.name||"this area")} is one.</div>`;
+  el.querySelectorAll(".pin-row").forEach(r=>r.querySelector(".rt-open").onclick=()=>{ const t=taskOf(r.dataset.t); if(t){ closeModal(); routineModal(t,null,after); } });
+  return el;
+}
+function routineModal(t,focusDate,after){
+  const today=todayDateStr(), area=projById(t.projectId);
+  const kind=routineKind(t);
+  const occs=taskOccurrences(t,addDaysISO(today,-14).slice(0,10),addDays(today,120)).slice(0,12);
+  let sel=String(focusDate||((occs.find(o=>o.when.slice(0,10)>=today)||occs[occs.length-1]||{}).when)||today).slice(0,10);
+  const aboutOpts=()=>[...projectsOnly().map(p=>[p.id,"📁 "+entityLabel(p)]),...experimentsOnly().map(x=>[x.id,"🧫 "+entityLabel(x)]),
+    ...workstreamList().map(x=>[x.id,wsKind(x).icon+" "+entityLabel(x)])];
+  const draw=()=>{
+    const people=turnPeople();
+    const rows=occs.map(o=>{ const d=o.when.slice(0,10), oc=routineOcc(t,o.when), past=d<today;
+      return `<div class="rt-row${d===sel?" sel":""}${past?" past":""}" data-d="${escAttr(d)}">
+        <button type="button" class="ov-link rt-pick">${esc(fmtWhenFull(o.when))}</button>
+        <input class="rt-who" list="rt_people" value="${escAttr(oc.who||"")}" placeholder="${kind==="meeting"?"who presents":"whose turn"}">
+        ${kind==="meeting"?`<input class="rt-title" value="${escAttr(oc.title||"")}" placeholder="talk">
+          <select class="rt-about"><option value="">about…</option>${aboutOpts().map(([v,l])=>`<option value="${escAttr(v)}"${(oc.about||[])[0]===v?" selected":""}>${esc(l)}</option>`).join("")}</select>`:""}
+        ${kind==="feeding"?`<span class="ov-dim">${(()=>{ const f=feedingOn(d); return f?`${f.rows.length} on restriction${d<=today?` · fed ${f.done}/${f.rows.length}`:""}`:"nobody on restriction"; })()}</span>`:""}
+      </div>`; }).join("");
+    const f=kind==="feeding"?feedingOn(sel):null;
+    document.getElementById("rt_body").innerHTML=`
+      <div class="rt-list">${rows||`<div class="pc-empty">No dates in the next four months — check its schedule.</div>`}</div>
+      <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button type="button" class="btn ghost" id="rt_fill" style="font-size:12px" title="Give the empty upcoming dates a turn each, in order">↻ Fill turns in order…</button></div>
+      ${kind==="feeding"?`<div class="pj-sub" style="margin-top:14px">${esc(fmtWhenFull(sel))} — who needs feeding</div>
+        ${f?`<div class="pg-wrap"><table class="pg-tbl fd-tbl">${feedingHeadHTML(false)}<tbody>${f.rows.map(({a,st})=>feedingRowHTML(a,st)).join("")}</tbody></table></div>
+          <div class="ov-dim" style="font-size:12px;margin-top:4px">Saved into each animal's own record — the same as the feeding window and the restriction board.</div>
+          <button type="button" class="btn accent" id="rt_feedsave" style="margin-top:6px">Save feeding</button>`
+          :`<div class="pc-empty">Nobody is on restriction that day.</div>`}`:""}
+      <datalist id="rt_people">${people.map(n=>`<option value="${escAttr(n)}">`).join("")}</datalist>`;
+    const root=document.getElementById("rt_body");
+    root.querySelectorAll(".rt-row").forEach(r=>{ const d=r.dataset.d;
+      r.querySelector(".rt-pick").onclick=()=>{ sel=d; draw(); };
+      r.querySelector(".rt-who").addEventListener("change",e=>{ setRoutineOcc(t,d,{who:e.target.value.trim()}); persist(); });
+      const ti=r.querySelector(".rt-title"); if(ti) ti.addEventListener("change",e=>{ setRoutineOcc(t,d,{title:e.target.value.trim()}); persist(); });
+      const ab=r.querySelector(".rt-about"); if(ab) ab.addEventListener("change",e=>{ setRoutineOcc(t,d,{about:e.target.value?[e.target.value]:[]}); persist(); });
+    });
+    root.querySelectorAll(".fd-open").forEach(b=>b.onclick=()=>{ closeModal(); animalModal(b.dataset.a); });
+    const fs=document.getElementById("rt_feedsave"); if(fs) fs.onclick=()=>{
+      const n=saveFeedingRows(root,sel); if(n==null) return; render(); draw();
+      toast(n?`Feeding saved for ${n} animal${n===1?"":"s"}`:"Nothing entered"); };
+    document.getElementById("rt_fill").onclick=()=>{
+      const names=(prompt("Names, in turn order (comma-separated):",people.join(", "))||"").split(",").map(x=>x.trim()).filter(Boolean);
+      if(!names.length) return;
+      let i=0; occs.filter(o=>o.when.slice(0,10)>=today&&!routineOcc(t,o.when).who).forEach(o=>{ setRoutineOcc(t,o.when,{who:names[i++%names.length]}); });
+      persist(); draw(); };
+  };
+  modal(`<h3>${routineIcon(t)} ${esc(t.title||"Routine")}</h3>
+    <div class="ov-dim" style="margin:-4px 0 10px;font-size:12px">${esc(area?entityLabel(area):"")} · ${esc(repeatLabel(t.repeat,t.when))}${t.when&&hasTime(t.when)?" · "+esc(t.when.slice(11,16)):""}
+      <button type="button" class="ov-link" id="rt_sched" style="margin-left:6px">edit schedule</button></div>
+    <div class="fld"><label>What it is</label><div class="seg" id="rt_kind">${ROUTINE_KINDS.map(([k,ic,l,tip])=>
+      `<button type="button" data-k="${k}" class="${kind===k?"on":""}" title="${escAttr(tip)}">${ic} ${l}</button>`).join("")}</div></div>
+    <div class="fld"><label>${kind==="meeting"?"Who presents":"Whose turn"}</label><div id="rt_body"></div></div>
+    <div class="actions"><button class="btn accent" id="rt_done">Done</button></div>`,{wide:true});
+  draw();
+  document.getElementById("rt_kind").onclick=e=>{ const b=e.target.closest("button"); if(!b) return;
+    t.routine=Object.assign({},t.routine||{},{kind:b.dataset.k}); persist(); closeModal(); routineModal(t,sel,after); };
+  document.getElementById("rt_sched").onclick=()=>{ closeModal(); taskEditor(t,()=>routineModal(t,sel,after)); };
+  document.getElementById("rt_done").onclick=()=>{ closeModal(); if(after) after(); };
 }
 
 /* ── CHECKLIST — one for a project, an experiment and a workstream ──
@@ -8646,7 +8831,7 @@ function autoGrowTextarea(el){
    whether it is going, and where it stands, in a line. */
 function statusRowHTML(x,pfx){
   return `<div class="drow st-row">
-      <div class="fld" style="flex:0 0 auto"><label>Status</label><div class="seg" id="${pfx}_status">${ENTITY_STATUSES.map(([v,l])=>
+      <div class="fld" style="flex:0 0 auto" ${isArea(x)?"hidden":""}><label>Status</label><div class="seg" id="${pfx}_status">${ENTITY_STATUSES.map(([v,l])=>
         `<button type="button" data-v="${v}" class="${entityStatus(x)===v?"on":""}">${l}</button>`).join("")}</div></div>
       <div class="fld" style="flex:1"><label>Where it stands</label>
         <input id="${pfx}_summary" value="${escAttr(x.summary||"")}" placeholder="one line — what is happening now"></div></div>`;
@@ -8663,8 +8848,10 @@ function statusChipHTML(x){
 }
 function workstreamModal(ws,after){
   const K=wsKind(ws);
-  const projOpts=[...DB.projects].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).map(pr=>
-    `<option value="${pr.id}" ${ws.projectId===pr.id?"selected":""}>${esc(pr.name||"(unnamed project)")}</option>`).join("");
+  // a workstream serves a project, or belongs to an area (a course for a term)
+  const optsOf=list=>[...list].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).map(pr=>
+    `<option value="${pr.id}" ${ws.projectId===pr.id?"selected":""}>${esc(entityLabel(pr))}</option>`).join("");
+  const projOpts=`<optgroup label="Projects">${optsOf(projectsOnly())}</optgroup>${areaList().length?`<optgroup label="Areas">${optsOf(areaList())}</optgroup>`:""}`;
   const kindField=f=>{ const v=(ws.kindData||{})[f.key]||"";
     if(f.type==="select") return `<select class="ws-kf" data-key="${f.key}"><option value="">—</option>${f.options.map(o=>`<option${o===v?" selected":""}>${esc(o)}</option>`).join("")}</select>`;
     if(f.type==="protocol"){ const opts=linkOptions("protocol");
@@ -8678,7 +8865,7 @@ function workstreamModal(ws,after){
       <label class="ws-shade" title="Take a shade of the project's own colour"><input type="checkbox" id="ws_color_auto" style="width:auto" ${ws.color?"":"checked"}>shade of project</label>
     </div>
     <div class="drow">
-      <div class="fld" style="flex:1"><label>Project</label><select id="ws_proj"><option value="">No project</option>${projOpts}</select></div>
+      <div class="fld" style="flex:1"><label>Project or area</label><select id="ws_proj">${ws.projectId?"":`<option value="" selected>— choose its project</option>`}${projOpts}</select></div>
       <div class="fld" style="flex:1"><label>Kind</label><select id="ws_kind">${Object.entries(WS_KINDS).map(([k,d])=>
         `<option value="${k}" ${(ws.wsKind||"tool")===k?"selected":""}>${d.icon} ${esc(d.label)}</option>`).join("")}</select></div>
     </div>
@@ -8692,6 +8879,7 @@ function workstreamModal(ws,after){
         <button type="button" id="ws_end" class="datebtn ${ws.endDate?"":"datebtn-empty"}">${ws.endDate?fmtWhenFull(ws.endDate):"📅 "+K.end.toLowerCase()}</button></div>
     </div>
     <div class="fld"><label>Serves</label><div id="ws_serves"></div></div>
+    <div id="ws_talks">${talksAboutHTML(ws.id)}</div>
     <div class="fld"><label>Checklist</label><div id="ws_check"></div></div>
     <div class="fld"><label>Milestones</label><div id="ws_miles"></div></div>
     <div class="fld"><label>Tasks</label><div id="ws_tasks"></div></div>
@@ -8702,6 +8890,7 @@ function workstreamModal(ws,after){
     <div class="actions"><button class="btn accent" id="ws_save">Done</button></div>`,{wide:true});
   wireShareRow(document.getElementById("modal"),ws,null,"experiments");
   wireStatusRow(ws,"ws");
+  wireTalksAbout(document.getElementById("ws_talks"),()=>{ ws.title=document.getElementById("ws_name").value; persist(); });
   const save=()=>{
     ws.title=document.getElementById("ws_name").value;
     ws.color=document.getElementById("ws_color_auto").checked?null:document.getElementById("ws_color").value;
@@ -8790,12 +8979,13 @@ function experimentModal(st,after){
         <input type="checkbox" id="sm_color_auto" style="width:auto" ${st.color?"":"checked"}>shade of project</label>
     </div>
     <div class="fld"><label>Project</label>
-      <select id="sm_proj"><option value="">No project</option>${[...DB.projects].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).map(pr=>
+      <select id="sm_proj">${st.projectId?"":`<option value="" selected>— choose its project</option>`}${[...projectsOnly()].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).map(pr=>
         `<option value="${pr.id}" ${st.projectId===pr.id?"selected":""}>${esc(pr.name||"(unnamed project)")}</option>`).join("")}<option value="__new__">+ New project…</option></select></div>
     ${statusRowHTML(st,"sm")}
     <div class="fld"><label>Research question</label>
       <textarea id="sm_q" rows="2">${esc(st.question||"")}</textarea></div>
     <div id="sm_uses"></div>
+    <div id="sm_talks">${talksAboutHTML(st.id)}</div>
     <div class="fld"><label>Plan for animals in no group</label>
       <div style="display:flex;gap:6px;align-items:center">
         <select id="sm_plan" style="flex:1"><option value="">— none</option>${
@@ -9124,6 +9314,7 @@ function experimentModal(st,after){
 
   mountRefsEditor(document.getElementById("sm_links"),st,()=>{ drawGroupDefs(); drawGroups(); });
   wireStatusRow(st,"sm");
+  wireTalksAbout(document.getElementById("sm_talks"),save);
   mountChecklist(document.getElementById("sm_check"),st,false,()=>{});
   // the workstreams that serve it, from their own "Serves"
   { const uses=workstreamsServing(st), host=document.getElementById("sm_uses");
@@ -9143,25 +9334,29 @@ function experimentModal(st,after){
 // just a name/colour/question and whatever it links to directly ("the
 // project in general", as opposed to any one of its member experiments).
 function projectModal(pr,after){
-  modal(`<h3>Project</h3>
+  // an area is the same window without what only research has: no question,
+  // no animals, no experiments to shade — routines in their place
+  const area=isArea(pr), H=area?"hidden":"";
+  modal(`<h3>${area?"Area":"Project"}</h3>
     <div class="drow">
       <div class="fld" style="flex:1"><label>Name</label><input id="pm_name" value="${escAttr(pr.name)}" autofocus></div>
       ${colorBtnHTML(pr.color,{attrs:'id="pm_color"',size:34,fallback:"#7db4ff",scope:"project",style:"align-self:flex-end;margin-bottom:2px"})}
-      <button type="button" class="btn ghost" id="pm_recolour" style="font-size:11.5px;flex:0 0 auto;align-self:flex-end;margin-bottom:2px"
+      <button type="button" class="btn ghost" id="pm_recolour" ${H} style="font-size:11.5px;flex:0 0 auto;align-self:flex-end;margin-bottom:2px"
         title="Give every experiment in this project a shade of this colour">🎨 Shade its experiments</button>
     </div>
-    <div id="pm_shades" style="margin:-6px 0 14px"></div>
+    <div id="pm_shades" ${H} style="margin:-6px 0 14px"></div>
     ${statusRowHTML(pr,"pm")}
-    <div class="fld"><label>Research question</label>
+    <div class="fld" ${H}><label>Research question</label>
       <textarea id="pm_q" rows="2">${esc(pr.question||"")}</textarea></div>
-    <div class="fld"><label>In this project</label><div id="pm_inside"></div></div>
+    <div class="fld"><label>In this ${area?"area":"project"}</label><div id="pm_inside"></div></div>
     <div class="fld"><label>Checklist</label><div id="pm_check"></div></div>
     <div class="fld"><label>Notes</label>
       <textarea id="pm_notes" rows="3">${esc(pr.notes||"")}</textarea></div>
-    <div class="fld"><label style="display:flex;align-items:center;gap:8px">Animals
+    <div class="fld" ${H}><label style="display:flex;align-items:center;gap:8px">Animals
       <button type="button" class="ov-btn" id="pm_cohortcols" title="Which facts to show for each animal">columns…</button></label>
       <div id="pm_cohort"></div></div>
-    <div class="fld"><label>Animals in the project</label><div id="pm_animals"></div></div>
+    <div class="fld" ${H}><label>Animals in the project</label><div id="pm_animals"></div></div>
+    <div id="pm_talks">${area?"":talksAboutHTML(pr.id)}</div>
     <div class="fld"><label>Notes &amp; references</label><div id="pm_links"></div></div>
     <div class="share-box">
       <label class="share-main"><input type="checkbox" id="pm_shared" ${pr.shared?"checked":""}>
@@ -9198,7 +9393,8 @@ function projectModal(pr,after){
         </div>
       </div>
     </div>
-    <div class="drow" style="margin-top:16px"><button class="btn danger" id="pm_del">Delete project</button></div>
+    <div class="drow" style="margin-top:16px;gap:8px"><button class="btn danger" id="pm_del">Delete ${area?"area":"project"}</button>
+      <button class="btn ghost" id="pm_kind" title="${area?"It has an aim and an end after all":"It is ongoing — like lab meetings, seminars or teaching — rather than research with an end"}">Make it ${area?"a project":"an area"}</button></div>
     <div class="actions"><button class="btn accent" id="pm_save">Done</button></div>`,{wide:true});
   const save=()=>{
     pr.name=document.getElementById("pm_name").value;
@@ -9245,6 +9441,21 @@ function projectModal(pr,after){
      contents, so it is read, not written twice. */
   function drawInside(){
     const host=document.getElementById("pm_inside");
+    if(area){
+      host.innerHTML="";
+      host.appendChild(areaRoutinesEl(pr,()=>projectModal(pr,after)));
+      DB.experiments.filter(x=>x.projectId===pr.id&&isWorkstream(x)).forEach(x=>{ const r=document.createElement("div"); r.className="pin-row";
+        r.innerHTML=`<span class="pin-icon">${wsKind(x).icon}</span><button type="button" class="ov-link">${esc(entityLabel(x))}</button>${statusChipHTML(x)}${x.summary?`<span class="ov-dim pin-sum">${esc(x.summary)}</span>`:""}`;
+        r.querySelector("button").onclick=()=>{ save(); closeModal(); workstreamModal(x,()=>projectModal(pr,after)); }; host.appendChild(r); });
+      const b=document.createElement("div"); b.style.cssText="display:flex;gap:6px;margin-top:6px";
+      b.innerHTML=`<button type="button" class="btn ghost" id="pm_newrt" style="font-size:12px">＋ Routine</button>
+        <button type="button" class="btn ghost" id="pm_newws" style="font-size:12px">＋ Workstream</button>`;
+      host.appendChild(b);
+      b.querySelector("#pm_newrt").onclick=()=>{ save(); closeModal(); const t=addTask({title:"",projectId:pr.id,when:todayDateStr()+"T"+DEFAULT_ENTRY_TIME,repeat:{every:"week",until:null}});
+        taskEditor(t,()=>{ if(isRoutine(t)) routineModal(t,null,()=>projectModal(pr,after)); else projectModal(pr,after); }); };
+      b.querySelector("#pm_newws").onclick=()=>{ save(); closeModal(); const ws=addWorkstream({projectId:pr.id,wsKind:"teaching"}); workstreamModal(ws,()=>projectModal(pr,after)); };
+      return;
+    }
     const kids=DB.experiments.filter(x=>x.projectId===pr.id)
       .sort((a,b)=>(isWorkstream(a)-isWorkstream(b))||((entityStatus(a)==="done")-(entityStatus(b)==="done"))||String(a.title||"").localeCompare(String(b.title||"")));
     const row=x=>{ const ck=checklistProgress(x);
@@ -9260,6 +9471,12 @@ function projectModal(pr,after){
     host.querySelector("#pm_newws").onclick=()=>{ save(); closeModal(); const ws=addWorkstream({projectId:pr.id}); workstreamModal(ws,()=>projectModal(pr,after)); };
   }
   drawInside();
+  wireTalksAbout(document.getElementById("pm_talks"),save);
+  document.getElementById("pm_kind").onclick=()=>{
+    if(!area&&projectHasResearch(pr)){ toast("It has experiments — research stays a project. Move them first."); return; }
+    if(!area&&(pr.links||[]).some(l=>l.kind==="animal")){ toast("It has animals — research stays a project."); return; }
+    save(); if(area) delete pr.kind; else pr.kind="area"; persist(); closeModal(); projectModal(pr,after);
+    toast(area?"Now a project":"Now an area"); };
   mountLinkEditor(document.getElementById("pm_animals"),pr,()=>{},{only:["animal"]});
   mountRefsEditor(document.getElementById("pm_links"),pr,()=>{});
   wireCohort(document.getElementById("pm_cohort"),()=>cohortGroupsOfProject(pr),document.getElementById("pm_cohortcols"));
@@ -9566,7 +9783,7 @@ function partOfOptionsHTML({valueOf,selected,exclude,noWork}){
   const byTitle=(a,b)=>String(a.title||"").localeCompare(String(b.title||""));
   const expOpt=(e,indent)=>{ const v=valueOf("e",e.id);
     return `<option value="${v}"${mark(v)}>${indent?IND:""}${isWorkstream(e)?wsKind(e).icon+" ":""}${esc(entityLabel(e))}</option>`; };
-  let html=[...DB.projects]
+  let html=[...(noWork?projectsOnly():DB.projects)]
     .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")))
     .map(pr=>{
       const kids=DB.experiments.filter(e=>e.projectId===pr.id&&!skip(e.id)).sort(byTitle);
@@ -9819,25 +10036,17 @@ function renderExperiments(){
       </select>
       <label style="margin-left:8px;display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim);cursor:pointer">
         <input type="checkbox" id="ex_hidedone" style="width:auto;margin:0">Hide completed</label>
-      <span class="af-label" style="margin-left:8px">View</span>
-      <select id="ex_viewby" class="af-sel">
-        <option value="flat">Flat</option>
-        <option value="project">By project</option>
-      </select>
     </div>
     <div style="margin-left:auto;display:flex;gap:8px">
-      <button id="pj_addproj" class="btn ghost" style="font-size:12px">＋ Project</button>
-      <button id="pj_addws" class="btn ghost" style="font-size:12px" title="Work under a project that is not an experiment — a program, a method, a paper, a course">＋ Workstream</button>
-      <button id="pj_add" class="btn accent" style="font-size:12px">＋ Experiment</button>
+      <button id="pj_addarea" class="btn ghost" style="font-size:12px" title="The lab's ongoing life — lab meetings, seminars, teaching, duties">＋ Area</button>
+      <button id="pj_addproj" class="btn accent" style="font-size:12px">＋ Project</button>
     </div>`;
   host.appendChild(top);
-  top.querySelector("#pj_add").onclick=()=>{ const ex=addExperiment(); experimentModal(ex,()=>renderExperiments()); };
-  top.querySelector("#pj_addws").onclick=()=>{ const ws=addWorkstream(); workstreamModal(ws,()=>renderExperiments()); };
   top.querySelector("#pj_addproj").onclick=()=>{ const pr=addProject(); projectModal(pr,()=>renderExperiments()); };
-  const sortSel=top.querySelector("#ex_sort"), groupSel=top.querySelector("#ex_group"), hideDoneChk=top.querySelector("#ex_hidedone"), viewBySel=top.querySelector("#ex_viewby");
+  top.querySelector("#pj_addarea").onclick=()=>{ const ar=addArea(); projectModal(ar,()=>renderExperiments()); };
+  const sortSel=top.querySelector("#ex_sort"), groupSel=top.querySelector("#ex_group"), hideDoneChk=top.querySelector("#ex_hidedone");
   sortSel.value=DB.config.expTaskSort||"alpha"; groupSel.value=DB.config.expTaskGroup||"none";
   hideDoneChk.checked=!!DB.config.expTaskHideDone;
-  viewBySel.value=DB.config.expViewBy||"flat";
   // Making a project is not a property of how the list is arranged. Hiding
   // this outside "By project" left a new workspace — which starts on Flat, and
   // the View is device-local so it never arrives from anyone else — with no
@@ -9845,100 +10054,108 @@ function renderExperiments(){
   sortSel.addEventListener("change",()=>{ DB.config.expTaskSort=sortSel.value; persist(); renderExperiments(); });
   groupSel.addEventListener("change",()=>{ DB.config.expTaskGroup=groupSel.value; persist(); renderExperiments(); });
   hideDoneChk.addEventListener("change",()=>{ DB.config.expTaskHideDone=hideDoneChk.checked; persist(); renderExperiments(); });
-  viewBySel.addEventListener("change",()=>{ DB.config.expViewBy=viewBySel.value; persist(); renderExperiments(); });
 
-  /* A project holding no experiments used to be unreachable on this page: the
-     empty state fired on experiments alone and returned before a single
-     project was drawn, and Flat view only ever draws experiment cards. A
-     project shared with you arrives exactly like that — tasks, no experiments
-     — so none of it could be seen, whichever view was chosen. */
-  const hasExp=DB.experiments.length, hasProj=(DB.projects||[]).length;
-  if(!hasExp&&!hasProj){
+  /* The page is the hierarchy (Yaron, 04/11/2026): a project, and under it
+     its experiments and its workstreams, side by side — a workstream serves
+     experiments, it is never inside one. Each experiment and workstream is
+     made inside its project; one with no project waits at the bottom to be
+     filed. The project's own tasks sit with it, above its contents. */
+  if(!(DB.projects||[]).length&&!DB.experiments.length){
     host.appendChild(Object.assign(document.createElement("div"),
-      {className:"empty",textContent:"No projects or experiments yet."}));
-  } else if((DB.config.expViewBy||"flat")==="project"||!hasExp){
-    // A lens on the same flat list, not a different one — every section below
-    // draws its cards with the exact same drawExperimentCard used in Flat
-    // view, just clustered by experiment.projectId instead of shown in one
-    // grid, plus a final bucket for whatever isn't in a project at all.
-    const sectionHead=(color,name,pr)=>{
-      const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="18px";
-      h.innerHTML=`<span class="chip" style="background:${color}"></span><h2>${esc(name)}</h2>
-        ${pr?statusChipHTML(pr):""}
-        ${pr&&(pr.summary||pr.question)?`<span class="count" style="font-style:italic">${esc(pr.summary||pr.question)}</span>`:""}
-        ${pr?`<button type="button" class="exp-open" style="margin-left:auto">Edit</button>`:""}`;
-      if(pr) h.querySelector(".exp-open").onclick=()=>projectModal(pr,()=>renderExperiments());
-      return h;
-    };
-    [...DB.projects].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).forEach(pr=>{
-      const members=DB.experiments.filter(ex=>ex.projectId===pr.id);
-      host.appendChild(sectionHead(pr.color||"#7db4ff",pr.name||"(unnamed project)",pr));
-      if(pr.links&&pr.links.length){
-        const catHost=document.createElement("div"); catHost.innerHTML=projCatsHTML(pr); host.appendChild(catHost);
-        wireProjCats(catHost,pr,()=>renderExperiments());
-      }
-      // Work that belongs to the project itself rather than to any one
-      // experiment in it — ordering something, a meeting, writing it up.
-      // Listed above the experiment cards because it is the project's own.
-      const own=taskList().filter(t=>!t.isEvent&&t.projectId===pr.id);
-      if(own.length){
-        const key="__proj_"+pr.id, openP=openSteps.has(key);
-        const bar=document.createElement("div"); bar.className="proj-own-bar";
-        bar.innerHTML=`<button type="button" class="exp-caret">${openP?"▾":"▸"} ${own.length} task${own.length!==1?"s":""} in this project</button>`;
-        host.appendChild(bar);
-        bar.querySelector(".exp-caret").onclick=()=>{
-          openSteps.has(key)?openSteps.delete(key):openSteps.add(key); renderExperiments(); };
-        if(openP){
-          const rows=sortAndGroupItems(own);
-          const list=document.createElement("div"); list.className="step-list"; list.style.cssText="border-top:none;padding-top:0";
-          list.innerHTML=rows.map(stepRowHTML).join("");
-          host.appendChild(list);
-          list.querySelectorAll(".step-line").forEach(el=>{
-            const t=taskOf(el.dataset.id); if(!t)return;
-            wireStepDotEl(el,renderExperiments);
-            el.onclick=()=>taskEditor(t,()=>renderExperiments());
-          });
-        }
-      }
-      const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
-      if(members.length) members.forEach(ex=>grid.appendChild(drawExperimentCard(ex)));
-      else if(!own.length) grid.appendChild(Object.assign(document.createElement("div"),{className:"empty",textContent:"Nothing in this project yet."}));
-    });
-    const unassigned=DB.experiments.filter(ex=>!ex.projectId);
-    if(unassigned.length){
-      host.appendChild(sectionHead("#5b6678","Unassigned",null));
-      const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
-      unassigned.forEach(ex=>grid.appendChild(drawExperimentCard(ex)));
-    }
-  } else {
-    // Flat stays flat — experiment cards in one grid — but the projects sit
-    // above it as chips, so one with nothing in it yet is still there to open.
-    if(hasProj){
-      const strip=document.createElement("div");
-      strip.style.cssText="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px";
-      strip.innerHTML=[...DB.projects]
-        .sort((a,b)=>String(a.name||"").localeCompare(String(b.name||"")))
-        .map(pr=>{
-          const n=DB.experiments.filter(e=>e.projectId===pr.id).length
-                 +taskList().filter(t=>!t.isEvent&&t.projectId===pr.id).length;
-          return `<button type="button" class="proj-chip" data-id="${escAttr(pr.id)}"
-            style="display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line2);
-            background:var(--panel2);border-radius:20px;padding:4px 11px 4px 5px;cursor:pointer;
-            font-size:12px;color:var(--ink-dim)">
-            <span class="chip" style="background:${escAttr(pr.color||"#7db4ff")}"></span>
-            ${esc(pr.name||"(unnamed project)")}
-            ${n?`<span style="color:var(--ink-faint);font-size:11px">${n}</span>`:""}
-          </button>`;
-        }).join("");
-      host.appendChild(strip);
-      strip.querySelectorAll(".proj-chip").forEach(b=>{
-        const pr=(DB.projects||[]).find(x=>x.id===b.dataset.id);
-        if(pr) b.onclick=()=>projectModal(pr,()=>renderExperiments());
-      });
-    }
-    const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
-    DB.experiments.forEach(ex=>grid.appendChild(drawExperimentCard(ex)));
+      {className:"empty",textContent:"No projects yet — start with ＋ Project."}));
   }
+  const sectionHead=(color,name,pr)=>{
+    const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="18px";
+    const ck=pr?checklistProgress(pr):{n:0};
+    h.innerHTML=`<span class="chip" style="background:${color}"></span><h2>${esc(name)}</h2>
+      ${pr?statusChipHTML(pr):""}
+      ${pr&&(pr.summary||pr.question)?`<span class="count" style="font-style:italic">${esc(pr.summary||pr.question)}</span>`:""}
+      ${ck.n?`<span class="count" title="The project's checklist">☑ ${ck.done}/${ck.n}</span>`:""}
+      ${pr?`<span style="margin-left:auto;display:flex;gap:6px">
+        <button type="button" class="exp-open pj-newexp" title="A new experiment in ${escAttr(name)}">＋ Experiment</button>
+        <button type="button" class="exp-open pj-newws" title="Work in ${escAttr(name)} that is not an experiment — a program, a method, a paper, a course">＋ Workstream</button>
+        <button type="button" class="exp-open pj-edit">Edit</button></span>`
+        :`<span class="count">open one and choose its project</span>`}`;
+    if(pr){
+      h.querySelector(".pj-edit").onclick=()=>projectModal(pr,()=>renderExperiments());
+      h.querySelector(".pj-newexp").onclick=()=>{ const ex=addExperiment(); ex.projectId=pr.id; persist(); experimentModal(ex,()=>renderExperiments()); };
+      h.querySelector(".pj-newws").onclick=()=>{ const ws=addWorkstream({projectId:pr.id}); workstreamModal(ws,()=>renderExperiments()); };
+    }
+    return h;
+  };
+  const drawGrid=(list,label)=>{
+    if(!list.length) return;
+    if(label){ const l=document.createElement("div"); l.className="pj-sub"; l.textContent=label; host.appendChild(l); }
+    const grid=document.createElement("div"); grid.className="proj-grid"; host.appendChild(grid);
+    list.forEach(ex=>grid.appendChild(drawExperimentCard(ex)));
+  };
+  // finished work goes last, so what is going on is what is seen first
+  const order=(a,b)=>((entityStatus(a)==="done")-(entityStatus(b)==="done"))||String(a.title||"").localeCompare(String(b.title||""));
+  if(projectsOnly().length||areaList().length){ const h=document.createElement("div"); h.className="pj-kind";
+    h.innerHTML=`<b>Projects</b><span class="ov-dim">have an aim and an end — experiments and the work that serves them</span>`; host.appendChild(h); }
+  [...projectsOnly()].sort((a,b)=>((entityStatus(a)==="done")-(entityStatus(b)==="done"))||String(a.name||"").localeCompare(String(b.name||""))).forEach(pr=>{
+    const members=DB.experiments.filter(ex=>ex.projectId===pr.id);
+    const exps=members.filter(x=>!isWorkstream(x)).sort(order), wss=members.filter(isWorkstream).sort(order);
+    host.appendChild(sectionHead(pr.color||"#7db4ff",pr.name||"(unnamed project)",pr));
+    if(pr.links&&pr.links.length){
+      const catHost=document.createElement("div"); catHost.innerHTML=projCatsHTML(pr); host.appendChild(catHost);
+      wireProjCats(catHost,pr,()=>renderExperiments());
+    }
+    // Work that belongs to the project itself rather than to any one
+    // experiment in it — ordering something, a meeting, writing it up.
+    const own=taskList().filter(t=>!t.isEvent&&t.projectId===pr.id);
+    if(own.length){
+      const key="__proj_"+pr.id, openP=openSteps.has(key);
+      const bar=document.createElement("div"); bar.className="proj-own-bar";
+      bar.innerHTML=`<button type="button" class="exp-caret">${openP?"▾":"▸"} ${own.length} task${own.length!==1?"s":""} in this project</button>`;
+      host.appendChild(bar);
+      bar.querySelector(".exp-caret").onclick=()=>{
+        openSteps.has(key)?openSteps.delete(key):openSteps.add(key); renderExperiments(); };
+      if(openP){
+        const rows=sortAndGroupItems(own);
+        const list=document.createElement("div"); list.className="step-list"; list.style.cssText="border-top:none;padding-top:0";
+        list.innerHTML=rows.map(stepRowHTML).join("");
+        host.appendChild(list);
+        list.querySelectorAll(".step-line").forEach(el=>{
+          const t=taskOf(el.dataset.id); if(!t)return;
+          wireStepDotEl(el,renderExperiments);
+          el.onclick=()=>taskEditor(t,()=>renderExperiments());
+        });
+      }
+    }
+    drawGrid(exps,wss.length?"Experiments":"");
+    drawGrid(wss,"Workstreams");
+    if(!members.length&&!own.length) host.appendChild(Object.assign(document.createElement("div"),
+      {className:"empty",textContent:"Nothing in this project yet — add an experiment or a workstream."}));
+  });
+  const unfiled=DB.experiments.filter(ex=>!ex.projectId).sort(order);
+  if(unfiled.length){
+    host.appendChild(sectionHead("#5b6678","Not in a project",null));
+    drawGrid(unfiled,"");
+  }
+  /* Areas: the lab's ongoing life. Each lists its routines — when each next
+     happens and whose turn it is — then its own workstreams and tasks. */
+  { const h=document.createElement("div"); h.className="pj-kind";
+    h.innerHTML=`<b>Areas</b><span class="ov-dim">ongoing — lab meetings, seminars, teaching, duties</span>`; host.appendChild(h); }
+  if(!areaList().length) host.appendChild(Object.assign(document.createElement("div"),{className:"empty",
+    textContent:"No areas yet — ＋ Area, then put a repeating Timeline item in it (its \"Part of\") to make it a routine."}));
+  [...areaList()].sort((a,b)=>String(a.name||"").localeCompare(String(b.name||""))).forEach(ar=>{
+    const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="14px";
+    const ck=checklistProgress(ar);
+    h.innerHTML=`<span class="chip" style="background:${ar.color||"#7db4ff"}"></span><h2>${esc(ar.name||"(unnamed area)")}</h2>
+      ${ar.summary?`<span class="count" style="font-style:italic">${esc(ar.summary)}</span>`:""}
+      ${ck.n?`<span class="count">☑ ${ck.done}/${ck.n}</span>`:""}
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button type="button" class="exp-open ar-newrt" title="A repeating item in ${escAttr(ar.name||"this area")}">＋ Routine</button>
+        <button type="button" class="exp-open ar-edit">Edit</button></span>`;
+    host.appendChild(h);
+    h.querySelector(".ar-edit").onclick=()=>projectModal(ar,()=>renderExperiments());
+    h.querySelector(".ar-newrt").onclick=()=>{ const t=addTask({title:"",projectId:ar.id,when:todayDateStr()+"T"+DEFAULT_ENTRY_TIME,repeat:{every:"week",until:null}});
+      taskEditor(t,()=>{ if(isRoutine(t)) routineModal(t,null,()=>renderExperiments()); else renderExperiments(); }); };
+    host.appendChild(areaRoutinesEl(ar,()=>renderExperiments()));
+    const wss=DB.experiments.filter(x=>x.projectId===ar.id&&isWorkstream(x)).sort(order);
+    drawGrid(wss,wss.length?"Workstreams":"");
+  });
 
   // A place to review whatever got logged without deciding an experiment up
   // front — same "review and file later" idea Library's own "Unattached"
@@ -9954,7 +10171,7 @@ function renderExperiments(){
     const unattached=sortAndGroupItems(rawUnattached);
     const openKey="__unattached", open=openSteps.has(openKey);
     const h=document.createElement("div"); h.className="domain-head"; h.style.marginTop="22px";
-    h.innerHTML=`<span class="chip" style="background:#5b6678"></span><h2>Tasks not in an experiment or project</h2>
+    h.innerHTML=`<span class="chip" style="background:#5b6678"></span><h2>Tasks not in a project or area</h2>
       <button type="button" class="exp-caret">${open?"▾":"▸"} ${rawUnattached.length} task${rawUnattached.length!==1?"s":""}</button>`;
     host.appendChild(h);
     h.querySelector(".exp-caret").onclick=()=>{
@@ -10723,8 +10940,8 @@ function renderMonthView(host){
   const monthItems=[
     ...allSteps().filter(x=>x.deadline)
       .map(x=>({kind:"exp",title:x.title,deadline:x.deadline,endDate:x.endDate,src:x})),
-    ...taskList().flatMap(t=>taskOccurrences(t,dkey(gridStart),dkey(gEnd))
-      .map(o=>({kind:"task",title:t.title,deadline:o.when,endDate:o.endDate,src:t})))
+    ...taskList().filter(drawsAsTask).flatMap(t=>taskOccurrences(t,dkey(gridStart),dkey(gEnd))
+      .map(o=>({kind:"task",title:occTitle(t,o.when),deadline:o.when,endDate:o.endDate,src:t})))
   // a "task" item is really either a task or an event depending on its
   // source record's isEvent flag — filtered here, in one place, rather than
   // wherever monthItems ends up read
@@ -10883,8 +11100,8 @@ function renderTimeline(){
   const allTasks=[
     ...allSteps().filter(x=>x.deadline)
       .map(x=>({id:x.id,kind:"exp",title:x.title,deadline:x.deadline,endDate:x.endDate,duration:x.duration,src:x})),
-    ...taskList().flatMap(t=>taskOccurrences(t,fromISO,toISO)
-      .map((o,i)=>({id:t.id+"@"+o.when,kind:"task",title:t.title,deadline:o.when,endDate:o.endDate,duration:t.duration,src:t})))
+    ...taskList().filter(drawsAsTask).flatMap(t=>taskOccurrences(t,fromISO,toISO)
+      .map((o,i)=>({id:t.id+"@"+o.when,kind:"task",title:occTitle(t,o.when),deadline:o.when,endDate:o.endDate,duration:t.duration,src:t})))
   ];
   // returns true if task touches any day in [ws, we]
   function touchesWeek(t){
@@ -14489,7 +14706,8 @@ function agendaOn(date){
   const f=feedingOn(d);
   if(f) items.push({key:"feed:"+d,kind:"feeding",time:f.time,
     done:d<=today&&f.done===f.rows.length, warn:f.belowFloor.length>0,
-    chip:feedingChipHTML(f), title:feedingTitle(f), open:()=>openFeedingModal(d)});
+    chip:feedingChipHTML(f), title:feedingTitle(f),
+    open:()=>{ const duty=feedingDutyOn(d); if(duty) routineModal(duty.t,d,()=>render()); else openFeedingModal(d); }});
   const po=postopDueOn(d);
   if(po.length){
     const done=po.filter(x=>postopDone(x.rec)).length, missed=d<today&&done<po.length;
@@ -14824,16 +15042,22 @@ function restrictionBoardEl(list){
 // only their first line.
 function feedingChipHTML(f){
   const n=f.rows.length, warn=f.belowFloor.length;
-  const future=f.date>todayDateStr();
+  const future=f.date>todayDateStr(), duty=feedingDutyOn(f.date), who=duty?routineOcc(duty.t,duty.when).who:"";
   return `<div class="et">🍽 Feeding ${future?`· ${n}`:`${f.done}/${n}`}${warn?` <b>⚠${warn}</b>`:""}</div>
-    <div class="es">${n} on restriction${warn?` · ${warn} below ${RESTRICTION_FLOOR}%`:""}</div>`;
+    <div class="es">${duty?esc(duty.t.title||"feeding duty")+(who?" · "+esc(who):"")+" · ":""}${n} on restriction${warn?` · ${warn} below ${RESTRICTION_FLOOR}%`:""}</div>`;
 }
 function feedingTitle(f){
-  return `Feeding ${fmtDMY(f.date)} — ${f.rows.map(x=>x.a.name+(x.st.todayDone?" ✓":"")+(x.st.belowFloor?" ⚠":"")).join(", ")}`;
+  const duty=feedingDutyOn(f.date), who=duty?routineOcc(duty.t,duty.when).who:"";
+  return `Feeding ${fmtDMY(f.date)}${duty?" ("+(duty.t.title||"feeding duty")+(who?", "+who:"")+")":""} — ${f.rows.map(x=>x.a.name+(x.st.todayDone?" ✓":"")+(x.st.belowFloor?" ⚠":"")).join(", ")}`;
 }
 /* Feeding is at 16:00 unless a day says otherwise — moved from the feeding
    window, for that day only. */
-function feedingTimeOn(date){ return ((DB.config.feedingTimes||{})[String(date).slice(0,10)])||FEEDING_TIME; }
+// a day moved by hand first; then the feeding duty that covers the day, at its time
+function feedingTimeOn(date){
+  const d=String(date).slice(0,10), own=(DB.config.feedingTimes||{})[d]; if(own) return own;
+  const duty=feedingDutyOn(d); if(duty&&hasTime(duty.when)) return duty.when.slice(11,16);
+  return FEEDING_TIME;
+}
 function setFeedingTime(date,time){
   const d=String(date).slice(0,10), m=DB.config.feedingTimes=Object.assign({},DB.config.feedingTimes||{});
   if(!time||time===FEEDING_TIME) delete m[d]; else m[d]=time;
@@ -15727,7 +15951,7 @@ function renderAnimals(){
     <div class="af-grid">
       ${cageNames.length?col("Cage","a_cage",animalCage,[["all","All cages"],["none","No cage"],...cageNames.map(c=>[c,c])]):""}
       ${expNames.length?col("Experiment","a_exp",animalExperiment,[["all","All experiments"],["none","Unattached"],...expNames]):""}
-      ${DB.projects.length?col("Project","a_project",animalProject,[["all","All projects"],["none","No project"],...DB.projects.map(p=>[p.id,p.name||"(unnamed project)"])]):""}
+      ${DB.projects.length?col("Project","a_project",animalProject,[["all","All projects"],["none","No project"],...projectsOnly().map(p=>[p.id,p.name||"(unnamed project)"])]):""}
       ${groupNames.length?col("Group","a_group",animalGroup,[["all","All groups"],...groupNames.map(g=>[g,g])]):""}
       ${col("Status","a_status",animalStatus,[["all","All"],["alive","Alive"],["dead","No longer alive"],["sacrificed","— sacrificed"],["early_death","— early death"]])}
       ${col("Excluded","a_excluded",animalExcluded,[["all","Either"],["no","Not excluded"],["yes","Excluded only"]])}
@@ -18559,7 +18783,7 @@ document.getElementById("expCal").addEventListener("click",()=>{
     // ride along too — they were dropped here, so a 30-minute task exported as
     // an hour and no description ever made it out.
     ...taskList().flatMap(t=>taskOccurrences(t,today0,addDays(today0,365))
-      .map(o=>({id:`${t.id}-${o.when}`,title:t.title,deadline:o.when,endDate:o.endDate,
+      .map(o=>({id:`${t.id}-${o.when}`,title:occTitle(t,o.when),deadline:o.when,endDate:o.endDate,
                 duration:t.duration,notes:t.notes,status:t.status})))
   ];
   const diaryEvents=[];
@@ -19172,7 +19396,7 @@ function exportFullDatabaseExcel(){
   const timeline=taskList().map(t=>{
     const ex=t.experimentId?expById(t.experimentId):null;
     const pr=t.projectId?projById(t.projectId):(ex&&ex.projectId?projById(ex.projectId):null);
-    return [t.when||"",t.endDate||"",t.duration||"",t.isEvent?"Event":"Task",t.title||"",repeatLabel(t.repeat,t.when)||"",
+    return [t.when||"",t.endDate||"",t.duration||"",t.isEvent?"Event":"Task",t.title||"",(repeatLabel(t.repeat,t.when)||"")+(t.repeat&&t.repeat.every&&t.repeat.until?", until "+fmtDMY(t.repeat.until):""),
       pr?(pr.name||"(unnamed)"):"",ex?(ex.title||"(unnamed)"):"",(t.materials||[]).join(", "),
       (t.doneOccurrences||[]).length||"",t.notes||""];
   });
@@ -19186,11 +19410,21 @@ function exportFullDatabaseExcel(){
       (ws.serves||[]).map(expById).filter(Boolean).map(x=>x.title||"(unnamed)").sort(byText).join(", "),
       K.fields.map(f=>{ const v=kd[f.key]; if(!v) return ""; return `${f.label}: ${f.type==="protocol"?linkName({kind:"protocol",id:v}):v}`; }).filter(Boolean).join("; "),
       (ws.milestones||[]).slice().sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))).map(m=>`${m.date?fmtDMY(m.date)+" ":""}${m.text||""}`).join("; ")]; });
-  const projs=(DB.projects||[]).map(pr=>[pr.name||"",entityStatus(pr),pr.summary||"",pr.question||"",
+  // an area's routines, and every turn written down in them
+  const routineRows=taskList().filter(isRoutine).map(t=>{ const ar=projById(t.projectId);
+    const until=t.repeat&&t.repeat.until?", until "+fmtDMY(t.repeat.until):"";
+    return [ar?entityLabel(ar):"",t.title||"",(ROUTINE_KINDS.find(k=>k[0]===routineKind(t))||[])[2]||"",
+      repeatLabel(t.repeat,t.when)+until,t.when&&hasTime(t.when)?t.when.slice(11,16):""]; });
+  const turnRows=taskList().filter(isRoutine).flatMap(t=>Object.entries((t.routine&&t.routine.occ)||{}).map(([d,o])=>
+    [t.title||"",d,o.who||"",o.title||"",(o.about||[]).map(id=>expById(id)||projById(id)).filter(Boolean).map(entityLabel).join(", ")]));
+  const areaRows=areaList().map(ar=>[ar.name||"",ar.summary||"",
+    taskList().filter(t=>t.projectId===ar.id&&isRoutine(t)).map(t=>t.title||"(unnamed)").sort(byText).join(", "),
+    workstreamList().filter(x=>x.projectId===ar.id).map(x=>x.title||"(unnamed)").sort(byText).join(", "),plain(ar.notes)]);
+  const projs=projectsOnly().map(pr=>[pr.name||"",entityStatus(pr),pr.summary||"",pr.question||"",
     experimentsOnly().filter(ex=>ex.projectId===pr.id).map(ex=>ex.title||"(unnamed)").sort(byText).join(", "),
     workstreamList().filter(ex=>ex.projectId===pr.id).map(ex=>ex.title||"(unnamed)").sort(byText).join(", "),plain(pr.notes)]);
   // every checklist, wherever it lives; a dated item is a task, so its date is the task's
-  const checks=[...(DB.projects||[]).map(x=>["Project",x]),...DB.experiments.map(x=>[isWorkstream(x)?"Workstream":"Experiment",x])]
+  const checks=[...(DB.projects||[]).map(x=>[isArea(x)?"Area":"Project",x]),...DB.experiments.map(x=>[isWorkstream(x)?"Workstream":"Experiment",x])]
     .flatMap(([k,x])=>(x.checklist||[]).map(it=>{ const t=checklistTask(it);
       return [k,entityLabel(x),t?t.title||"":it.text||"",yes(checklistDone(it)),t&&t.when?String(t.when).slice(0,10):""]; }));
 
@@ -19302,6 +19536,9 @@ function exportFullDatabaseExcel(){
     sheet("Experiments",["Project","Title","Status","Where it stands","Question","Deadline","End","Animals","Uses","Description","Outcome"],exps,0,1),
     sheet("Workstreams",["Project","Title","Kind","Status","Where it stands","Goal","Start","End","Serves","Details","Milestones"],wss,0,1),
     sheet("Projects",["Name","Status","Where it stands","Question","Experiments","Workstreams","Notes"],projs,0),
+    sheet("Areas",["Name","Where it stands","Routines","Workstreams","Notes"],areaRows,0),
+    sheet("Routines",["Area","Routine","What it is","Repeats","Time"],routineRows,0,1),
+    sheet("Turns",["Routine","Date","Who","Talk","About"],turnRows,0,1),
     sheet("Checklists",["Kind","Of","Item","Done","Date"],checks,0,1),
     sheet("Notes",["Title","Attached to","Created","Updated","Text"],notes,0),
     sheet("Library",["Kind","Title","Authors / written by","Year / date","Journal","Attached to","Link","File","Notes"],lib,0,1),

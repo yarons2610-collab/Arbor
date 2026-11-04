@@ -118,9 +118,10 @@ def yes(v):
     return "Yes" if v else ""
 
 
-DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-PLAIN_REPEATS = {"day": "daily", "week": "weekly", "2week": "every 2 weeks",
-                 "month": "monthly", "year": "yearly"}
+# the app's own words (REPEATS and DOW in index.html), so both exports agree
+DOW = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
+PLAIN_REPEATS = {"day": "every day", "week": "every week", "2week": "every 2 weeks",
+                 "month": "every month", "year": "every year"}
 
 
 def repeat_label(r):
@@ -1146,7 +1147,7 @@ def build_sheets(w):
         rows, sort=[0, 1], wide=[5, 9, 10]))
 
     projs = []
-    for p in w.projects:
+    for p in [p for p in w.projects if p.get("kind") != "area"]:
         mine = [e for e in w.experiments if e.get("projectId") == p.get("id")]
         projs.append([p.get("name") or "", entity_status(p), p.get("summary") or "", p.get("question") or "",
                       titles([e for e in mine if not is_workstream(e)]),
@@ -1155,10 +1156,35 @@ def build_sheets(w):
                                      "Workstreams", "Notes"],
                         projs, sort=[0], wide=[3, 4, 5, 6]))
 
+    # areas: the lab's ongoing life, and the routines in them — isRoutine in the app
+    areas = [p for p in w.projects if p.get("kind") == "area"]
+    area_ids = {p.get("id") for p in areas}
+    routines = [t for t in w.schedule if t.get("projectId") in area_ids
+                and (t.get("repeat") or {}).get("every")]
+    kinds = {"meeting": "Meeting", "feeding": "Feeding duty", "other": "Other"}
+    sheets.append(Sheet("Areas", ["Name", "Where it stands", "Routines", "Workstreams", "Notes"], [
+        [a.get("name") or "", a.get("summary") or "",
+         ", ".join(sorted(((t.get("title") or "(unnamed)") for t in routines if t.get("projectId") == a.get("id")), key=natural_key)),
+         titles([e for e in wss if e.get("projectId") == a.get("id")]), plain(a.get("notes"))]
+        for a in areas], sort=[0], wide=[2, 3, 4]))
+    sheets.append(Sheet("Routines", ["Area", "Routine", "What it is", "Repeats", "Time"], [
+        [Workspace.proj_name(w.proj_by_id.get(t.get("projectId"))), t.get("title") or "",
+         kinds.get((t.get("routine") or {}).get("kind"), "Other"), repeat_label(t.get("repeat")),
+         str(t.get("when"))[11:16] if len(str(t.get("when") or "")) > 10 else ""]
+        for t in routines], sort=[0, 1]))
+    turns = []
+    for t in routines:
+        for d, o in ((t.get("routine") or {}).get("occ") or {}).items():
+            about = [w.exp_by_id.get(i) or w.proj_by_id.get(i) for i in (o.get("about") or [])]
+            turns.append([t.get("title") or "", d, o.get("who") or "", o.get("title") or "",
+                          ", ".join((Workspace.proj_name(x) if "name" in x else Workspace.exp_title(x)) for x in about if x)])
+    sheets.append(Sheet("Turns", ["Routine", "Date", "Who", "Talk", "About"], turns, sort=[0, 1]))
+
+
     # every checklist; a dated item is a task, so its title and date are the task's
     tasks = {t.get("id"): t for t in w.schedule}
     checks = []
-    for kind, x in [("Project", p) for p in w.projects] + \
+    for kind, x in [("Area" if p.get("kind") == "area" else "Project", p) for p in w.projects] + \
             [("Workstream" if is_workstream(e) else "Experiment", e) for e in w.experiments]:
         for it in x.get("checklist") or []:
             t = tasks.get(it.get("taskId")) if it.get("taskId") else None
