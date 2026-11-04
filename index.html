@@ -1488,8 +1488,8 @@
   <div class="top" id="topBar">
     <div class="brand"><h1>Arbor</h1><span class="sub">Segev · Schiller lab</span></div>
     <div class="tabs" id="tabs">
-      <button class="tab" data-v="projects">Projects</button>
-      <button class="tab on" data-v="timeline">Timeline</button>
+      <button class="tab on" data-v="projects">Home</button>
+      <button class="tab" data-v="timeline">Timeline</button>
       <button class="tab" data-v="materials">Materials</button>
       <button class="tab" data-v="library">Library</button>
       <button class="tab" data-v="animals">Animals</button>
@@ -1508,7 +1508,7 @@
   </div>
 
   <div class="main">
-    <div class="view hidden wrap" id="projects"></div>
+    <div class="view wrap" id="projects"></div>
     <div class="view hidden" id="arbor">
       <svg id="svg"></svg>
       <div class="arbor-tools">
@@ -1520,7 +1520,7 @@
       <div class="hint">click a soma to open it · drag a dendrite onto another to re-branch</div>
     </div>
     <div class="view hidden wrap" id="outline"></div>
-    <div class="view wrap" id="timeline"></div>
+    <div class="view hidden wrap" id="timeline"></div>
     <div class="view hidden wrap" id="notes"></div>
     <div class="view hidden" id="materials">
       <div class="mat-subtabs" id="matSubTabs">
@@ -6789,7 +6789,8 @@ function escAttr(s){return String(s??"").replace(/"/g,"&quot;").replace(/</g,"&l
 function cssStat(s){return{todo:"#8a94a6",active:"#54e08a",blocked:"#ff5f6d",done:"#8a94a6"}[s];}
 
 /* ---------- view switching ---------- */
-let currentView="timeline",selectedId=null;
+// Arbor opens on Home: the projects and what is in them (Yaron, 04/11/2026)
+let currentView="projects",selectedId=null;
 document.getElementById("tabs").addEventListener("click",e=>{ const b=e.target.closest(".tab"); if(!b)return; switchTo(b.dataset.v); });
 function switchTo(v){
   currentView=v;
