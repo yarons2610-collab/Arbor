@@ -260,6 +260,13 @@
   .up-row.done{opacity:.6}
   .up-row .st-chip{grid-column:auto}
   @media (max-width:600px){ .up-head{display:none} .up-row{grid-template-columns:44px 1fr 1fr;} }
+  .home-grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(260px,1fr);gap:28px;align-items:start}
+  .home-side{position:sticky;top:12px}
+  .home-side .pj-kind:first-child{margin-top:0}
+  .home-side .pin-row .ov-dim,.home-side .pin-row .st-chip{margin-left:auto}
+  .home-grid > div > .pj-kind:first-child{margin-top:0}
+  .home-taskbar{margin-top:26px}
+  @media (max-width:900px){ .home-grid{grid-template-columns:1fr} .home-side{position:static} }
   .pj-sub{font-family:var(--mono);font-size:10px;color:var(--ink-faint);text-transform:uppercase;margin:10px 0 6px}
   .ov-surg{margin-top:3px}
   .ov-surg .ov-inj{padding-left:18px}
@@ -10164,11 +10171,18 @@ function renderExperiments(){
   const kindHead=(title,sub,btn,onAdd)=>{ const h=document.createElement("div"); h.className="pj-kind";
     h.innerHTML=`<b>${title}</b><span class="ov-dim">${sub}</span>${btn?`<button type="button" class="exp-open" style="margin-left:auto">${btn}</button>`:""}`;
     if(btn) h.querySelector("button").onclick=onAdd; host.appendChild(h); };
+  const homeStart=host.children.length;
   kindHead("Projects","research — experiments, and the programs, methods and writing that serve them");
-  [...projectsOnly()].sort((a,b)=>((entityStatus(a)==="done")-(entityStatus(b)==="done"))||String(a.name||"").localeCompare(String(b.name||""))).forEach(pr=>{
+  // a project with experiments or programs in it comes before one without, and
+  // a finished one last
+  const emptyProj=pr=>!DB.experiments.some(x=>x.projectId===pr.id);
+  [...projectsOnly()].sort((a,b)=>((entityStatus(a)==="done")-(entityStatus(b)==="done"))||(emptyProj(a)-emptyProj(b))||String(a.name||"").localeCompare(String(b.name||""))).forEach(pr=>{
     const members=DB.experiments.filter(ex=>ex.projectId===pr.id);
     const exps=members.filter(x=>!isWorkstream(x)).sort(order), wss=members.filter(x=>isWorkstream(x)&&!isStudyWork(x)).sort(order);
     host.appendChild(sectionHead(pr.color||"#7db4ff",pr.name||"(unnamed project)",pr));
+    // what the project is doing first; its loose tasks and links after
+    drawGrid(exps,wss.length?"Experiments":"");
+    drawGrid(wss,"Programs and other work");
     if(pr.links&&pr.links.length){
       const catHost=document.createElement("div"); catHost.innerHTML=projCatsHTML(pr); host.appendChild(catHost);
       wireProjCats(catHost,pr,()=>renderExperiments());
@@ -10195,8 +10209,6 @@ function renderExperiments(){
         });
       }
     }
-    drawGrid(exps,wss.length?"Experiments":"");
-    drawGrid(wss,"Programs and other work");
     if(!members.length&&!own.length) host.appendChild(Object.assign(document.createElement("div"),
       {className:"empty",textContent:"Nothing in this project yet — add an experiment or a workstream."}));
   });
@@ -10220,8 +10232,17 @@ function renderExperiments(){
   };
   kindHead("Studies","courses you take","＋ Course",()=>{ const w=addWorkstream({wsKind:"course"}); workstreamModal(w,()=>renderExperiments()); });
   studyRows("course","No courses yet.");
-  kindHead("Teaching","courses you teach","＋ Course you teach",()=>{ const w=addWorkstream({wsKind:"teaching"}); workstreamModal(w,()=>renderExperiments()); });
+  kindHead("Teaching","courses you teach","＋ Course",()=>{ const w=addWorkstream({wsKind:"teaching"}); workstreamModal(w,()=>renderExperiments()); });
   studyRows("teaching","Nothing yet.");
+  /* Projects on the left; Studies and Teaching beside them on the right — they
+     are short, and below a long project they were out of sight. */
+  { const nodes=[...host.children].slice(homeStart), split=nodes.findIndex(n=>n.classList.contains("pj-kind")&&/^Studies/.test(n.textContent));
+    const grid=document.createElement("div"); grid.className="home-grid";
+    const main=document.createElement("div"), side=document.createElement("div"); side.className="home-side";
+    nodes.forEach((n,i)=>(split>=0&&i>=split?side:main).appendChild(n));
+    grid.append(main,side); host.appendChild(grid); }
+  // the task-list controls belong with the task lists, not above the whole page
+  { const bar=top.querySelector(".af-sortbar"); if(bar){ bar.classList.add("home-taskbar"); host.appendChild(bar); } }
 
   // A place to review whatever got logged without deciding an experiment up
   // front — same "review and file later" idea Library's own "Unattached"
