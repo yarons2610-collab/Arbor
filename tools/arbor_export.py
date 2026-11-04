@@ -853,12 +853,13 @@ def dmy(iso):
 
 # the workstream kinds and their own fields — WS_KINDS in the app
 WS_KINDS = {
-    "tool": ("Tool / program", [("codeAt", "Code at", "text"), ("version", "Current version", "text")]),
+    "tool": ("Program", [("codeAt", "Lives at", "text")]),
     "method": ("Method / protocol", [("protocolId", "Protocol it refines", "protocol"),
                                      ("changing", "What is being changed", "text")]),
     "writing": ("Writing", [("form", "What it is", "select"), ("venue", "Journal / venue", "text"),
                             ("draftAt", "Draft at", "text")]),
-    "teaching": ("Teaching / admin", [("duty", "Course or duty", "text"), ("people", "With", "text")]),
+    "course": ("Course you take", [("semester", "Semester", "text"), ("grade", "Grade", "text")]),
+    "teaching": ("Course you teach", [("room", "Room", "text")]),
 }
 
 
@@ -1156,35 +1157,42 @@ def build_sheets(w):
                                      "Workstreams", "Notes"],
                         projs, sort=[0], wide=[3, 4, 5, 6]))
 
-    # areas: the lab's ongoing life, and the routines in them — isRoutine in the app
-    areas = [p for p in w.projects if p.get("kind") == "area"]
-    area_ids = {p.get("id") for p in areas}
-    routines = [t for t in w.schedule if t.get("projectId") in area_ids
-                and (t.get("repeat") or {}).get("every")]
-    kinds = {"meeting": "Meeting", "feeding": "Feeding duty", "other": "Other"}
-    sheets.append(Sheet("Areas", ["Name", "Where it stands", "Routines", "Workstreams", "Notes"], [
-        [a.get("name") or "", a.get("summary") or "",
-         ", ".join(sorted(((t.get("title") or "(unnamed)") for t in routines if t.get("projectId") == a.get("id")), key=natural_key)),
-         titles([e for e in wss if e.get("projectId") == a.get("id")]), plain(a.get("notes"))]
-        for a in areas], sort=[0], wide=[2, 3, 4]))
-    sheets.append(Sheet("Routines", ["Area", "Routine", "What it is", "Repeats", "Time"], [
-        [Workspace.proj_name(w.proj_by_id.get(t.get("projectId"))), t.get("title") or "",
-         kinds.get((t.get("routine") or {}).get("kind"), "Other"), repeat_label(t.get("repeat")),
-         str(t.get("when"))[11:16] if len(str(t.get("when") or "")) > 10 else ""]
-        for t in routines], sort=[0, 1]))
-    turns = []
-    for t in routines:
-        for d, o in ((t.get("routine") or {}).get("occ") or {}).items():
-            about = [w.exp_by_id.get(i) or w.proj_by_id.get(i) for i in (o.get("about") or [])]
-            turns.append([t.get("title") or "", d, o.get("who") or "", o.get("title") or "",
-                          ", ".join((Workspace.proj_name(x) if "name" in x else Workspace.exp_title(x)) for x in about if x)])
-    sheets.append(Sheet("Turns", ["Routine", "Date", "Who", "Talk", "About"], turns, sort=[0, 1]))
+    # what is inside a program, a course and a teaching course — "Work items" in
+    # the app; a date is its task's
+    tasks_by_id = {t.get("id"): t for t in w.schedule}
 
+    def tday(i):
+        t = tasks_by_id.get(i) if i else None
+        return str(t.get("when"))[:10] if t and t.get("when") else ""
+
+    def tdone(i, own):
+        t = tasks_by_id.get(i) if i else None
+        return (t.get("when") in (t.get("doneOccurrences") or [])) if t and t.get("when") else (False if t else bool(own))
+    work = []
+    for e in wss:
+        of, k = Workspace.exp_title(e), (WS_KINDS.get(e.get("wsKind")) or WS_KINDS["tool"])[0]
+        for x in e.get("ideas") or []:
+            work.append([of, k, "idea", x.get("text") or "", "", "", "", ""])
+        for x in e.get("deliverables") or []:
+            work.append([of, k, "deliverable", x.get("text") or "", x.get("dkind") or "", "", tday(x.get("taskId")),
+                         yes(tdone(x.get("taskId"), x.get("done")))])
+        for x in e.get("uploads") or []:
+            work.append([of, k, "upload", ("נושא " + x["topic"]) if x.get("topic") else "", x.get("what") or "",
+                         tday(x.get("prepTaskId")), tday(x.get("dueTaskId")), yes(tdone(x.get("dueTaskId"), x.get("uploaded")))])
+        for key, v in (e.get("missed") or {}).items():
+            tid, _, when = key.partition("|")
+            t = tasks_by_id.get(tid)
+            work.append([of, k, "missed lecture", (t.get("title") or "") if t else "",
+                         "caught up" if v == "caught" else "to catch up", "", when[:10], yes(v == "caught")])
+    sheets.append(Sheet("Work items", ["Of", "Kind", "Item kind", "Item", "Detail", "Prepare from", "Due", "Done"],
+                        work, sort=[0, 2, 6]))
+    sheets.append(Sheet("Weekend feeding", ["Weekend (Friday)", "Who"],
+                        [[f, who] for f, who in ((w.config.get("weekendFeeding") or {}).items())], sort=[0]))
 
     # every checklist; a dated item is a task, so its title and date are the task's
     tasks = {t.get("id"): t for t in w.schedule}
     checks = []
-    for kind, x in [("Area" if p.get("kind") == "area" else "Project", p) for p in w.projects] + \
+    for kind, x in [("Project", p) for p in w.projects] + \
             [("Workstream" if is_workstream(e) else "Experiment", e) for e in w.experiments]:
         for it in x.get("checklist") or []:
             t = tasks.get(it.get("taskId")) if it.get("taskId") else None
