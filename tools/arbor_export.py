@@ -1173,6 +1173,31 @@ def build_sheets(w):
     sheets.append(Sheet("Weekend feeding", ["Weekend (Friday)", "Who"],
                         [[f, who] for f, who in ((w.config.get("weekendFeeding") or {}).items())], sort=[0]))
 
+    # animal orders, mirroring orderList()/orderState(): the request week and the
+    # arrival are the linked tasks' dates, falling back to the order week
+    def add_days(iso, n):
+        return (dt.date.fromisoformat(iso[:10]) + dt.timedelta(days=n)).isoformat()
+    orders = []
+    for o in (w.db.get("animalOrders") or []):
+        if not o or not o.get("id"):
+            continue
+        st, sd, ad = tasks_by_id.get(o.get("sendTask")), o.get("week") or "", add_days(o["week"], 7) if o.get("week") else ""
+        send = str(st["when"])[:10] if st and st.get("when") else sd
+        at = tasks_by_id.get(o.get("arriveTask"))
+        arrive = str(at["when"])[:10] if at and at.get("when") else ad
+        sent = bool(o.get("received")) or bool(st and st.get("when") in (st.get("doneOccurrences") or []))
+        f = w.exp_by_id.get(o.get("forId")) or w.proj_by_id.get(o.get("forId"))
+        label = (Workspace.exp_title(f) if "title" in f else Workspace.proj_name(f)) if f else ""
+        g = next((x for x in (f or {}).get("groupDefs") or [] if x.get("id") == o.get("groupId")), None) if f else None
+        age = o.get("age")
+        orders.append([send, arrive, label, (g.get("name") or "") if g else "", int(o.get("count") or 0),
+                       {"M": "male", "F": "female"}.get(o.get("sex"), "either"), o.get("strain") or "",
+                       "" if age in ("", None) else age, o.get("names") or "",
+                       "arrived" if o.get("received") else "on the way" if sent else "to send",
+                       o.get("received") or "", o.get("note") or ""])
+    sheets.append(Sheet("Animal orders", ["Request goes in", "Arrives", "For", "Group", "How many", "Sex", "Strain",
+                                          "Age (weeks)", "Names", "Status", "Received", "Note"], orders, sort=[0]))
+
     # every checklist; a dated item is a task, so its title and date are the task's
     tasks = {t.get("id"): t for t in w.schedule}
     checks = []

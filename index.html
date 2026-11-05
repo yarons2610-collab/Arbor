@@ -249,6 +249,25 @@
   .rt-row .rt-pick{flex:0 0 170px;text-align:left}
   .rt-row input,.rt-row select{width:auto;flex:1 1 120px;min-width:0;padding:4px 7px;font-size:12px}
   .wk-rota{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 12px}
+  .ord-row{display:flex;align-items:baseline;gap:10px;width:100%;text-align:left;background:var(--panel2);border:1px solid var(--line2);border-radius:7px;padding:6px 10px;margin:0 0 5px;color:var(--ink);font-size:12.5px;cursor:pointer}
+  .ord-row:hover{border-color:var(--ink-faint)}
+  .ord-when{flex:0 0 128px;font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
+  .ord-what{flex:1;min-width:0}
+  .ord-for{color:var(--ink-faint)}
+  .ord-state{font-family:var(--mono);font-size:10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.04em}
+  .ord-draft .ord-state{color:var(--accent)}
+  .ord-arrived{opacity:.7}
+  .ord-empty{font-size:12px;color:var(--ink-faint)}
+  .imp-wrap{max-height:52vh;overflow:auto;border:1px solid var(--line2);border-radius:8px}
+  .imp-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+  .imp-tbl th{position:sticky;top:0;background:var(--panel);text-align:left;font-family:var(--mono);font-size:10px;color:var(--ink-faint);padding:6px 8px}
+  .imp-tbl td{padding:5px 8px;border-top:1px solid var(--line);vertical-align:top}
+  .imp-skip td,.imp-nomatch td{opacity:.55}
+  .ord-rule{font-size:12.5px;color:var(--ink-dim);margin:0 0 12px}
+  .ord-status{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:6px;font-size:12.5px}
+  .ord-exp{margin:8px 0 0}
+  .ord-inline{margin-top:6px;max-width:520px}
+  @media (max-width:560px){ .ord-when{flex-basis:96px} }
   .wk-slot{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;color:var(--ink-dim);text-transform:none;letter-spacing:0;margin:0}
   .wk-slot input{width:90px;padding:3px 6px;font-size:12px}
   .st-chip.st-red{color:var(--overdue);border-color:var(--overdue)}
@@ -2132,7 +2151,7 @@ let lastSyncedRemoteVersion=null;
 const ANIMAL_LISTS=[{key:"baselines",idOf:b=>b.date?String(b.date).slice(0,10):null},
                     {key:"restrictions",idOf:r=>r.id},{key:"fovs",idOf:f=>f.id}];
 const MERGE_KEYS=["domains","tasks","spines","projects","experiments","schedule",
-                  "readings","protocols","other","notes","animals","tags"];
+                  "readings","protocols","other","notes","animals","tags","animalOrders"];
 const SYNC_MARK_KEY="arbor_sync_mark";
 /* What this device last agreed with the Gist, kept on disk so it outlives the
    tab: a phone killed in the background before its push finished still knows,
@@ -5156,6 +5175,10 @@ function migrate(){                       // backfill fields added in later vers
      honoured even though no form ever saw it. */
   migratePlanStages();
   migrateAreas();
+  if(!Array.isArray(DB.animalOrders)) DB.animalOrders=[];
+  // an arrival ticked where nothing received it (another device, an older
+  // build) is still the mice arriving; receiving is once, so this is idempotent
+  orderList().forEach(o=>{ if(o&&!o.received&&linkedDone(o,"arriveTask")) receiveOrder(o,orderArriveDate(o)); });
   if(migrateV2()) persist();
   let reconciled=false;
   (DB.animals||[]).forEach(a=>{ if(reconcileAnimal(a)) reconciled=true; });
@@ -5426,6 +5449,7 @@ function setOccDone(t,when,val){
   const set=new Set(t.doneOccurrences||[]);
   if(val)set.add(when); else set.delete(when);
   t.doneOccurrences=[...set];
+  if(val&&t.orderId) orderTaskTicked(t);
   persist();
 }
 function calDone(x){ return x.kind==="task"?occDone(x.src,x.deadline):x.kind==="diary"?!!x.src.e.done:stepDone(x.src); }
@@ -7824,6 +7848,372 @@ function weekendRotaHTML(){
 function wireWeekendRota(root){
   root.querySelectorAll(".wk-who").forEach(i=>i.addEventListener("change",()=>{ setWeekendFeeder(i.dataset.f,i.value.trim()); persist(); }));
 }
+/* ---- ANIMAL ORDERS ----
+   The lab orders mice once a week: requests are in by Tuesday, and the mice
+   arrive the Tuesday after. An order is its own record (DB.animalOrders). Its
+   two dates are Timeline tasks linked to it, as an upload's are, so the
+   Timeline, the bell, ticking and dragging need nothing new: ticking "Order
+   mice" says the request went in, ticking "Mice arrive" receives them.
+   Receiving makes the mice, already in the experiment and group they were
+   ordered for. Their ids come from the order, so two devices receiving it make
+   the same animals, and a second receipt makes none. */
+const ORDER_DAY=2;   // Tuesday
+function orderList(){ return Array.isArray(DB.animalOrders)?DB.animalOrders:(DB.animalOrders=[]); }
+function orderById(id){ return orderList().find(o=>o&&o.id===id)||null; }
+// the Tuesday a request made on this day goes in on: that day, if it is one
+function orderWeekOf(date){
+  const d=String(date||todayDateStr()).slice(0,10), wd=new Date(d+"T00:00:00").getDay();
+  return addDaysISO(d,(ORDER_DAY-wd+7)%7);
+}
+function orderSendDate(o){ const t=linkedTask(o.sendTask); return t&&t.when?String(t.when).slice(0,10):o.week; }
+function orderArriveDate(o){ const t=linkedTask(o.arriveTask); return t&&t.when?String(t.when).slice(0,10):addDaysISO(o.week,7); }
+function orderSent(o){ return !!o.received||linkedDone(o,"sendTask"); }
+function orderState(o){ return o.received?"arrived":orderSent(o)?"sent":"draft"; }
+function orderFor(o){ return o&&o.forId?expOrProjById(o.forId):null; }
+function orderWhat(o){
+  const n=+o.count||0, sx=o.sex==="M"?" ♂":o.sex==="F"?" ♀":"";
+  return [`${n}${sx} ${n===1?"mouse":"mice"}`,o.strain||"",o.age?o.age+" weeks old":""].filter(Boolean).join(" · ");
+}
+function orderTitles(o){
+  const f=orderFor(o), of=f?" · "+entityLabel(f):"";
+  return {send:`Order mice: ${orderWhat(o)}${of}`,arrive:`Mice arrive: ${orderWhat(o)}${of}`};
+}
+/* The order week is the fact; the two tasks carry it to the Timeline. A
+   changed week re-dates both. Otherwise a task keeps the date it was dragged
+   to (the facility can be a day late), and only its title and "Part of" follow
+   the order. */
+function syncOrderTasks(o,redate){
+  const T=orderTitles(o), f=orderFor(o), proj=!!(f&&projById(f.id));
+  const part={experimentId:f&&!proj?f.id:null,projectId:proj?f.id:null};
+  [["sendTask",o.week,T.send],["arriveTask",addDaysISO(o.week,7),T.arrive]].forEach(([field,date,title])=>{
+    const t=linkedTask(o[field]);
+    if(!t){ o[field]=addTask({title,when:date,...part,orderId:o.id}).id; return; }
+    if(redate&&String(t.when).slice(0,10)!==date){
+      const was=occDone(t,t.when); t.when=date; t.doneOccurrences=was?[date]:[]; }
+    t.title=title; t.experimentId=part.experimentId; t.projectId=part.projectId; t.orderId=o.id;
+  });
+}
+// "GP25–GP28", "GP25-28", "GP25, GP26" or one name to count up from
+function expandOrderNames(s,n){
+  s=String(s||"").trim(); n=Math.max(0,+n||0); if(!s) return [];
+  const span=s.match(/^(.*?)(\d+)\s*[-–—]\s*(?:\1)?(\d+)$/);
+  if(span){ const pre=span[1], a=+span[2], b=+span[3], w=span[2].length, out=[];
+    for(let k=a;k<=b&&out.length<500;k++) out.push(pre+String(k).padStart(w,"0")); return out; }
+  const list=s.split(/[,\n;]+/).map(x=>x.trim()).filter(Boolean);
+  if(list.length>1) return list;
+  const one=s.match(/^(.*?)(\d+)$/);
+  if(one) return Array.from({length:n},(_,k)=>one[1]+String(+one[2]+k).padStart(one[2].length,"0"));
+  return Array.from({length:n},(_,k)=>n>1?`${s} ${k+1}`:s);
+}
+/* What the next mice of an experiment are called: its animals' own pattern
+   (GP24 → GP25…), past any names already promised to an open order. */
+function suggestOrderNames(f,n,skipOrder){
+  n=+n||0; if(!f||n<1) return "";
+  const members=DB.animals.filter(a=>animalSteps(a.id).some(x=>x.id===f.id)||animalProjects(a.id).some(p=>p.id===f.id));
+  const tally=new Map(), top=new Map(), digits=new Map();
+  const see=name=>{ const m=String(name||"").match(/^([A-Za-z][A-Za-z_]*?)(\d+)$/); if(!m) return null;
+    top.set(m[1],Math.max(top.get(m[1])||0,+m[2])); if(!digits.has(m[1])) digits.set(m[1],m[2].length); return m[1]; };
+  members.forEach(a=>{ const p=see(a.name); if(p) tally.set(p,(tally.get(p)||0)+1); });
+  if(!tally.size) return "";
+  const pre=[...tally.entries()].sort((x,y)=>y[1]-x[1])[0][0];
+  DB.animals.forEach(a=>see(a.name));
+  orderList().filter(o=>o!==skipOrder&&!o.received).forEach(o=>expandOrderNames(o.names,o.count).forEach(see));
+  const w=digits.get(pre)||1, from=(top.get(pre)||0)+1, pad=k=>pre+String(k).padStart(w,"0");
+  return n===1?pad(from):`${pad(from)}–${pad(from+n-1)}`;
+}
+function orderAnimalId(o,i){ return "a_"+String(o.id).replace(/^ord_/,"o")+"_"+(i+1); }
+/* The mice come in: one animal per mouse ordered, named as the order says,
+   born as long ago as its age says, in the experiment (and arm) or project it
+   was ordered for. Monotone: an order is received once. */
+function receiveOrder(o,date){
+  if(!o||o.received) return [];
+  const day=String(date||orderArriveDate(o)).slice(0,10), n=+o.count||0;
+  const names=expandOrderNames(o.names,n), f=orderFor(o), ex=f&&expById(f.id), made=[];
+  for(let i=0;i<n;i++){
+    const id=orderAnimalId(o,i);
+    if(DB.animals.some(a=>a.id===id)||isDeletedHere("animals",id)) continue;
+    const a={id,created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],tasks:[],
+      name:names[i]||`New mouse ${i+1}`,cage:"",sex:o.sex||"",strain:o.strain||"",
+      dob:o.age?addDaysISO(day,-7*(+o.age)):"",sacrificed:"",surgeryDetail:null,alive:true,deathKind:null,
+      practice:false,excluded:false,excludedReason:"",comments:"",commentsRich:true,secs:{},custom:{},
+      by:meId(),arrived:day,orderId:o.id};
+    DB.animals.push(a); made.push(a);
+    if(f){
+      f.links=f.links||[];
+      if(!f.links.some(l=>l.kind==="animal"&&l.id===id)) f.links.push({kind:"animal",id});
+      if(ex&&o.groupId&&(ex.groupDefs||[]).some(g=>g.id===o.groupId)) (ex.groups=ex.groups||{})[id]=o.groupId;
+    }
+  }
+  o.received=day; o.animalIds=Array.from({length:n},(_,i)=>orderAnimalId(o,i));
+  const tick=f=>{ const t=linkedTask(o[f]); if(t&&!occDone(t,t.when)) t.doneOccurrences=[...(t.doneOccurrences||[]),t.when]; };
+  tick("sendTask"); tick("arriveTask");
+  return made;
+}
+// a tick on the Timeline is the same act as the button in the order
+function orderTaskTicked(t){
+  const o=t&&t.orderId&&orderById(t.orderId);
+  if(!o||o.received||o.arriveTask!==t.id) return;
+  const made=receiveOrder(o,String(t.when).slice(0,10));
+  if(made.length) setTimeout(()=>toast(`${made.length} ${made.length===1?"mouse":"mice"} arrived — added to Animals`),0);
+}
+function deleteOrder(o){
+  ["sendTask","arriveTask"].forEach(f=>{ if(linkedTask(o[f])) deleteTask(o[f]); });
+  DB.animalOrders=orderList().filter(x=>x!==o);
+}
+function openOrders(){ return orderList().filter(o=>!o.received); }
+function upcomingOrderWeeks(cur){
+  const out=[], first=orderWeekOf(todayDateStr());
+  for(let k=0;k<8;k++) out.push(addDaysISO(first,7*k));
+  if(cur&&!out.includes(cur)) out.unshift(cur);
+  return out;
+}
+const ORDER_STATE_LABEL={draft:"to send",sent:"on the way",arrived:"arrived"};
+function orderRowHTML(o){
+  const f=orderFor(o), st=orderState(o);
+  const when=st==="arrived"?`arrived ${fmtDMY(o.received)}`:st==="sent"?`arrives ${fmtDMY(orderArriveDate(o))}`:`send by ${fmtDMY(orderSendDate(o))}`;
+  return `<button type="button" class="ord-row ord-${st}" data-o="${escAttr(o.id)}">
+    <span class="ord-when">${esc(when)}</span>
+    <span class="ord-what">${esc(orderWhat(o))}${f?` <span class="ord-for">· ${esc(entityLabel(f))}</span>`:""}${o.names?` <span class="ord-for">· ${esc(o.names)}</span>`:""}</span>
+    <span class="ord-state">${ORDER_STATE_LABEL[st]}</span></button>`;
+}
+function ordersModal(after){
+  const draw=()=>{
+    const all=orderList().slice().sort((x,y)=>String(x.week).localeCompare(String(y.week)));
+    const draft=all.filter(o=>orderState(o)==="draft"), sent=all.filter(o=>orderState(o)==="sent");
+    const done=all.filter(o=>o.received).sort((x,y)=>String(y.received).localeCompare(String(x.received))).slice(0,12);
+    const sec=(label,list,empty)=>`<div class="fld"><label>${label}</label>${list.length?list.map(orderRowHTML).join(""):`<div class="ord-empty">${empty}</div>`}</div>`;
+    const wk=orderWeekOf(todayDateStr());
+    modal(`<h3>🐭 Animal orders</h3>
+      <div class="ord-rule">Requests go in by Tuesday; the mice arrive the Tuesday after. This week's requests are due <b>${fmtDMY(wk)}</b>.</div>
+      ${sec("To send",draft,"Nothing waiting to be sent.")}
+      ${sec("On the way",sent,"Nothing on the way.")}
+      ${done.length?sec("Arrived",done,""):""}
+      <div class="actions"><button class="btn ghost" id="ord_new">＋ Order mice</button><button class="btn accent" id="ord_done">Done</button></div>`);
+    const m=document.getElementById("modal");
+    m.querySelectorAll(".ord-row").forEach(b=>b.onclick=()=>{ const o=orderById(b.dataset.o); if(o) orderModal(o,()=>ordersModal(after)); });
+    document.getElementById("ord_new").onclick=()=>orderModal(null,()=>ordersModal(after));
+    document.getElementById("ord_done").onclick=()=>{ closeModal(); if(after) after(); };
+  };
+  draw();
+}
+/* One order: who it is for, what, how many, and which week. A new order made
+   from an experiment starts with that experiment, and with the names its
+   animals would take next. */
+function orderModal(o,after,init){
+  const isNew=!o;
+  const d=o?{...o}:{week:orderWeekOf(todayDateStr()),count:4,sex:"M",strain:"",age:"",forId:"",groupId:"",names:"",note:"",...(init||{})};
+  if(isNew&&d.forId&&!d.names) d.names=suggestOrderNames(expOrProjById(d.forId),d.count);
+  const strains=[...new Set(DB.animals.map(a=>a.strain).filter(Boolean))].sort();
+  const st=o?orderState(o):"draft";
+  modal(`<h3>🐭 ${isNew?"Order mice":"Order"}</h3>
+    <div class="drow">
+      <div class="fld" style="flex:2;min-width:200px"><label>For</label><select id="or_for"><option value="">— no experiment or project</option>${partOfOptionsHTML({valueOf:(k,id)=>id,selected:d.forId,noWork:true})}</select></div>
+      <div class="fld" style="flex:1;min-width:130px" id="or_groupbox"><label>Group</label><select id="or_group"></select></div>
+    </div>
+    <div class="drow">
+      <div class="fld" style="width:90px"><label>How many</label><input id="or_count" type="number" min="1" max="200" value="${escAttr(String(d.count||""))}"></div>
+      <div class="fld" style="width:120px"><label>Sex</label><select id="or_sex">${[["M","♂ male"],["F","♀ female"],["","either"]].map(([v,l])=>`<option value="${v}" ${(d.sex||"")===v?"selected":""}>${l}</option>`).join("")}</select></div>
+      <div class="fld" style="flex:1;min-width:130px"><label>Strain</label><input id="or_strain" list="or_strains" value="${escAttr(d.strain||"")}" placeholder="e.g. C57BL/6"><datalist id="or_strains">${strains.map(s=>`<option value="${escAttr(s)}">`).join("")}</datalist></div>
+      <div class="fld" style="width:120px"><label>Age on arrival</label><input id="or_age" type="number" min="0" step="1" value="${escAttr(String(d.age||""))}" placeholder="weeks"></div>
+    </div>
+    <div class="drow">
+      <div class="fld" style="flex:1;min-width:160px"><label>Request goes in</label><select id="or_week" ${o&&o.received?"disabled":""}>${upcomingOrderWeeks(d.week).map(w=>`<option value="${w}" ${w===d.week?"selected":""}>Tue ${fmtDMY(w)} → arrive ${fmtDMY(addDaysISO(w,7))}</option>`).join("")}</select></div>
+      <div class="fld" style="flex:1;min-width:160px"><label>Names</label><input id="or_names" value="${escAttr(d.names||"")}" placeholder="e.g. GP25–GP28"></div>
+    </div>
+    <div class="fld"><label>Note</label><input id="or_note" value="${escAttr(d.note||"")}" dir="auto" placeholder="anything the request needs to say"></div>
+    ${o?`<div class="ord-status">
+      ${o.received?`<span>✓ Arrived ${fmtDMY(o.received)} — ${(o.animalIds||[]).filter(id=>DB.animals.some(a=>a.id===id)).length} animals in Arbor</span>`
+        :`<label class="kf-check"><input type="checkbox" id="or_sent" ${st!=="draft"?"checked":""}> request sent</label>
+          <button type="button" class="btn ghost" id="or_arrived">The mice arrived — add them</button>`}
+    </div>`:""}
+    <div class="drow" style="margin-top:14px;gap:8px">${o?`<button class="btn danger" id="or_del">Delete order</button>`:""}</div>
+    <div class="actions"><button class="btn ghost" id="or_cancel">Cancel</button><button class="btn accent" id="or_save">${isNew?"Add order":"Save"}</button></div>`);
+  const $=id=>document.getElementById(id);
+  const paintGroups=()=>{
+    const ex=expById($("or_for").value), defs=(ex&&ex.groupDefs)||[];
+    $("or_groupbox").hidden=!defs.length;
+    $("or_group").innerHTML=`<option value="">— no group</option>`+defs.map(g=>`<option value="${escAttr(g.id)}" ${g.id===d.groupId?"selected":""}>${esc(g.name||"(unnamed group)")}</option>`).join("");
+  };
+  paintGroups();
+  // the names follow the experiment and the count until you type your own
+  let namesTyped=!isNew||!!(init&&init.names);
+  $("or_names").addEventListener("input",()=>{ namesTyped=true; });
+  const renames=()=>{ if(namesTyped) return; $("or_names").value=suggestOrderNames(expOrProjById($("or_for").value),+$("or_count").value,o); };
+  $("or_for").addEventListener("change",()=>{ d.groupId=""; paintGroups(); renames(); });
+  $("or_count").addEventListener("input",renames);
+  const read=()=>({forId:$("or_for").value,groupId:$("or_groupbox").hidden?"":$("or_group").value,
+    count:Math.max(1,Math.round(+$("or_count").value||0)),sex:$("or_sex").value,strain:$("or_strain").value.trim(),
+    age:$("or_age").value===""?"":+$("or_age").value,week:$("or_week").value,names:$("or_names").value.trim(),note:$("or_note").value.trim()});
+  const commit=()=>{
+    const v=read();
+    let rec=o;
+    if(!rec){ rec={id:uid("ord_"),created:Date.now(),by:meId(),...v}; orderList().push(rec); syncOrderTasks(rec,true); }
+    else { const moved=rec.week!==v.week&&!rec.received; Object.assign(rec,v); rec.edited=Date.now(); syncOrderTasks(rec,moved); }
+    const sent=$("or_sent"); if(sent&&!rec.received) setLinkedDone(rec,"sendTask",sent.checked);
+    return rec;
+  };
+  $("or_save").onclick=()=>{ commit(); persist(); closeModal(); render(); if(after) after(); };
+  $("or_cancel").onclick=()=>{ closeModal(); if(after) after(); };
+  if(o){
+    $("or_del").onclick=()=>{
+      if(!confirm(o.received?"Delete this order? The mice it brought stay in Arbor.":"Delete this order and its two Timeline items?")) return;
+      deleteOrder(o); persist(); closeModal(); render(); if(after) after(); };
+    const arr=$("or_arrived");
+    if(arr) arr.onclick=()=>{
+      const rec=commit();
+      const day=todayDateStr()<orderArriveDate(rec)?todayDateStr():orderArriveDate(rec);
+      const made=receiveOrder(rec,day);
+      persist(); closeModal(); render();
+      toast(made.length?`${made.length} ${made.length===1?"mouse":"mice"} added to Animals`:"Already received");
+      if(after) after();
+    };
+  }
+}
+// the experiment window's line about its orders
+function experimentOrdersHTML(ex){
+  const open=openOrders().filter(o=>o.forId===ex.id);
+  return `<button type="button" class="btn ghost" id="sm_order">🐭 Order mice</button>${open.length?`<div class="ord-inline">${open.map(orderRowHTML).join("")}</div>`:""}`;
+}
+/* ---- importing animals from a file ----
+   Moving records kept elsewhere (a lab spreadsheet) into Arbor. The file says
+   what it knows in Arbor's own terms: surgeries with their injections, a
+   restriction, weighings, and how far along its plan an animal is. The records
+   are made the way the forms make them, so an imported animal is the same as
+   one typed in. Nothing in Arbor is overwritten: an animal whose name already
+   exists is skipped, and one the file names as the same mouse under another
+   name only gains what it lacks (notes are added once). */
+const IMPORT_FORMAT="arbor-animal-import";
+async function importAnimalsPick(){
+  const txt=await window.arbor.openJSON(); if(txt==null) return;
+  let b; try{ b=JSON.parse(txt); }catch(e){ alert("That file could not be read: "+e.message); return; }
+  if(!b||b.format!==IMPORT_FORMAT){ alert("This is not an Arbor animal import file."); return; }
+  importPreviewModal(b);
+}
+// {project, experiment, group} by name, as the file names them
+function importPlace(spec){
+  spec=spec||{}; const same=(x,y)=>String(x||"").trim()===String(y||"").trim();
+  const pr=spec.project?projectsOnly().find(p=>same(p.name,spec.project))||null:null;
+  const ex=spec.experiment?experimentsOnly().find(e=>same(e.title,spec.experiment)&&(!pr||e.projectId===pr.id))||null:null;
+  const g=ex&&spec.group?(ex.groupDefs||[]).find(x=>same(x.name,spec.group))||null:null;
+  return {pr,ex,g};
+}
+// what importing would do, worked out without doing it
+function importActions(b){
+  const byName=new Map(DB.animals.map(a=>[String(a.name||"").trim(),a]));
+  return (b.animals||[]).filter(x=>x&&x.name).map(x=>{
+    const match=x.match?byName.get(String(x.match).trim())||null:null;
+    const act=x.match?(match?"fill":"nomatch"):byName.has(String(x.name).trim())?"skip":"new";
+    return {x,match,act,pl:importPlace(x.for)};
+  });
+}
+function importNewViruses(b){
+  const have=new Set((DB.config.virusLib||[]).map(v=>v&&v.name));
+  return (b.viruses||[]).filter(v=>v&&v.name&&!have.has(v.name));
+}
+function importPreviewModal(b){
+  const acts=importActions(b), vir=importNewViruses(b);
+  const word={new:"new",fill:"fill in",skip:"already in Arbor — skipped",nomatch:"not found — skipped"};
+  const where=pl=>pl.ex?entityLabel(pl.ex)+(pl.g?" › "+(pl.g.name||""):""):pl.pr?entityLabel(pl.pr):"—";
+  const what=x=>[(x.surgeries||[]).length?`${x.surgeries.length} surgery`:"",x.restriction?"restriction":"",
+    (x.weights||[]).length?`${x.weights.length} weighing${x.weights.length===1?"":"s"}`:"",
+    x.plan?`plan: ${(x.plan.rows||[]).length} done`:""].filter(Boolean).join(" · ");
+  const rows=acts.map(({x,match,act,pl})=>`<tr class="imp-${act}"><td><b>${esc(x.name)}</b>${match?` → ${esc(match.name)}`:""}</td>
+    <td>${esc(word[act])}</td><td>${esc(where(pl))}</td><td>${esc(what(x))}</td></tr>`).join("");
+  const missing=acts.filter(({x,pl})=>x.for&&((x.for.project&&!pl.pr)||(x.for.experiment&&!pl.ex)||(x.for.group&&!pl.g)));
+  const n=acts.filter(r=>r.act==="new").length, f=acts.filter(r=>r.act==="fill").length;
+  modal(`<h3>↑ Import animals</h3>
+    <div class="ord-rule">From <b>${esc(b.source||"a file")}</b>${b.made?` (${esc(fmtDMY(b.made))})`:""}. ${n} new, ${f} to fill in. Nothing already in Arbor is overwritten.</div>
+    <div class="imp-wrap"><table class="imp-tbl"><thead><tr><th>Animal</th><th></th><th>Goes to</th><th>Brings</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${vir.length?`<div class="ord-rule" style="margin-top:10px">Adds ${vir.length} virus${vir.length===1?"":"es"} to the library: ${vir.map(v=>esc(v.name)).join(", ")}.</div>`:""}
+    ${missing.length?`<div class="kf-warn" style="margin-top:8px">⚠ ${missing.length} animal${missing.length===1?"":"s"} name an experiment, project or group Arbor does not have; they come in without it.</div>`:""}
+    <div class="actions"><button class="btn ghost" id="imp_cancel">Cancel</button><button class="btn accent" id="imp_go" ${n+f?"":"disabled"}>Import</button></div>`,{wide:true});
+  document.getElementById("imp_cancel").onclick=()=>closeModal();
+  document.getElementById("imp_go").onclick=()=>{
+    const r=applyAnimalImport(b); closeModal();
+    toast(`Imported: ${r.made} new, ${r.filled} filled in`);
+  };
+}
+function importInjection(inj,surgeryId){
+  const lib=(DB.config.virusLib||[]).find(v=>v&&v.name===inj.virus);
+  return {virus:inj.virus||"",type:inj.type||(lib&&lib.type)||"other",siteRegion:inj.site||"",ap:"",ml:"",dv:"",
+    partnerRegion:"",pAp:"",pMl:"",pDv:"",volume:"",note:inj.note||"",expressionSites:[],depths:[],
+    color:(lib&&lib.color)||"#54e08a",surgeryId};
+}
+function importSurgeries(a,list,fill){
+  const K=roleType("surgery"); if(!K) return;
+  a.diary=a.diary||[];
+  const sd=a.surgeryDetail=a.surgeryDetail||{headpost:false,window:false,injections:[]};
+  sd.injections=sd.injections||[];
+  (list||[]).forEach(s=>{
+    if(!s||!s.date) return;
+    let e=a.diary.find(d=>entryHasRole(d,"surgery")&&String(d.date).slice(0,10)===s.date)||null;
+    if(e){
+      const d=e.data=e.data||{};
+      if(!d.operator&&s.operator) d.operator=s.operator;
+      if(s.window&&!d.window) d.window=true;
+      if(s.note&&!String(d.note||"").includes(s.note)) d.note=(String(d.note||"").trim()?d.note+"\n":"")+s.note;
+      e.edited=Date.now();
+    } else if(!fill){
+      e={id:uid("d_"),type:K,date:s.date,time:null,endTime:null,
+         data:Object.assign(KIND_DEFAULTS.surgery(a),{headpost:!!s.headpost,window:!!s.window,operator:s.operator||"",note:s.note||""}),
+         created:Date.now(),edited:null,done:true,by:meId()};
+      a.diary.push(e);
+    } else return;           // a matched animal without that surgery is left as it is
+    if(!sd.injections.some(i=>i.surgeryId===e.id))
+      (s.injections||[]).forEach(inj=>sd.injections.push(importInjection(inj,e.id)));
+  });
+  sd.bySurgery=true;
+}
+function importPlacement(a,pl){
+  const link=(st)=>{ st.links=st.links||[]; if(!st.links.some(l=>l.kind==="animal"&&l.id===a.id)) st.links.push({kind:"animal",id:a.id}); };
+  if(pl.ex){ link(pl.ex); if(pl.g&&!(pl.ex.groups||{})[a.id]) (pl.ex.groups=pl.ex.groups||{})[a.id]=pl.g.id; }
+  else if(pl.pr&&!animalProjects(a.id).some(p=>p.id===pl.pr.id)) link(pl.pr);
+}
+/* How far along its plan the animal already is: the run starts where the file
+   says, and the rows it lists are filled in and ticked — the same as working
+   through them at the bench. */
+function importPlanRows(a,x,pl){
+  const P=x.plan; if(!P||!P.start||!pl.ex) return;
+  const plan=planForAnimal(pl.ex,a); if(!plan) return;
+  startPlanFor(pl.ex,a,P.start);
+  const stages=planStages(plan);
+  (P.rows||[]).forEach(r=>{
+    const st=stages[r.stage]; if(!st) return;
+    if(r.label&&stageName(st)!==r.label&&st.label!==r.label) return;   // the plan changed since the file was made
+    const e=planEntryOf(pl.ex,a,st); if(!e) return;
+    e.data=Object.assign(e.data||{},r.data||{}); e.done=true; e.edited=Date.now(); e.by=meId();
+  });
+}
+function applyAnimalImport(b){
+  const lib=DB.config.virusLib=DB.config.virusLib||[];
+  importNewViruses(b).forEach(v=>lib.push({name:v.name,type:v.type||"",promoter:v.promoter||"",titer:v.titer||"",
+    source:v.source||"",note:v.note||"",backupTubes:null,aliquotTubes:null,boxNumber:v.boxNumber||"",boxColor:"",
+    boxLocation:"",needOrder:false}));
+  let made=0, filled=0;
+  importActions(b).forEach(({x,match,act,pl})=>{
+    if(act!=="new"&&act!=="fill") return;
+    let a=match;
+    if(act==="new"){
+      a={id:uid("a_"),created:Date.now(),perfusion:null,histology:null,microscopy:null,weights:{},diary:[],tasks:[],
+        name:x.name,cage:x.cage||"",sex:x.sex||"",strain:x.strain||"",dob:x.dob||"",sacrificed:"",surgeryDetail:null,
+        alive:true,deathKind:null,practice:false,excluded:false,excludedReason:"",
+        comments:x.notes?esc(x.notes).replace(/\n/g,"<br>"):"",commentsRich:true,secs:{},custom:{},by:meId()};
+      DB.animals.push(a);
+    } else if(x.dob&&!a.dob) a.dob=x.dob;
+    importPlacement(a,pl);
+    importSurgeries(a,x.surgeries,act==="fill");
+    if(act==="new"){
+      const R=x.restriction;
+      if(R&&R.start&&R.baseline) startRestriction(a,R.start,R.baseline,R.ration);
+      (x.weights||[]).forEach(w=>{ if(w&&w.date&&w.grams!=null) recordRestrictionDay(a,w.date,w.grams,w.ration); });
+      importPlanRows(a,x,pl);
+    }
+    syncProcedure(a); reconcileAnimal(a);
+    if(act==="new") made++; else filled++;
+  });
+  persist(); render();
+  return {made,filled};
+}
 /* The areas of v304–v306 become what they were: one holding work is a course
    you teach (or take, by its name), keeping its tasks, checklist and notes;
    an empty one goes. The new record's id comes from the area's, so two
@@ -8078,10 +8468,13 @@ function migratePlanStages(){
     pl.stagesV2=true;
   });
 }
-function isWeekend(iso){ const d=new Date(iso.slice(0,10)+"T00:00:00").getDay(); return d===0||d===6; }
+/* The lab's weekend is Friday and Saturday: it works Sunday to Thursday, and
+   its own protocols count "work days" that way. Until v311 this was Saturday
+   and Sunday, which put plan stages on Fridays and skipped Sundays. */
+function isWeekend(iso){ const d=new Date(iso.slice(0,10)+"T00:00:00").getDay(); return d===5||d===6; }
 // Walk n days forward, counting only the days the lab actually runs on. With
 // weekends included this is plain addition; without, a weekend costs nothing
-// and no stage is ever left sitting on a Saturday.
+// and no stage is ever left on a Friday or Saturday.
 function addPlanDays(iso,n,skipWeekends){
   if(!skipWeekends) return addDaysISO(iso,n);
   let cur=iso.slice(0,10), left=Math.max(0,n);
@@ -9375,6 +9768,10 @@ function experimentModal(st,after){
     box.innerHTML=`<button class="btn ghost" id="sm_openanimals">🐁 Animals &amp; assignment</button>
       <span class="gp-lab" style="margin-left:10px">${list.length} animal${list.length!==1?"s":""}${(st.groupDefs||[]).length?" · "+esc(tally.text):""}</span>`;
     box.querySelector("#sm_openanimals").onclick=()=>{ save(); animalsModal(st,after); };
+    const ob=document.createElement("div"); ob.className="ord-exp"; ob.innerHTML=experimentOrdersHTML(st); box.appendChild(ob);
+    const back=()=>experimentModal(st,after);
+    ob.querySelector("#sm_order").onclick=()=>{ save(); orderModal(null,back,{forId:st.id}); };
+    ob.querySelectorAll(".ord-row").forEach(b=>b.onclick=()=>{ const o=orderById(b.dataset.o); if(o){ save(); orderModal(o,back); } });
     paintCohort();   // a renamed or added arm is a renamed or added table
   }
   drawGroupDefs(); drawGroups();
@@ -12158,7 +12555,7 @@ function mountPlanEditor(host,pl,onChange){
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
         <input class="pl_name" value="${escAttr(pl.name||"")}" placeholder="Plan name (e.g. Imaging pipeline)" style="flex:1;min-width:160px;${IST}">
         <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--ink-dim)"
-          title="With this off, a gap of 3 days means 3 working days, and no stage is ever left on a Saturday">
+          title="With this off, a gap of 3 days means 3 working days, and no stage is ever left on a Friday or Saturday">
           <input type="checkbox" class="pl_weekends" style="width:auto" ${pl.skipWeekends?"":"checked"}> include weekends</label>
       </div>
       <div style="font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:5px">Stages, in order — the number is ${pl.skipWeekends?"work days":"days"} after the stage before</div>
@@ -15168,6 +15565,8 @@ const ANIMAL_FACT_BUILTINS=[
     get:a=>ageWeeks(a), text:v=>v!=null?v+"w":""},
   {id:"born",      group:"Life", label:"Born", type:"date",
     get:a=>a.dob||null, text:v=>v?"🐭 "+fmtDMY(v):""},
+  {id:"arrived",   group:"Life", label:"Arrived", type:"date",
+    get:a=>a.arrived||null, text:v=>v?"📦 arrived "+fmtDMY(v):""},
   {id:"sacrificed",group:"Life", label:"Sacrificed", type:"date",
     get:a=>a.sacrificed||null, text:v=>v?"✝ "+fmtDMY(v):""},
   {id:"cage",      group:"Profile", label:"Cage", type:"text", get:a=>a.cage||""},
@@ -15984,6 +16383,8 @@ function renderAnimals(){
       <div style="display:flex;flex-wrap:wrap;gap:8px">
         <button class="btn ghost${animalActiveFilterCount()?" filt-on":""}" id="a_filters">⚙ Filter${
           animalActiveFilterCount()?` <span class="filt-n">${animalActiveFilterCount()}</span>`:""}</button>
+        <button class="btn ghost" id="a_orders" title="Weekly animal orders: requests by Tuesday, mice the Tuesday after">🐭 Orders${
+          openOrders().length?` <span class="filt-n">${openOrders().length}</span>`:""}</button>
         <button class="btn ghost" id="a_eventlog">📋 Log</button>
         <button class="btn accent" id="a_add">＋ Animal</button>
       </div>
@@ -16058,6 +16459,7 @@ function renderAnimals(){
     if(ni){ ni.focus(); ni.setSelectionRange(pos,pos); }
   });
   bar.querySelector("#a_add").onclick=()=>animalModal(null);
+  bar.querySelector("#a_orders").onclick=()=>ordersModal();
   bar.querySelector("#a_eventlog").onclick=()=>openEventLogModal(null);
 
 
@@ -16303,7 +16705,7 @@ function animalCard(a){
       ${a.surgeryDetail?`<span style="color:var(--cyan)">${esc(surgerySummary(a))}</span>`:(a.targets?`<span style="color:var(--ink-dim)">→ ${esc(a.targets)}</span>`:"")}
     </div>
     <div class="a-detail" style="display:${expanded?"block":"none"};margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px;line-height:1.6;color:var(--ink-dim)">
-      ${arow("Born",a.dob)}${arow("Sacrificed",a.sacrificed)}${arow("Cage",a.cage||"—")}
+      ${arow("Born",a.dob)}${a.arrived?arow("Arrived",a.arrived):""}${arow("Sacrificed",a.sacrificed)}${arow("Cage",a.cage||"—")}
       ${/* the procedure says these now; the 1.0 profile values show only for an
             animal whose injections were never recorded */""}
       ${arow("Virus",animalVirusText(a))}${arow("Sites",animalSiteText(a))}
@@ -19028,16 +19430,20 @@ function renderMenuModal(){
       <button class="btn" id="m_export">↓ Export JSON</button>
       <button class="btn" id="m_excel">↓ Export Excel</button>
       <button class="btn" id="m_import">↑ Import JSON</button>
+      <button class="btn" id="m_animals" title="Add animals from an Arbor animal-import file, without replacing anything">↑ Import animals</button>
       <button class="btn danger" id="m_reset">↺ Reset to seed</button></div>
     <div class="actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`, {center:true});
   document.getElementById("m_sharing").addEventListener("click",()=>{ closeModal(); openShareReview(); });
   document.getElementById("m_history").addEventListener("click",openHistoryModal);
   document.getElementById("m_export").addEventListener("click",()=>{download("arbor_workspace.json",JSON.stringify(privateDB(DB),null,2),"application/json");toast("Exported JSON");});
   document.getElementById("m_excel").addEventListener("click",()=>{exportFullDatabaseExcel();toast("Exported Excel workbook");});
+  document.getElementById("m_animals").addEventListener("click",()=>importAnimalsPick());
   document.getElementById("m_import").addEventListener("click",async ()=>{
     const text=await window.arbor.openJSON(); if(text==null)return;
     try{
       const d=JSON.parse(text);
+      // an animal-import file adds animals; it never replaces the workspace
+      if(d&&d.format===IMPORT_FORMAT){ importPreviewModal(d); return; }
       if(!d.domains||!d.tasks){ toast("Not an Arbor file"); return; }
       // the same explicit replacement as a restore — and the same one-time
       // conversions carried over, so an older file cannot flatten projects away
@@ -19459,6 +19865,12 @@ function exportFullDatabaseExcel(){
       ...Object.entries(w.missed||{}).map(([key,v])=>{ const i=key.indexOf("|"), t=taskOf(key.slice(0,i));
         return [of,k,"missed lecture",t?t.title||"":"",v==="caught"?"caught up":"to catch up","",key.slice(i+1,i+11),yes(v==="caught")]; })]; });
   const weekendRows=Object.entries(DB.config.weekendFeeding||{}).map(([f,who])=>[f,who]);
+  // animal orders: the week the request went in, and what it asked for
+  const orderRows=orderList().map(o=>{ const f=orderFor(o), ex=f&&expById(f.id);
+    const g=ex&&(ex.groupDefs||[]).find(x=>x.id===o.groupId);
+    return [orderSendDate(o),orderArriveDate(o),f?entityLabel(f):"",g?(g.name||""):"",+o.count||0,
+      o.sex==="M"?"male":o.sex==="F"?"female":"either",o.strain||"",o.age===""||o.age==null?"":+o.age,o.names||"",
+      ORDER_STATE_LABEL[orderState(o)],o.received||"",o.note||""]; });
   const projs=projectsOnly().map(pr=>[pr.name||"",entityStatus(pr),pr.summary||"",pr.question||"",
     experimentsOnly().filter(ex=>ex.projectId===pr.id).map(ex=>ex.title||"(unnamed)").sort(byText).join(", "),
     workstreamList().filter(ex=>ex.projectId===pr.id&&!isStudyWork(ex)).map(ex=>ex.title||"(unnamed)").sort(byText).join(", "),plain(pr.notes)]);
@@ -19577,6 +19989,7 @@ function exportFullDatabaseExcel(){
     sheet("Projects",["Name","Status","Where it stands","Question","Experiments","Programs","Notes"],projs,0),
     sheet("Work items",["Of","Kind","Item kind","Item","Detail","Prepare from","Due","Done"],workRows,0,2,6),
     sheet("Weekend feeding",["Weekend (Friday)","Who"],weekendRows,0),
+    sheet("Animal orders",["Request goes in","Arrives","For","Group","How many","Sex","Strain","Age (weeks)","Names","Status","Received","Note"],orderRows,0),
     sheet("Checklists",["Kind","Of","Item","Done","Date"],checks,0,1),
     sheet("Notes",["Title","Attached to","Created","Updated","Text"],notes,0),
     sheet("Library",["Kind","Title","Authors / written by","Year / date","Journal","Attached to","Link","File","Notes"],lib,0,1),
